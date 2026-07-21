@@ -600,6 +600,9 @@ class InfoGatherer:
         report_vram = _mlx_uses_cuda_gpu()
         if report_vram:
             logger.info("CUDA MLX backend detected; reporting GPU VRAM as node memory")
+        # The psutil fallback also runs on macOS (e.g. when macmon is not on
+        # PATH), so the Metal working-set ceiling must be applied here too.
+        metal_usable_bytes = _metal_usable_memory_bytes()
         while True:
             try:
                 usage: MemoryUsage | None = None
@@ -607,6 +610,20 @@ class InfoGatherer:
                     usage = MemoryUsage.from_cuda(override_memory=override_memory)
                 if usage is None:
                     usage = MemoryUsage.from_psutil(override_memory=override_memory)
+                if (
+                    metal_usable_bytes is not None
+                    and usage.ram_available.in_bytes > metal_usable_bytes
+                ):
+                    # #region agent log
+                    _dbg_log_metal_cap(
+                        usage.ram_available.in_bytes, metal_usable_bytes
+                    )
+                    # #endregion
+                    usage = usage.model_copy(
+                        update={
+                            "ram_available": Memory.from_bytes(metal_usable_bytes)
+                        }
+                    )
                 await self.info_sender.send(usage)
             except Exception as e:
                 logger.opt(exception=e).warning("Error gathering memory usage")
