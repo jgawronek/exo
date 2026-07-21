@@ -2,7 +2,7 @@ import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Self
+from typing import Final, Literal, Self
 
 import psutil
 
@@ -48,18 +48,71 @@ class MemoryUsage(FrozenModel):
         the GPU's VRAM, not system RAM (unlike Apple Silicon's unified memory).
         Returns None when no GPU/VRAM can be queried so the caller can fall back
         to :meth:`from_psutil`.
+
+        Only a fraction of the free VRAM is advertised as available. Placement
+        allocates model weights up to 100% of the advertised memory, but a
+        runner additionally needs VRAM for its CUDA context, allocator
+        overhead, and warmup KV cache/activations (measured at ~2.7 GB beyond
+        the weights on a 24 GB card), so advertising all free VRAM causes
+        out-of-memory crashes during warmup.
         """
         vram = _query_cuda_vram_bytes()
         if vram is None:
             return None
         total_vram, free_vram = vram
+        usable_vram = int(free_vram * CUDA_VRAM_USABLE_FRACTION)
+        # #region agent log
+        _dbg_log_cuda_report(total_vram, free_vram, usable_vram)
+        # #endregion
         sm = psutil.swap_memory()
         return cls.from_bytes(
             ram_total=total_vram,
-            ram_available=free_vram if override_memory is None else override_memory,
+            ram_available=usable_vram if override_memory is None else override_memory,
             swap_total=sm.total,
             swap_available=sm.free,
         )
+
+
+CUDA_VRAM_USABLE_FRACTION: Final = 0.85
+
+
+# #region agent log
+def _dbg_log_cuda_report(total_vram: int, free_vram: int, usable_vram: int) -> None:
+    import json as _dbg_json
+    import os as _dbg_os
+    import time as _dbg_time
+
+    line = (
+        _dbg_json.dumps(
+            {
+                "sessionId": "0756d4",
+                "timestamp": int(_dbg_time.time() * 1000),
+                "location": "profiling.py:MemoryUsage.from_cuda",
+                "message": "CUDA VRAM report (post-fix headroom)",
+                "data": {
+                    "total_gb": round(total_vram / 1e9, 2),
+                    "free_gb": round(free_vram / 1e9, 2),
+                    "advertised_available_gb": round(usable_vram / 1e9, 2),
+                },
+                "runId": "post-fix",
+                "hypothesisId": "H3-headroom",
+            }
+        )
+        + "\n"
+    )
+    for _path in (
+        "/Users/jaygawronek/Documents/Projects/exo/.cursor/debug-0756d4.log",
+        _dbg_os.path.expanduser("~/exo-debug-0756d4.log"),
+    ):
+        try:
+            with open(_path, "a") as _f:
+                _f.write(line)
+            return
+        except OSError:
+            continue
+
+
+# #endregion
 
 
 def _query_cuda_vram_bytes() -> tuple[int, int] | None:
