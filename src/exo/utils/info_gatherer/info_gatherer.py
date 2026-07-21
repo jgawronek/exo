@@ -17,6 +17,8 @@ from exo.shared.constants import EXO_CONFIG_FILE, EXO_DEFAULT_MODELS_DIR
 from exo.shared.types.backends import Backend
 from exo.shared.types.memory import Memory
 from exo.shared.types.profiling import (
+    CUDA_UNIFIED_USABLE_FRACTION,
+    METAL_WORKING_SET_USABLE_FRACTION,
     DiskUsage,
     MemoryUsage,
     NetworkInterfaceInfo,
@@ -399,6 +401,46 @@ GatheredInfo = (
 )
 
 
+def _metal_usable_memory_bytes() -> int | None:
+    """Ceiling on placement-usable memory for an Apple Silicon GPU.
+
+    macmon reports free unified RAM, but Metal cannot wire all of it: the
+    practical ceiling for model weights is a fraction of the
+    max_recommended_working_set_size (see METAL_WORKING_SET_USABLE_FRACTION).
+    Returns None off-macOS or when MLX/Metal is unavailable, in which case
+    the raw macmon figure is used unchanged.
+    """
+    if not IS_DARWIN:
+        return None
+    try:
+        import mlx.core as mx
+
+        max_recommended = int(mx.device_info()["max_recommended_working_set_size"])
+    except Exception:
+        return None
+    if max_recommended <= 0:
+        return None
+    return int(max_recommended * METAL_WORKING_SET_USABLE_FRACTION)
+
+
+def _mlx_uses_cuda_gpu() -> bool:
+    """True when MLX's default device is a (CUDA) GPU on a non-Darwin host.
+
+    Used to decide whether to report GPU VRAM instead of system RAM as the
+    node's memory. On Apple Silicon the GPU path is handled by macmon, and on a
+    Linux CPU (mlx-cpu) build the default device is the CPU, so both correctly
+    fall through to psutil system RAM.
+    """
+    if IS_DARWIN:
+        return False
+    try:
+        import mlx.core as mx
+
+        return "gpu" in str(mx.default_device()).lower()
+    except Exception:
+        return False
+
+
 @dataclass
 class InfoGatherer:
     info_sender: Sender[GatheredInfo]
@@ -518,11 +560,41 @@ class InfoGatherer:
             if override_memory_env
             else None
         )
+        report_vram = _mlx_uses_cuda_gpu()
+        if report_vram:
+            logger.info("CUDA MLX backend detected; reporting GPU VRAM as node memory")
+        # The psutil fallback also runs on macOS (e.g. when macmon is not on
+        # PATH), so the Metal working-set ceiling must be applied here too.
+        metal_usable_bytes = _metal_usable_memory_bytes()
         while True:
             try:
-                await self.info_sender.send(
-                    MemoryUsage.from_psutil(override_memory=override_memory)
-                )
+                usage: MemoryUsage | None = None
+                if report_vram:
+                    usage = MemoryUsage.from_cuda(override_memory=override_memory)
+                    if usage is None:
+                        # Unified-memory CUDA device (e.g. DGX Spark GB10):
+                        # nvidia-smi cannot report VRAM, weights are wired
+                        # into system RAM, so reserve runtime headroom here.
+                        psutil_usage = MemoryUsage.from_psutil(
+                            override_memory=override_memory
+                        )
+                        capped_bytes = int(
+                            psutil_usage.ram_available.in_bytes
+                            * CUDA_UNIFIED_USABLE_FRACTION
+                        )
+                        usage = psutil_usage.model_copy(
+                            update={"ram_available": Memory.from_bytes(capped_bytes)}
+                        )
+                if usage is None:
+                    usage = MemoryUsage.from_psutil(override_memory=override_memory)
+                if (
+                    metal_usable_bytes is not None
+                    and usage.ram_available.in_bytes > metal_usable_bytes
+                ):
+                    usage = usage.model_copy(
+                        update={"ram_available": Memory.from_bytes(metal_usable_bytes)}
+                    )
+                await self.info_sender.send(usage)
             except Exception as e:
                 logger.opt(exception=e).warning("Error gathering memory usage")
             await anyio.sleep(memory_poll_rate)
@@ -590,6 +662,7 @@ class InfoGatherer:
         # Timeout: if macmon produces no output for this many seconds, restart it.
         # macmon writes every macmon_interval seconds, so 10x that is generous.
         read_timeout = max(macmon_interval * 10, 30)
+        metal_usable_bytes = _metal_usable_memory_bytes()
         while True:
             try:
                 async with await open_process(
@@ -611,6 +684,22 @@ class InfoGatherer:
                             )
                             text = data.decode("utf-8", errors="replace").strip()
                             metrics = MacmonMetrics.from_raw_json(text)
+                        if (
+                            metal_usable_bytes is not None
+                            and metrics.memory.ram_available.in_bytes
+                            > metal_usable_bytes
+                        ):
+                            metrics = metrics.model_copy(
+                                update={
+                                    "memory": metrics.memory.model_copy(
+                                        update={
+                                            "ram_available": Memory.from_bytes(
+                                                metal_usable_bytes
+                                            )
+                                        }
+                                    )
+                                }
+                            )
                         await self.info_sender.send(metrics)
             except TimeoutError:
                 logger.warning(
