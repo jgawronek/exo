@@ -29,7 +29,12 @@ from exo.shared.types.events import (
     TaskStatusUpdated,
 )
 from exo.shared.types.memory import Memory
-from exo.shared.types.profiling import MemoryUsage, NodeNetworkInfo, NodeRdmaCtlStatus
+from exo.shared.types.profiling import (
+    MemoryUsage,
+    NodeIdentity,
+    NodeNetworkInfo,
+    NodeRdmaCtlStatus,
+)
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.worker.downloads import (
     DownloadCompleted,
@@ -47,40 +52,6 @@ from exo.shared.types.worker.instances import (
 )
 from exo.shared.types.worker.shards import Sharding
 from exo.utils.ports import random_ephemeral_port
-
-# #region agent log
-import json as _dbg_json
-import os as _dbg_os
-import time as _dbg_time
-
-
-def _dbg(location: str, message: str, data: object, hypothesis: str) -> None:
-    line = (
-        _dbg_json.dumps(
-            {
-                "sessionId": "0756d4",
-                "timestamp": int(_dbg_time.time() * 1000),
-                "location": location,
-                "message": message,
-                "data": data,
-                "hypothesisId": hypothesis,
-            }
-        )
-        + "\n"
-    )
-    for _path in (
-        "/Users/jaygawronek/Documents/Projects/exo/.cursor/debug-0756d4.log",
-        _dbg_os.path.expanduser("~/exo-debug-0756d4.log"),
-    ):
-        try:
-            with open(_path, "a") as _f:
-                _f.write(line)
-            return
-        except OSError:
-            continue
-
-
-# #endregion
 
 INSTANCE_META_BACKENDS: dict[InstanceMeta, list[Backend]] = {
     InstanceMeta.MlxRing: [Backend.MlxMetal, Backend.MlxCuda, Backend.MlxCpu],
@@ -164,45 +135,10 @@ def place_instance(
     required_nodes: set[NodeId] | None = None,
     download_status: Mapping[NodeId, Sequence[DownloadProgress]] | None = None,
     node_rdma_ctl: Mapping[NodeId, NodeRdmaCtlStatus] | None = None,
+    node_identities: Mapping[NodeId, NodeIdentity] | None = None,
 ) -> dict[InstanceId, Instance]:
     cycles = topology.get_cycles()
     candidate_cycles = list(filter(lambda it: len(it) >= command.min_nodes, cycles))
-
-    # #region agent log
-    _dbg(
-        "placement.py:place_instance:entry",
-        "placement request + node inventory",
-        {
-            "model_id": str(command.model_card.model_id),
-            "storage_size_gb": round(command.model_card.storage_size.in_gb, 2),
-            "n_layers": command.model_card.n_layers,
-            "sharding": str(command.sharding),
-            "instance_meta": str(command.instance_meta),
-            "min_nodes": command.min_nodes,
-            "manual_node_layers": (
-                {str(k): v for k, v in command.node_layers.items()}
-                if command.node_layers
-                else None
-            ),
-            "required_nodes": (
-                [str(n) for n in required_nodes] if required_nodes else None
-            ),
-            "node_memory_gb": {
-                str(n): {
-                    "ram_available": round(m.ram_available.in_gb, 2),
-                    "ram_total": round(m.ram_total.in_gb, 2),
-                }
-                for n, m in node_memory.items()
-            },
-            "node_backends": {
-                str(n): [b.value for b in bs] for n, bs in node_backends.items()
-            },
-            "all_cycle_count": len(cycles),
-            "candidate_cycles": [[str(n) for n in c.node_ids] for c in candidate_cycles],
-        },
-        "H1,H3,H4,H5",
-    )
-    # #endregion
 
     if command.node_layers is not None:
         if command.sharding != Sharding.Pipeline:
@@ -228,31 +164,6 @@ def place_instance(
     cycles_with_sufficient_memory = filter_cycles_by_memory(
         candidate_cycles, node_memory, command.model_card.storage_size
     )
-
-    # #region agent log
-    _dbg(
-        "placement.py:place_instance:after_memory_filter",
-        "cycles surviving memory filter",
-        {
-            "required_gb": round(command.model_card.storage_size.in_gb, 2),
-            "surviving_cycles": [
-                {
-                    "nodes": [str(n) for n in c.node_ids],
-                    "total_avail_gb": round(
-                        sum(
-                            (node_memory[n].ram_available for n in c.node_ids),
-                            start=Memory(),
-                        ).in_gb,
-                        2,
-                    ),
-                }
-                for c in cycles_with_sufficient_memory
-            ],
-        },
-        "H4,H5",
-    )
-    # #endregion
-
     if len(cycles_with_sufficient_memory) == 0:
         raise ValueError("No cycles found with sufficient memory")
 
@@ -355,36 +266,6 @@ def place_instance(
         cycles_with_leaf_nodes if cycles_with_leaf_nodes != [] else smallest_cycles
     )
 
-    # #region agent log
-    _dbg(
-        "placement.py:place_instance:pre_selection",
-        "final candidate cycles with score tuples",
-        {
-            "candidates": [
-                {
-                    "nodes": [str(n) for n in c.node_ids],
-                    "accelerator_score": _cycle_accelerator_score(
-                        c, node_backends, required_backends
-                    ),
-                    "download_score": _cycle_download_score(
-                        c, command.model_card.model_id, resolved_download_status
-                    ),
-                    "total_avail_gb": round(
-                        sum(
-                            (node_memory[n].ram_available for n in c.node_ids),
-                            start=Memory(),
-                        ).in_gb,
-                        2,
-                    ),
-                }
-                for c in candidate_cycles
-            ],
-            "had_leaf_cycles": cycles_with_leaf_nodes != [],
-        },
-        "H1,H5",
-    )
-    # #endregion
-
     selected_cycle = max(
         candidate_cycles,
         key=lambda cycle: (
@@ -398,15 +279,6 @@ def place_instance(
             ),
         ),
     )
-
-    # #region agent log
-    _dbg(
-        "placement.py:place_instance:selected",
-        "selected cycle",
-        {"nodes": [str(n) for n in selected_cycle.node_ids]},
-        "H1,H5",
-    )
-    # #endregion
 
     # Single-node: force Pipeline/Ring (Tensor and Jaccl require multi-node)
     if len(selected_cycle) == 1:
@@ -423,6 +295,7 @@ def place_instance(
         command.sharding,
         node_memory,
         command.node_layers,
+        node_identities,
     )
 
     cycle_digraph: Topology = topology.get_subgraph_from_nodes(selected_cycle.node_ids)

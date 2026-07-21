@@ -6,7 +6,7 @@ from exo.shared.models.model_cards import ModelCard
 from exo.shared.topology import Topology
 from exo.shared.types.common import Host, NodeId
 from exo.shared.types.memory import Memory
-from exo.shared.types.profiling import MemoryUsage, NodeNetworkInfo
+from exo.shared.types.profiling import MemoryUsage, NodeIdentity, NodeNetworkInfo
 from exo.shared.types.topology import Cycle, RDMAConnection, SocketConnection
 from exo.shared.types.worker.runners import RunnerId, ShardAssignments
 from exo.shared.types.worker.shards import (
@@ -16,41 +16,6 @@ from exo.shared.types.worker.shards import (
     ShardMetadata,
     TensorShardMetadata,
 )
-
-
-# #region agent log
-import json as _dbg_json
-import os as _dbg_os
-import time as _dbg_time
-
-
-def _dbg(location: str, message: str, data: object, hypothesis: str) -> None:
-    line = (
-        _dbg_json.dumps(
-            {
-                "sessionId": "0756d4",
-                "timestamp": int(_dbg_time.time() * 1000),
-                "location": location,
-                "message": message,
-                "data": data,
-                "hypothesisId": hypothesis,
-            }
-        )
-        + "\n"
-    )
-    for _path in (
-        "/Users/jaygawronek/Documents/Projects/exo/.cursor/debug-0756d4.log",
-        _dbg_os.path.expanduser("~/exo-debug-0756d4.log"),
-    ):
-        try:
-            with open(_path, "a") as _f:
-                _f.write(line)
-            return
-        except OSError:
-            continue
-
-
-# #endregion
 
 
 def filter_cycles_by_memory(
@@ -79,6 +44,93 @@ def get_smallest_cycles(
     return [cycle for cycle in cycles if len(cycle) == min_nodes]
 
 
+# Approximate GPU memory bandwidth (GB/s) by chip/GPU name substring. Decode
+# is memory-bandwidth bound, so pipeline stage time is proportional to the
+# bytes of weights a node reads per token divided by its bandwidth. Substring
+# order matters: more specific names (e.g. "M3 Ultra") must precede less
+# specific ones (e.g. "M3").
+_MEMORY_BANDWIDTH_GBPS_BY_CHIP_SUBSTRING: tuple[tuple[str, float], ...] = (
+    ("M4 Ultra", 1092.0),
+    ("M3 Ultra", 819.0),
+    ("M2 Ultra", 800.0),
+    ("M1 Ultra", 800.0),
+    ("M4 Max", 546.0),
+    ("M3 Max", 400.0),
+    ("M2 Max", 400.0),
+    ("M1 Max", 400.0),
+    ("M4 Pro", 273.0),
+    ("M3 Pro", 150.0),
+    ("M2 Pro", 200.0),
+    ("M1 Pro", 200.0),
+    ("M4", 120.0),
+    ("M3", 100.0),
+    ("M2", 100.0),
+    ("M1", 68.0),
+    ("GB10", 273.0),  # NVIDIA DGX Spark
+    ("RTX 5090", 1792.0),
+    ("RTX 5080", 960.0),
+    ("RTX 4090", 1008.0),
+    ("RTX 4080", 717.0),
+    ("RTX 3090", 936.0),
+    ("RTX 3080", 760.0),
+)
+
+
+def estimate_memory_bandwidth_gigabytes_per_second(
+    node_identity: NodeIdentity,
+) -> float | None:
+    """Estimated GPU memory bandwidth for a node, or None when unrecognised."""
+    chip_name = node_identity.chip_id.lower()
+    for chip_substring, bandwidth in _MEMORY_BANDWIDTH_GBPS_BY_CHIP_SUBSTRING:
+        if chip_substring.lower() in chip_name:
+            return bandwidth
+    return None
+
+
+def allocate_layers_by_throughput(
+    total_layers: int,
+    node_throughputs: list[float],
+    max_layers_per_node: list[int],
+) -> list[int]:
+    """Split layers to minimise summed per-stage decode time.
+
+    Per-token pipeline decode latency is the sum of every stage's compute
+    time, and stage time is (layers on node) / (node throughput), so the sum
+    is minimised by loading the fastest nodes to their memory capacity first.
+    Every node keeps at least one layer (a pipeline stage cannot be empty).
+    Raises ValueError when allocation is impossible; handled by the placement
+    caller (``place_instance``) which surfaces it to the API.
+    """
+    n = len(node_throughputs)
+    if n == 0:
+        raise ValueError("Cannot allocate layers to an empty node list")
+    if total_layers < n:
+        raise ValueError(
+            f"Cannot distribute {total_layers} layers across {n} nodes "
+            "(need at least 1 layer per node)"
+        )
+    if any(cap < 1 for cap in max_layers_per_node):
+        raise ValueError(
+            "Every pipeline node must have memory capacity for at least one layer"
+        )
+    if sum(max_layers_per_node) < total_layers:
+        raise ValueError(
+            f"Selected nodes only have capacity for {sum(max_layers_per_node)} of "
+            f"{total_layers} layers"
+        )
+
+    result = [1] * n
+    remaining = total_layers - n
+    for i in sorted(range(n), key=lambda i: node_throughputs[i], reverse=True):
+        take = min(max_layers_per_node[i] - result[i], remaining)
+        result[i] += take
+        remaining -= take
+        if remaining == 0:
+            break
+    assert remaining == 0
+    return result
+
+
 def allocate_layers_proportionally(
     total_layers: int,
     memory_fractions: list[float],
@@ -100,11 +152,13 @@ def allocate_layers_proportionally(
             f"Cannot distribute {total_layers} layers across {n} nodes "
             "(need at least 1 layer per node)"
         )
-    caps = max_layers_per_node if max_layers_per_node is not None else [total_layers] * n
+    caps = (
+        max_layers_per_node if max_layers_per_node is not None else [total_layers] * n
+    )
     assert len(caps) == n
     if any(cap < 1 for cap in caps):
         raise ValueError(
-            "Every pipeline node must have memory capacity for at least one layer"
+            "A selected pipeline node has insufficient memory to hold even one layer"
         )
     if sum(caps) < total_layers:
         raise ValueError(
@@ -160,49 +214,44 @@ def _allocate_and_validate_layers(
     node_memory: Mapping[NodeId, MemoryUsage],
     total_memory: Memory,
     model_card: ModelCard,
+    node_identities: Mapping[NodeId, NodeIdentity] | None = None,
 ) -> list[int]:
-    layer_allocations = allocate_layers_proportionally(
-        total_layers=model_card.n_layers,
-        memory_fractions=[
-            node_memory[node_id].ram_available / total_memory for node_id in node_ids
-        ],
-        max_layers_per_node=[
-            (node_memory[node_id].ram_available.in_bytes * model_card.n_layers)
-            // model_card.storage_size.in_bytes
-            for node_id in node_ids
-        ],
-    )
+    max_layers_per_node = [
+        (node_memory[node_id].ram_available.in_bytes * model_card.n_layers)
+        // model_card.storage_size.in_bytes
+        for node_id in node_ids
+    ]
+
+    node_bandwidths = [
+        estimate_memory_bandwidth_gigabytes_per_second(
+            (node_identities or {}).get(node_id, NodeIdentity())
+        )
+        for node_id in node_ids
+    ]
+
+    if all(bandwidth is not None for bandwidth in node_bandwidths):
+        # Decode throughput is bounded by the sum of per-stage times, so load
+        # the highest-bandwidth nodes first (capped by their memory).
+        layer_allocations = allocate_layers_by_throughput(
+            total_layers=model_card.n_layers,
+            node_throughputs=[
+                bandwidth for bandwidth in node_bandwidths if bandwidth is not None
+            ],
+            max_layers_per_node=max_layers_per_node,
+        )
+    else:
+        # Unknown hardware: fall back to memory-proportional allocation.
+        layer_allocations = allocate_layers_proportionally(
+            total_layers=model_card.n_layers,
+            memory_fractions=[
+                node_memory[node_id].ram_available / total_memory
+                for node_id in node_ids
+            ],
+            max_layers_per_node=max_layers_per_node,
+        )
 
     total_storage = model_card.storage_size
     total_layers = model_card.n_layers
-
-    # #region agent log
-    _dbg(
-        "placement_utils.py:_allocate_and_validate_layers",
-        "proportional layer allocation vs per-node memory",
-        {
-            "model_id": str(model_card.model_id),
-            "storage_gb": round(total_storage.in_gb, 2),
-            "n_layers": total_layers,
-            "per_node": [
-                {
-                    "node": str(node_id),
-                    "layers": layer_allocations[i],
-                    "required_gb": round(
-                        ((total_storage * layer_allocations[i]) // total_layers).in_gb,
-                        2,
-                    ),
-                    "available_gb": round(node_memory[node_id].ram_available.in_gb, 2),
-                    "would_fail": (total_storage * layer_allocations[i]) // total_layers
-                    > node_memory[node_id].ram_available,
-                }
-                for i, node_id in enumerate(node_ids)
-            ],
-        },
-        "H2,H3",
-    )
-    # #endregion
-
     for i, node_id in enumerate(node_ids):
         node_layers = layer_allocations[i]
         required_memory = (total_storage * node_layers) // total_layers
@@ -256,6 +305,7 @@ def get_shard_assignments_for_pipeline_parallel(
     cycle: Cycle,
     node_memory: Mapping[NodeId, MemoryUsage],
     node_layers: Mapping[NodeId, int] | None = None,
+    node_identities: Mapping[NodeId, NodeIdentity] | None = None,
 ) -> ShardAssignments:
     """Create shard assignments for pipeline parallel execution."""
     world_size = len(cycle)
@@ -269,7 +319,7 @@ def get_shard_assignments_for_pipeline_parallel(
         return _get_shard_assignments_for_cfg_parallel(model_card, cycle, node_memory)
     else:
         return _get_shard_assignments_for_pure_pipeline(
-            model_card, cycle, node_memory, node_layers
+            model_card, cycle, node_memory, node_layers, node_identities
         )
 
 
@@ -341,6 +391,7 @@ def _get_shard_assignments_for_pure_pipeline(
     cycle: Cycle,
     node_memory: Mapping[NodeId, MemoryUsage],
     node_layers: Mapping[NodeId, int] | None = None,
+    node_identities: Mapping[NodeId, NodeIdentity] | None = None,
 ) -> ShardAssignments:
     """Create shard assignments for pure pipeline execution."""
     _validate_cycle(cycle)
@@ -348,7 +399,7 @@ def _get_shard_assignments_for_pure_pipeline(
 
     layer_allocations = (
         _allocate_and_validate_layers(
-            cycle.node_ids, node_memory, total_memory, model_card
+            cycle.node_ids, node_memory, total_memory, model_card, node_identities
         )
         if node_layers is None
         else _validate_manual_layer_allocations(
@@ -422,6 +473,7 @@ def get_shard_assignments(
     sharding: Sharding,
     node_memory: Mapping[NodeId, MemoryUsage],
     node_layers: Mapping[NodeId, int] | None = None,
+    node_identities: Mapping[NodeId, NodeIdentity] | None = None,
 ) -> ShardAssignments:
     match sharding:
         case Sharding.Pipeline:
@@ -430,6 +482,7 @@ def get_shard_assignments(
                 cycle=cycle,
                 node_memory=node_memory,
                 node_layers=node_layers,
+                node_identities=node_identities,
             )
         case Sharding.Tensor:
             return get_shard_assignments_for_tensor_parallel(
@@ -481,6 +534,18 @@ def _find_connection_ip(
             yield connection.sink_multiaddr.ip_address
 
 
+# Nominal link speeds (Mb/s) used when the OS does not report a negotiated
+# speed. Ordering preserves the previous ring preference:
+# thunderbolt > maybe_ethernet > ethernet > wifi > unknown.
+_NOMINAL_LINK_SPEED_MEGABITS: Mapping[str, int] = {
+    "thunderbolt": 40_000,
+    "maybe_ethernet": 10_000,
+    "ethernet": 1_000,
+    "wifi": 300,
+    "unknown": 100,
+}
+
+
 def find_ip_prioritised(
     node_id: NodeId,
     other_node_id: NodeId,
@@ -490,37 +555,44 @@ def find_ip_prioritised(
 ) -> str | None:
     """Find an IP address between nodes with prioritization.
 
-    Priority: ethernet > wifi > unknown > thunderbolt
+    Ring links prefer the fastest interface: the negotiated link speed when
+    the node reports one (Linux sysfs), otherwise a nominal per-type speed.
+    RDMA coordinators prefer ethernet.
     """
     ips = list(_find_connection_ip(node_id, other_node_id, cycle_digraph))
     if not ips:
         return None
     other_network = node_network.get(other_node_id, NodeNetworkInfo())
-    ip_to_type = {
-        iface.ip_address: iface.interface_type for iface in other_network.interfaces
-    }
+    ip_to_interface = {iface.ip_address: iface for iface in other_network.interfaces}
 
-    # Ring should prioritise fastest connection. As a best-effort, we prioritise TB.
-    # TODO: Profile and get actual connection speeds.
     if ring:
-        priority = {
-            "thunderbolt": 0,
-            "maybe_ethernet": 1,
-            "ethernet": 2,
-            "wifi": 3,
-            "unknown": 4,
-        }
+
+        def effective_link_speed_megabits(ip: str) -> int:
+            interface = ip_to_interface.get(ip)
+            if interface is None:
+                return _NOMINAL_LINK_SPEED_MEGABITS["unknown"]
+            if interface.link_speed_megabits is not None:
+                return interface.link_speed_megabits
+            return _NOMINAL_LINK_SPEED_MEGABITS.get(
+                interface.interface_type, _NOMINAL_LINK_SPEED_MEGABITS["unknown"]
+            )
+
+        return max(ips, key=effective_link_speed_megabits)
 
     # RDMA prefers ethernet coordinator
-    else:
-        priority = {
-            "ethernet": 0,
-            "wifi": 1,
-            "unknown": 2,
-            "maybe_ethernet": 3,
-            "thunderbolt": 4,
-        }
-    return min(ips, key=lambda ip: priority.get(ip_to_type.get(ip, "unknown"), 2))
+    priority = {
+        "ethernet": 0,
+        "wifi": 1,
+        "unknown": 2,
+        "maybe_ethernet": 3,
+        "thunderbolt": 4,
+    }
+
+    def interface_type_for_ip(ip: str) -> str:
+        interface = ip_to_interface.get(ip)
+        return interface.interface_type if interface is not None else "unknown"
+
+    return min(ips, key=lambda ip: priority.get(interface_type_for_ip(ip), 2))
 
 
 def get_mlx_ring_hosts_by_node(

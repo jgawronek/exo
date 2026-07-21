@@ -836,7 +836,9 @@ def _limit_cuda_allocator_cache(model_size: Memory) -> None:
         return
     import psutil
 
-    from exo.shared.types.profiling import _query_cuda_vram_bytes  # pyright: ignore[reportPrivateUsage]
+    from exo.shared.types.profiling import (
+        _query_cuda_vram_bytes,  # pyright: ignore[reportPrivateUsage]
+    )
 
     vram = _query_cuda_vram_bytes()
     if vram is not None:

@@ -61,9 +61,6 @@ class MemoryUsage(FrozenModel):
             return None
         total_vram, free_vram = vram
         usable_vram = int(free_vram * CUDA_VRAM_USABLE_FRACTION)
-        # #region agent log
-        _dbg_log_cuda_report(total_vram, free_vram, usable_vram)
-        # #endregion
         sm = psutil.swap_memory()
         return cls.from_bytes(
             ram_total=total_vram,
@@ -88,45 +85,6 @@ METAL_WORKING_SET_USABLE_FRACTION: Final = 0.85
 # weights are wired into system RAM. Filling 94.7% of available memory with
 # weights froze a 128 GB GB10 during model load; 78% ran stably.
 CUDA_UNIFIED_USABLE_FRACTION: Final = 0.85
-
-
-# #region agent log
-def _dbg_log_cuda_report(total_vram: int, free_vram: int, usable_vram: int) -> None:
-    import json as _dbg_json
-    import os as _dbg_os
-    import time as _dbg_time
-
-    line = (
-        _dbg_json.dumps(
-            {
-                "sessionId": "0756d4",
-                "timestamp": int(_dbg_time.time() * 1000),
-                "location": "profiling.py:MemoryUsage.from_cuda",
-                "message": "CUDA VRAM report (post-fix headroom)",
-                "data": {
-                    "total_gb": round(total_vram / 1e9, 2),
-                    "free_gb": round(free_vram / 1e9, 2),
-                    "advertised_available_gb": round(usable_vram / 1e9, 2),
-                },
-                "runId": "post-fix",
-                "hypothesisId": "H3-headroom",
-            }
-        )
-        + "\n"
-    )
-    for _path in (
-        "/Users/jaygawronek/Documents/Projects/exo/.cursor/debug-0756d4.log",
-        _dbg_os.path.expanduser("~/exo-debug-0756d4.log"),
-    ):
-        try:
-            with open(_path, "a") as _f:
-                _f.write(line)
-            return
-        except OSError:
-            continue
-
-
-# #endregion
 
 
 def _query_cuda_vram_bytes() -> tuple[int, int] | None:
@@ -201,6 +159,9 @@ class NetworkInterfaceInfo(FrozenModel):
     name: str
     ip_address: str
     interface_type: InterfaceType = "unknown"
+    # Negotiated link speed in megabits per second (None when the OS cannot
+    # report it, e.g. Wi-Fi on some platforms or virtual interfaces).
+    link_speed_megabits: int | None = None
 
 
 class NodeIdentity(FrozenModel):
