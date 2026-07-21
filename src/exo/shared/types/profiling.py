@@ -73,7 +73,7 @@ class MemoryUsage(FrozenModel):
         )
 
 
-CUDA_VRAM_USABLE_FRACTION: Final = 0.85
+CUDA_VRAM_USABLE_FRACTION: Final = 0.75
 
 
 # #region agent log
