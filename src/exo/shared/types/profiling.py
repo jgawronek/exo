@@ -77,10 +77,11 @@ CUDA_VRAM_USABLE_FRACTION: Final = 0.75
 
 # Fraction of Metal's max_recommended_working_set_size that placement may
 # fill with model weights. Sustained decode needs headroom within the
-# working set for KV cache, activations, and OS pressure: 190 GB of weights
-# ran stably on a 256 GB Mac Studio (working set limit 239 GB) while 196.5 GB
-# aborted with kIOGPUCommandBufferCallbackErrorOutOfMemory.
-METAL_WORKING_SET_USABLE_FRACTION: Final = 0.80
+# working set for KV cache, activations, and OS pressure. Measured on a
+# 256 GB Mac Studio (working set 239e9 bytes): 204e9 bytes of weights ran
+# multi-turn generation stably, 211e9 bytes aborted with
+# kIOGPUCommandBufferCallbackErrorOutOfMemory. 0.85 advertises 203e9 bytes.
+METAL_WORKING_SET_USABLE_FRACTION: Final = 0.85
 
 # Fraction of psutil-available memory advertised on unified-memory CUDA
 # nodes (e.g. DGX Spark GB10), where nvidia-smi cannot report VRAM and
