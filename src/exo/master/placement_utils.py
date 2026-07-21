@@ -545,6 +545,57 @@ _NOMINAL_LINK_SPEED_MEGABITS: Mapping[str, int] = {
     "unknown": 100,
 }
 
+# A single TCP stream saturates well below line rate on fast links, so the
+# ring backend opens several parallel connections per neighbour when every
+# ring link reports a measured speed at or above this threshold.
+FAST_RING_LINK_MIN_MEGABITS = 25_000
+FAST_RING_LINK_CONNECTIONS = 4
+
+
+def _measured_link_speed_megabits(
+    source_node_id: NodeId,
+    sink_node_id: NodeId,
+    cycle_digraph: Topology,
+    node_network: Mapping[NodeId, NodeNetworkInfo],
+) -> int | None:
+    """Measured speed of the link ring host selection would pick, or None."""
+    selected_ip = find_ip_prioritised(
+        source_node_id, sink_node_id, cycle_digraph, node_network, ring=True
+    )
+    if selected_ip is None:
+        return None
+    sink_network = node_network.get(sink_node_id, NodeNetworkInfo())
+    for interface in sink_network.interfaces:
+        if interface.ip_address == selected_ip:
+            return interface.link_speed_megabits
+    return None
+
+
+def get_ring_connections_per_host(
+    selected_cycle: Cycle,
+    cycle_digraph: Topology,
+    node_network: Mapping[NodeId, NodeNetworkInfo],
+) -> int:
+    """Parallel TCP connections per ring neighbour for an instance.
+
+    Conservative: multiple connections are only used when every ring link in
+    both directions has a measured (not nominal) speed of at least
+    FAST_RING_LINK_MIN_MEGABITS, since extra connections on slow links only
+    add ports and sockets without improving throughput.
+    """
+    world_size = len(selected_cycle)
+    if world_size < 2:
+        return 1
+    for rank, node_id in enumerate(selected_cycle.node_ids):
+        right_neighbor = selected_cycle.node_ids[(rank + 1) % world_size]
+        for source, sink in ((node_id, right_neighbor), (right_neighbor, node_id)):
+            speed = _measured_link_speed_megabits(
+                source, sink, cycle_digraph, node_network
+            )
+            if speed is None or speed < FAST_RING_LINK_MIN_MEGABITS:
+                return 1
+    return FAST_RING_LINK_CONNECTIONS
+
 
 def find_ip_prioritised(
     node_id: NodeId,

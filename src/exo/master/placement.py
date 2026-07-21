@@ -8,6 +8,7 @@ from exo.master.placement_utils import (
     get_mlx_jaccl_coordinators,
     get_mlx_jaccl_devices_matrix,
     get_mlx_ring_hosts_by_node,
+    get_ring_connections_per_host,
     get_shard_assignments,
     get_smallest_cycles,
 )
@@ -349,6 +350,9 @@ def place_instance(
                 shard_assignments=shard_assignments,
                 hosts_by_node=hosts_by_node,
                 ephemeral_port=ephemeral_port,
+                connections_per_host=get_ring_connections_per_host(
+                    selected_cycle, cycle_digraph, node_network
+                ),
             )
 
     return target_instances

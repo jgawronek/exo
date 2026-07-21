@@ -12,12 +12,28 @@ from exo.worker.engines.mlx.auto_parallel import (
     CustomMlxLayer,
     PipelineFirstLayer,
     PipelineLastLayer,
+    dequantize_activation_from_wire,
     get_active_relay_context,
     patch_pipeline_model,
+    quantize_activation_for_wire,
     relay_sampled_tokens,
     set_pipeline_token_relay,
 )
 from exo.worker.tests.unittests.test_mlx.conftest import MockLayer
+
+
+def test_wire_quantization_roundtrip_error_is_bounded() -> None:
+    activation = mx.random.normal((1, 8, 64)).astype(mx.bfloat16)
+    quantized, scales = quantize_activation_for_wire(activation)
+    assert quantized.dtype == mx.int8
+    assert scales.shape == (1, 8, 1)
+
+    restored = dequantize_activation_from_wire(quantized, scales, activation.dtype)
+    # Absmax int8 quantization error is at most half a quantization step per
+    # position (plus bf16 rounding of the restored value).
+    error = mx.abs(restored.astype(mx.float32) - activation.astype(mx.float32))
+    tolerance = scales * 0.5 + 0.02
+    assert bool(mx.all(error <= tolerance))
 
 
 def run_pipeline_device(
@@ -131,6 +147,98 @@ def run_token_relay_device(
         result_queue.put((rank, local_correct and relay_correct, None))  # pyright: ignore[reportAny]
     except Exception as e:
         result_queue.put((rank, False, str(e)))  # pyright: ignore[reportAny]
+
+
+def run_wire_quant_device(
+    rank: int,
+    world_size: int,
+    hostfile_path: str,
+    result_queue: Any,  # pyright: ignore[reportAny]
+) -> None:
+    import os
+
+    os.environ["MLX_HOSTFILE"] = hostfile_path
+    os.environ["MLX_RANK"] = str(rank)
+
+    class MockLayerInner(mlx_nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+
+        def __call__(self, x: mx.array, *args: object, **kwargs: object) -> mx.array:
+            return x * 2
+
+    try:
+        from exo.worker.engines.mlx.auto_parallel import (
+            WIRE_QUANTIZATION_ENABLED,
+        )
+
+        assert WIRE_QUANTIZATION_ENABLED, "flag must be set before import"
+
+        group = mx.distributed.init(backend="ring", strict=True)
+
+        mock = MockLayerInner()
+        first = PipelineFirstLayer(mock, r=rank, group=group)
+        composed = PipelineLastLayer(first, r=rank, s=world_size, group=group)
+        first.is_prefill = True
+        composed.is_prefill = True
+
+        x = mx.ones((1, 4, 8))
+        result = composed(x)
+        mx.eval(result)
+
+        # Constant rows quantize exactly, so both ranks see exact doubling:
+        # rank 0 computes 2s locally; rank 1 receives 2s and doubles to 4s.
+        expected = float(1 << (rank + 1))
+        success = bool(mx.all(mx.abs(result - expected) < 1e-3))
+        result_queue.put((rank, success, None))  # pyright: ignore[reportAny]
+    except Exception as e:
+        result_queue.put((rank, False, str(e)))  # pyright: ignore[reportAny]
+
+
+def test_wire_quantized_prefill_hop_roundtrips() -> None:
+    ctx = mp.get_context("spawn")
+
+    world_size = 2
+    base_port = 29700
+
+    hosts = [f"127.0.0.1:{base_port + i}" for i in range(world_size)]
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(hosts, f)
+        hostfile_path = f.name
+
+    os.environ["EXO_WIRE_QUANT"] = "1"
+    try:
+        result_queue: Any = ctx.Queue()
+
+        processes: list[Any] = []
+        for rank in range(world_size):
+            p = ctx.Process(
+                target=run_wire_quant_device,
+                args=(rank, world_size, hostfile_path, result_queue),
+            )
+            p.start()
+            processes.append(p)
+
+        for p in processes:  # pyright: ignore[reportAny]
+            p.join(timeout=10)  # pyright: ignore[reportAny]
+
+        results: dict[int, bool] = {}
+        errors: dict[int, str] = {}
+        while not result_queue.empty():  # pyright: ignore[reportAny]
+            rank, success, error = result_queue.get()  # pyright: ignore[reportAny]
+            results[rank] = success
+            if error is not None:
+                errors[rank] = error
+
+        assert len(results) == world_size, (
+            f"Expected {world_size} results, got {len(results)}. Errors: {errors}"
+        )
+        for rank in range(world_size):
+            assert results[rank], f"Device {rank} failed: {errors.get(rank)}"
+    finally:
+        del os.environ["EXO_WIRE_QUANT"]
+        os.unlink(hostfile_path)
 
 
 def test_token_relay_decode_circulates_last_rank_token() -> None:

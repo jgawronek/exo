@@ -63,7 +63,9 @@ def test_estimate_memory_bandwidth_matches_known_chips() -> None:
         == 819.0
     )
     assert (
-        estimate_memory_bandwidth_gigabytes_per_second(NodeIdentity(chip_id="NVIDIA GB10"))
+        estimate_memory_bandwidth_gigabytes_per_second(
+            NodeIdentity(chip_id="NVIDIA GB10")
+        )
         == 273.0
     )
     assert (
@@ -200,12 +202,63 @@ def test_find_ip_prioritised_prefers_measured_link_speed_for_ring() -> None:
         )
     }
 
-    selected_ip = find_ip_prioritised(
-        node_a, node_b, topology, node_network, ring=True
-    )
+    selected_ip = find_ip_prioritised(node_a, node_b, topology, node_network, ring=True)
 
     # 200 GbE with a measured speed beats thunderbolt's nominal 40 Gb/s.
     assert selected_ip == ethernet_ip
+
+
+def test_ring_connections_scale_up_only_on_fast_measured_links() -> None:
+    from exo.master.placement_utils import (
+        FAST_RING_LINK_CONNECTIONS,
+        get_ring_connections_per_host,
+    )
+    from exo.shared.types.topology import Cycle
+
+    fast_ip_a, fast_ip_b = "169.254.0.8", "169.254.0.9"
+    node_a, node_b = NodeId(), NodeId()
+    topology = Topology()
+    topology.add_node(node_a)
+    topology.add_node(node_b)
+    topology.add_connection(
+        Connection(source=node_a, sink=node_b, edge=create_socket_connection(9))
+    )
+    topology.add_connection(
+        Connection(source=node_b, sink=node_a, edge=create_socket_connection(8))
+    )
+
+    def network(speed: int | None) -> dict[NodeId, NodeNetworkInfo]:
+        return {
+            node_a: NodeNetworkInfo(
+                interfaces=[
+                    NetworkInterfaceInfo(
+                        name="enp1",
+                        ip_address=fast_ip_a,
+                        interface_type="ethernet",
+                        link_speed_megabits=speed,
+                    )
+                ]
+            ),
+            node_b: NodeNetworkInfo(
+                interfaces=[
+                    NetworkInterfaceInfo(
+                        name="enp1",
+                        ip_address=fast_ip_b,
+                        interface_type="ethernet",
+                        link_speed_megabits=speed,
+                    )
+                ]
+            ),
+        }
+
+    cycle = Cycle(node_ids=[node_a, node_b])
+
+    assert (
+        get_ring_connections_per_host(cycle, topology, network(200_000))
+        == FAST_RING_LINK_CONNECTIONS
+    )
+    assert get_ring_connections_per_host(cycle, topology, network(10_000)) == 1
+    assert get_ring_connections_per_host(cycle, topology, network(None)) == 1
 
 
 def test_find_ip_prioritised_falls_back_to_nominal_speeds_for_ring() -> None:
@@ -230,9 +283,7 @@ def test_find_ip_prioritised_falls_back_to_nominal_speeds_for_ring() -> None:
         )
     }
 
-    selected_ip = find_ip_prioritised(
-        node_a, node_b, topology, node_network, ring=True
-    )
+    selected_ip = find_ip_prioritised(node_a, node_b, topology, node_network, ring=True)
 
     # Without measured speeds the previous type preference is preserved.
     assert selected_ip == thunderbolt_ip

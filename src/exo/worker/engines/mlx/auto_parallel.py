@@ -1,10 +1,11 @@
+import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from functools import partial
 from inspect import signature
-from typing import TYPE_CHECKING, Literal, Protocol, cast, final
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, final
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -115,6 +116,38 @@ class PipelineDecodeTimings:
 decode_timings = PipelineDecodeTimings()
 
 
+# Experimental: quantize prefill activations to int8 before sending them
+# between pipeline stages. Prefill hops carry (1, chunk, hidden) bf16 tensors
+# (8-32 MiB per chunk at hidden=4096), so halving the bytes matters on
+# ethernet links. Decode hops (a few KiB) are latency-bound and stay bf16.
+# Every node in the cluster must set the same value or ranks will exchange
+# mismatched payloads and hang.
+WIRE_QUANTIZATION_ENABLED: Final = os.environ.get("EXO_WIRE_QUANT") == "1"
+
+_WIRE_QUANTIZATION_MINIMUM_SCALE: Final = 1e-8
+
+
+def quantize_activation_for_wire(
+    activation: mx.array,
+) -> tuple[mx.array, mx.array]:
+    """Per-position absmax int8 quantization for wire transfer.
+
+    Returns (quantized int8 tensor of the input shape, float32 scales with a
+    trailing singleton dimension). Positions are quantized independently so
+    outlier tokens do not destroy the precision of their neighbours.
+    """
+    scales = mx.max(mx.abs(activation), axis=-1, keepdims=True) / 127.0
+    scales = mx.maximum(scales.astype(mx.float32), _WIRE_QUANTIZATION_MINIMUM_SCALE)
+    quantized = mx.round(activation / scales).astype(mx.int8)
+    return quantized, scales
+
+
+def dequantize_activation_from_wire(
+    quantized: mx.array, scales: mx.array, dtype: mx.Dtype
+) -> mx.array:
+    return (quantized.astype(mx.float32) * scales).astype(dtype)
+
+
 _pending_prefill_sends: list[tuple[mx.array, int, mx.distributed.Group]] = []
 
 
@@ -181,8 +214,20 @@ class PipelineFirstLayer(CustomMlxLayer):
             # so that it stays on CPU, which does not have a timeout.
             mx.eval(x)
             recv_start = time.perf_counter()
-            x = mx.distributed.recv_like(x, (self.r - 1), group=self.group)
-            mx.eval(x)
+            if self.is_prefill and WIRE_QUANTIZATION_ENABLED:
+                quantized = mx.distributed.recv_like(
+                    mx.zeros(x.shape, dtype=mx.int8), (self.r - 1), group=self.group
+                )
+                scales = mx.distributed.recv_like(
+                    mx.zeros((*x.shape[:-1], 1), dtype=mx.float32),
+                    (self.r - 1),
+                    group=self.group,
+                )
+                mx.eval(quantized, scales)
+                x = dequantize_activation_from_wire(quantized, scales, x.dtype)
+            else:
+                x = mx.distributed.recv_like(x, (self.r - 1), group=self.group)
+                mx.eval(x)
             if not self.is_prefill:
                 decode_timings.record_recv(time.perf_counter() - recv_start)
         return self.original_layer(x, *args, **kwargs)
@@ -218,21 +263,31 @@ class PipelineLastLayer(CustomMlxLayer):
 
         if self.r != self.s - 1:
             send_start = time.perf_counter()
-            if self.queue_sends:
-                _pending_prefill_sends.append(
-                    (output, (self.r + 1) % self.s, self.group)
-                )
+            destination = (self.r + 1) % self.s
+            if self.is_prefill and WIRE_QUANTIZATION_ENABLED:
+                # The receiving rank reconstructs the activation from the
+                # int8 payload + scales; the raw bf16 output stays local.
+                wire_arrays = list(quantize_activation_for_wire(output))
             else:
-                output = mx.distributed.send(
-                    output, (self.r + 1) % self.s, group=self.group
-                )
+                wire_arrays = [output]
+
+            if self.queue_sends:
+                for wire_array in wire_arrays:
+                    _pending_prefill_sends.append((wire_array, destination, self.group))
+            else:
+                wire_arrays = [
+                    mx.distributed.send(wire_array, destination, group=self.group)
+                    for wire_array in wire_arrays
+                ]
+                if len(wire_arrays) == 1:
+                    output = wire_arrays[0]
             if cache is not None:
                 # CacheList (used by MLA models like DeepSeekV32, GLM MoE DSA)
                 # doesn't have .keys directly; access via first sub-cache.
                 _cache = cache[0] if hasattr(cache, "caches") else cache  # type: ignore
                 if hasattr(_cache, "keys"):  # pyright: ignore[reportAny]
-                    _cache.keys = mx.depends(_cache.keys, output)  # type: ignore
-            mx.eval(output)
+                    _cache.keys = mx.depends(_cache.keys, wire_arrays[-1])  # type: ignore
+            mx.eval(*wire_arrays)
             if cache is not None and hasattr(_cache, "keys"):  # type: ignore
                 mx.eval(_cache.keys)  # type: ignore
             if not self.is_prefill:
@@ -324,7 +379,9 @@ def relay_sampled_tokens(
     """
     gather_start = time.perf_counter()
     contribution = sampled.astype(mx.int32)
-    mx.eval(contribution)
+    # No standalone eval of the contribution: evaluating the gathered result
+    # forces it transitively, and the extra barrier would serialize the
+    # sampling graph against the collective for nothing.
     gathered = mx.distributed.all_gather(contribution, group=relay_context.group)
     mx.eval(gathered)
     batch_size = contribution.shape[0]

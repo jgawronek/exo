@@ -68,6 +68,19 @@ EXO_RUNNER_MUST_FAIL = "EXO RUNNER MUST FAIL"
 EXO_RUNNER_MUST_OOM = "EXO RUNNER MUST OOM"
 EXO_RUNNER_MUST_TIMEOUT = "EXO RUNNER MUST TIMEOUT"
 
+# During steady-state decode every engine step used to issue a task-agreement
+# collective even when no rank had pending work; over a TCP ring that costs
+# 1-3ms out of a 40-100ms token budget. Steps are rank-lockstep while the
+# engine has work, so agreeing on a fixed step cadence keeps collective counts
+# matched across ranks while amortizing the cost. New requests arriving
+# mid-decode wait at most this many tokens before joining the batch.
+TASK_AGREEMENT_INTERVAL_STEPS = 8
+
+# Same idea during prefill: the per-chunk progress callback used to run the
+# cancel + task agreement collectives on every chunk (3 collectives per
+# chunk). Smaller wavefront chunks made that relatively expensive.
+PREFILL_AGREEMENT_INTERVAL_CHUNKS = 4
+
 
 def _check_for_debug_prompts(task_params: TextGenerationTaskParams) -> None:
     """Check for debug prompt triggers in the input."""
@@ -337,6 +350,7 @@ class BatchGenerator(Engine):
     _all_tasks: dict[TaskId, TextGeneration] = field(default_factory=dict, init=False)
     _queue: deque[TextGeneration] = field(default_factory=deque, init=False)
     _gen: ExoBatchGenerator = field(init=False)
+    _steps_until_task_agreement: int = field(default=0, init=False)
     _active_tasks: dict[
         int,
         tuple[
@@ -403,7 +417,15 @@ class BatchGenerator(Engine):
         tuple[TaskId, GenerationChunk | CancelledResponse | FinishedResponse]
     ]:
         if not self._queue:
-            self.agree_on_tasks()
+            # Rank-consistent cadence: the countdown only advances on steps
+            # where the queue is empty, and steps are lockstep across ranks
+            # while the engine has work, so every rank agrees on the same
+            # steps. An idle engine agrees immediately so freshly submitted
+            # tasks start without waiting out the countdown.
+            self._steps_until_task_agreement -= 1
+            if self._steps_until_task_agreement <= 0 or not self._gen.has_work:
+                self.agree_on_tasks()
+                self._steps_until_task_agreement = TASK_AGREEMENT_INTERVAL_STEPS
 
         # Submit any queued tasks to the engine
         while self._queue and len(self._active_tasks) < EXO_MAX_CONCURRENT_REQUESTS:
@@ -417,8 +439,12 @@ class BatchGenerator(Engine):
                 raise
 
             queue = GeneratorQueue[GenerationResponse]()
-            if task.task_params.bench:
-                output_generator: Iterator[GenerationChunk | None] = map(
+            if self.device_rank != 0:
+                # Non-rank-0 chunks are discarded below, so parsing and
+                # detokenizing them is wasted per-token CPU work.
+                output_generator: Iterator[GenerationChunk | None] = iter(())
+            elif task.task_params.bench:
+                output_generator = map(
                     lambda r: map_responses_to_chunks(r, self.model_id), queue.gen()
                 )
             else:
@@ -448,10 +474,12 @@ class BatchGenerator(Engine):
                 continue
 
             task, queue, output_generator = self._active_tasks[uid]
-            queue.push(response)
-            # If a generator fails to parse for some reason and returns early, we should not crash
-            while (parsed := next(output_generator, None)) is not None:
-                output.append((task.task_id, parsed))
+            if self.device_rank == 0:
+                queue.push(response)
+                # If a generator fails to parse for some reason and returns
+                # early, we should not crash
+                while (parsed := next(output_generator, None)) is not None:
+                    output.append((task.task_id, parsed))
 
             # check if original response was terminal and append a Finished()
             if response.finish_reason is not None:
@@ -523,7 +551,19 @@ class BatchGenerator(Engine):
                     )
                 )
 
+        prefill_chunks_since_agreement = 0
+
         def distributed_prompt_progress_callback() -> None:
+            # Every rank invokes this callback the same number of times per
+            # prefill (real + wavefront filler iterations), so gating on the
+            # invocation count keeps collective counts matched while paying
+            # the cancel/task agreement cost once per few chunks instead of
+            # per chunk.
+            nonlocal prefill_chunks_since_agreement
+            prefill_chunks_since_agreement += 1
+            if prefill_chunks_since_agreement < PREFILL_AGREEMENT_INTERVAL_CHUNKS:
+                return
+            prefill_chunks_since_agreement = 0
             self.agree_on_cancellations()
             if self.should_cancel(task.task_id):
                 raise PrefillCancelled()
@@ -540,8 +580,8 @@ class BatchGenerator(Engine):
                 self.agree_on_cancellations()
                 if self.should_cancel(task.task_id):
                     self._cancelled_tasks.add(task.task_id)
-
-                self.agree_on_tasks()
+                # Task agreement is handled on a step cadence in step();
+                # repeating it here would just add collectives per token.
 
         return self._gen.submit(
             task_params=task.task_params,

@@ -87,6 +87,27 @@ class HostList(RootModel[list[str]]):
         return cls(root=[str(host) for host in hosts])
 
 
+def build_ring_hostfile_json(hosts: list[Host], connections_per_host: int) -> str:
+    """Serialize a rank's ring host list for MLX_HOSTFILE.
+
+    With one connection per host this is a flat list of "ip:port" strings.
+    With more, each entry becomes a list of endpoints on consecutive ports,
+    which the MLX ring backend uses to open parallel TCP connections to the
+    same neighbour (single streams cap well below line rate on fast links).
+    Placeholder hosts (port 0) are never connected, so they repeat unchanged.
+    """
+    if connections_per_host <= 1:
+        return HostList.from_hosts(hosts).model_dump_json()
+    nested = [
+        [
+            str(host) if host.port == 0 else f"{host.ip}:{host.port + i}"
+            for i in range(connections_per_host)
+        ]
+        for host in hosts
+    ]
+    return json.dumps(nested)
+
+
 def mlx_distributed_init(
     bound_instance: BoundInstance,
 ) -> mx.distributed.Group:
@@ -102,9 +123,15 @@ def mlx_distributed_init(
         )
         # TODO: singleton instances
         match bound_instance.instance:
-            case MlxRingInstance(hosts_by_node=hosts_by_node, ephemeral_port=_):
+            case MlxRingInstance(
+                hosts_by_node=hosts_by_node,
+                ephemeral_port=_,
+                connections_per_host=connections_per_host,
+            ):
                 hosts_for_node = hosts_by_node[bound_instance.bound_node_id]
-                hosts_json = HostList.from_hosts(hosts_for_node).model_dump_json()
+                hosts_json = build_ring_hostfile_json(
+                    hosts_for_node, connections_per_host
+                )
 
                 with open(coordination_file, "w") as f:
                     _ = f.write(hosts_json)

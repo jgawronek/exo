@@ -75,6 +75,15 @@ from exo.worker.runner.bootstrap import logger
 
 REMOTE_PREFILL_MIN_TOKENS = 1000
 
+# Prompts at or above this many tokens use the overlapped wavefront prefill on
+# pipeline models. Below it the pipeline runs the prompt as a single chunk, so
+# there is nothing to overlap and the stock path is equivalent.
+PIPELINE_PREFILL_MIN_TOKENS = 512
+
+# Lower bound on the wavefront chunk size: chunks below this waste GPU
+# efficiency and inflate the per-chunk synchronization count.
+MIN_PIPELINE_PREFILL_CHUNK_TOKENS = 256
+
 generation_stream = mx.new_stream(mx.default_device())
 
 _MIN_PREFIX_HIT_RATIO_TO_UPDATE = 0.5
@@ -193,7 +202,15 @@ def pipeline_parallel_prefill(
     This function is designed to match mlx_lm's stream_generate exactly in terms of
     side effects (given the same prefill step size)
     """
-    prefill_step_size = prefill_step_size // min(4, group.size())
+    # Split the step so consecutive chunks overlap across pipeline stages
+    # (wavefront). For short prompts the nominal step would produce a single
+    # chunk with nothing to overlap, so also divide the prompt itself into
+    # one chunk per stage, bounded below to keep chunks GPU-efficient.
+    pipeline_depth = min(4, group.size())
+    prefill_step_size = max(
+        MIN_PIPELINE_PREFILL_CHUNK_TOKENS,
+        min(prefill_step_size // pipeline_depth, (len(prompt) - 1) // pipeline_depth),
+    )
 
     quantize_cache_fn: Callable[..., None] = functools.partial(
         maybe_quantize_kv_cache,
@@ -335,7 +352,7 @@ def prefill(
     prefill_step_size = 4096
 
     try:
-        if is_pipeline and num_tokens >= prefill_step_size:
+        if is_pipeline and num_tokens >= PIPELINE_PREFILL_MIN_TOKENS:
             set_pipeline_queue_sends(model, queue_sends=True)
             assert group is not None, "Pipeline prefill requires a distributed group"
             pipeline_parallel_prefill(

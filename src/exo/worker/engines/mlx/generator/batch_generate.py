@@ -117,6 +117,7 @@ class ExoBatchGenerator:
         self._supports_token_relay = self.group is not None and any(
             isinstance(layer, PipelineLastLayer) for layer in self.model.layers
         )
+        self._device_rank = 0 if self.group is None else self.group.rank()
 
     @property
     def has_work(self) -> bool:
@@ -390,46 +391,57 @@ class ExoBatchGenerator:
             state.last_gen_token_time = now
             if state.on_generation_token is not None:
                 state.on_generation_token()
-            if response.finish_reason != "stop":
-                state.detokenizer.add_token(response.token)
-            if response.finish_reason is not None:
-                state.detokenizer.finalize()
-            text = state.detokenizer.last_segment
             state.completion_tokens += 1
-            if state.task_params.bench:
-                delta = now - state.first_gen_token_time
-                logger.debug(
-                    f"[bench] uid={response.uid} tok#{state.completion_tokens} {text!r} t={delta:.4f}s"
-                )
-            state.generated_text_parts.append(text)
-            state.potential_stop_sequence_text += text
 
-            finish_reason: FinishReason | None = cast(
-                FinishReason | None, response.finish_reason
-            )
             task_params = state.task_params
             stop_sequences = _stop_sequences(task_params)
             max_stop_len = max((len(s) for s in stop_sequences), default=0)
 
-            if stop_sequences:
-                for stop_seq in stop_sequences:
-                    if stop_seq in state.potential_stop_sequence_text:
-                        stop_index = state.potential_stop_sequence_text.find(stop_seq)
-                        text_before_stop = state.potential_stop_sequence_text[
-                            :stop_index
-                        ]
-                        chunk_start = len(state.potential_stop_sequence_text) - len(
-                            text
-                        )
-                        text = text_before_stop[chunk_start:]
-                        finish_reason = "stop"
-                        break
+            # Only rank 0 streams text to the client. Other ranks skip
+            # detokenization entirely unless the task carries text-based stop
+            # sequences, which every rank must scan identically to keep
+            # finish_reason (and therefore collective counts) in lockstep.
+            needs_text = self._device_rank == 0 or bool(stop_sequences)
+
+            finish_reason: FinishReason | None = cast(
+                FinishReason | None, response.finish_reason
+            )
+            text = ""
+            if needs_text:
+                if response.finish_reason != "stop":
+                    state.detokenizer.add_token(response.token)
+                if response.finish_reason is not None:
+                    state.detokenizer.finalize()
+                text = state.detokenizer.last_segment
+                if state.task_params.bench:
+                    delta = now - state.first_gen_token_time
+                    logger.debug(
+                        f"[bench] uid={response.uid} tok#{state.completion_tokens} {text!r} t={delta:.4f}s"
+                    )
+                state.generated_text_parts.append(text)
+                state.potential_stop_sequence_text += text
+
+                if stop_sequences:
+                    for stop_seq in stop_sequences:
+                        if stop_seq in state.potential_stop_sequence_text:
+                            stop_index = state.potential_stop_sequence_text.find(
+                                stop_seq
+                            )
+                            text_before_stop = state.potential_stop_sequence_text[
+                                :stop_index
+                            ]
+                            chunk_start = len(state.potential_stop_sequence_text) - len(
+                                text
+                            )
+                            text = text_before_stop[chunk_start:]
+                            finish_reason = "stop"
+                            break
 
             is_done = finish_reason is not None
 
             logprob: float | None = None
             top_logprobs: list[TopLogprobItem] | None = None
-            if task_params.logprobs:
+            if task_params.logprobs and self._device_rank == 0:
                 precomputed = topk.for_uid(response.uid)
                 precomputed_indices, precomputed_values, precomputed_selected = (
                     precomputed if precomputed is not None else (None, None, None)

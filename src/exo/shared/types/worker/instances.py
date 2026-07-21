@@ -28,6 +28,12 @@ class BaseInstance(TaggedModel):
 class MlxRingInstance(BaseInstance):
     hosts_by_node: dict[NodeId, list[Host]]
     ephemeral_port: int
+    # Number of TCP connections the ring backend opens per neighbour, on
+    # consecutive ports starting at ephemeral_port. A single TCP stream caps
+    # well below line rate on fast links (e.g. 200GbE between DGX Sparks), so
+    # placement raises this when every ring link reports a fast measured
+    # speed.
+    connections_per_host: int = 1
 
 
 class MlxJacclInstance(BaseInstance):
