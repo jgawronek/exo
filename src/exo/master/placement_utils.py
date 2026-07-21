@@ -18,6 +18,41 @@ from exo.shared.types.worker.shards import (
 )
 
 
+# #region agent log
+import json as _dbg_json
+import os as _dbg_os
+import time as _dbg_time
+
+
+def _dbg(location: str, message: str, data: object, hypothesis: str) -> None:
+    line = (
+        _dbg_json.dumps(
+            {
+                "sessionId": "0756d4",
+                "timestamp": int(_dbg_time.time() * 1000),
+                "location": location,
+                "message": message,
+                "data": data,
+                "hypothesisId": hypothesis,
+            }
+        )
+        + "\n"
+    )
+    for _path in (
+        "/Users/jaygawronek/Documents/Projects/exo/.cursor/debug-0756d4.log",
+        _dbg_os.path.expanduser("~/exo-debug-0756d4.log"),
+    ):
+        try:
+            with open(_path, "a") as _f:
+                _f.write(line)
+            return
+        except OSError:
+            continue
+
+
+# #endregion
+
+
 def filter_cycles_by_memory(
     cycles: list[Cycle],
     node_memory: Mapping[NodeId, MemoryUsage],
@@ -108,6 +143,34 @@ def _allocate_and_validate_layers(
 
     total_storage = model_card.storage_size
     total_layers = model_card.n_layers
+
+    # #region agent log
+    _dbg(
+        "placement_utils.py:_allocate_and_validate_layers",
+        "proportional layer allocation vs per-node memory",
+        {
+            "model_id": str(model_card.model_id),
+            "storage_gb": round(total_storage.in_gb, 2),
+            "n_layers": total_layers,
+            "per_node": [
+                {
+                    "node": str(node_id),
+                    "layers": layer_allocations[i],
+                    "required_gb": round(
+                        ((total_storage * layer_allocations[i]) // total_layers).in_gb,
+                        2,
+                    ),
+                    "available_gb": round(node_memory[node_id].ram_available.in_gb, 2),
+                    "would_fail": (total_storage * layer_allocations[i]) // total_layers
+                    > node_memory[node_id].ram_available,
+                }
+                for i, node_id in enumerate(node_ids)
+            ],
+        },
+        "H2,H3",
+    )
+    # #endregion
+
     for i, node_id in enumerate(node_ids):
         node_layers = layer_allocations[i]
         required_memory = (total_storage * node_layers) // total_layers
