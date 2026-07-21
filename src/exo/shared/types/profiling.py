@@ -75,6 +75,13 @@ class MemoryUsage(FrozenModel):
 
 CUDA_VRAM_USABLE_FRACTION: Final = 0.75
 
+# Fraction of Metal's max_recommended_working_set_size that placement may
+# fill with model weights. Sustained decode needs headroom within the
+# working set for KV cache, activations, and OS pressure: 190 GB of weights
+# ran stably on a 256 GB Mac Studio (working set limit 239 GB) while 196.5 GB
+# aborted with kIOGPUCommandBufferCallbackErrorOutOfMemory.
+METAL_WORKING_SET_USABLE_FRACTION: Final = 0.80
+
 
 # #region agent log
 def _dbg_log_cuda_report(total_vram: int, free_vram: int, usable_vram: int) -> None:

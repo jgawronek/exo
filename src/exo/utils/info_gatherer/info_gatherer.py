@@ -17,6 +17,7 @@ from exo.shared.constants import EXO_CONFIG_FILE, EXO_DEFAULT_MODELS_DIR
 from exo.shared.types.backends import Backend
 from exo.shared.types.memory import Memory
 from exo.shared.types.profiling import (
+    METAL_WORKING_SET_USABLE_FRACTION,
     DiskUsage,
     MemoryUsage,
     NetworkInterfaceInfo,
@@ -399,6 +400,66 @@ GatheredInfo = (
 )
 
 
+# #region agent log
+def _dbg_log_metal_cap(raw_available_bytes: int, capped_bytes: int) -> None:
+    import json as _dbg_json
+    import os as _dbg_os
+    import time as _dbg_time
+
+    line = (
+        _dbg_json.dumps(
+            {
+                "sessionId": "0756d4",
+                "timestamp": int(_dbg_time.time() * 1000),
+                "location": "info_gatherer.py:_monitor_macmon",
+                "message": "Metal working-set cap applied (post-fix)",
+                "data": {
+                    "macmon_available_gb": round(raw_available_bytes / 1e9, 2),
+                    "advertised_available_gb": round(capped_bytes / 1e9, 2),
+                },
+                "runId": "post-fix",
+                "hypothesisId": "H-metal-ceiling",
+            }
+        )
+        + "\n"
+    )
+    for _path in (
+        "/Users/jaygawronek/Documents/Projects/exo/.cursor/debug-0756d4.log",
+        _dbg_os.path.expanduser("~/exo-debug-0756d4.log"),
+    ):
+        try:
+            with open(_path, "a") as _f:
+                _f.write(line)
+            return
+        except OSError:
+            continue
+
+
+# #endregion
+
+
+def _metal_usable_memory_bytes() -> int | None:
+    """Ceiling on placement-usable memory for an Apple Silicon GPU.
+
+    macmon reports free unified RAM, but Metal cannot wire all of it: the
+    practical ceiling for model weights is a fraction of the
+    max_recommended_working_set_size (see METAL_WORKING_SET_USABLE_FRACTION).
+    Returns None off-macOS or when MLX/Metal is unavailable, in which case
+    the raw macmon figure is used unchanged.
+    """
+    if not IS_DARWIN:
+        return None
+    try:
+        import mlx.core as mx
+
+        max_recommended = int(mx.device_info()["max_recommended_working_set_size"])
+    except Exception:
+        return None
+    if max_recommended <= 0:
+        return None
+    return int(max_recommended * METAL_WORKING_SET_USABLE_FRACTION)
+
+
 def _mlx_uses_cuda_gpu() -> bool:
     """True when MLX's default device is a (CUDA) GPU on a non-Darwin host.
 
@@ -614,6 +675,7 @@ class InfoGatherer:
         # Timeout: if macmon produces no output for this many seconds, restart it.
         # macmon writes every macmon_interval seconds, so 10x that is generous.
         read_timeout = max(macmon_interval * 10, 30)
+        metal_usable_bytes = _metal_usable_memory_bytes()
         while True:
             try:
                 async with await open_process(
@@ -635,6 +697,28 @@ class InfoGatherer:
                             )
                             text = data.decode("utf-8", errors="replace").strip()
                             metrics = MacmonMetrics.from_raw_json(text)
+                        if (
+                            metal_usable_bytes is not None
+                            and metrics.memory.ram_available.in_bytes
+                            > metal_usable_bytes
+                        ):
+                            # #region agent log
+                            _dbg_log_metal_cap(
+                                metrics.memory.ram_available.in_bytes,
+                                metal_usable_bytes,
+                            )
+                            # #endregion
+                            metrics = metrics.model_copy(
+                                update={
+                                    "memory": metrics.memory.model_copy(
+                                        update={
+                                            "ram_available": Memory.from_bytes(
+                                                metal_usable_bytes
+                                            )
+                                        }
+                                    )
+                                }
+                            )
                         await self.info_sender.send(metrics)
             except TimeoutError:
                 logger.warning(
