@@ -82,6 +82,12 @@ CUDA_VRAM_USABLE_FRACTION: Final = 0.75
 # aborted with kIOGPUCommandBufferCallbackErrorOutOfMemory.
 METAL_WORKING_SET_USABLE_FRACTION: Final = 0.80
 
+# Fraction of psutil-available memory advertised on unified-memory CUDA
+# nodes (e.g. DGX Spark GB10), where nvidia-smi cannot report VRAM and
+# weights are wired into system RAM. Filling 94.7% of available memory with
+# weights froze a 128 GB GB10 during model load; 78% ran stably.
+CUDA_UNIFIED_USABLE_FRACTION: Final = 0.85
+
 
 # #region agent log
 def _dbg_log_cuda_report(total_vram: int, free_vram: int, usable_vram: int) -> None:

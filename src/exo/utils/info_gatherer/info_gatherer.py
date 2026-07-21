@@ -17,6 +17,7 @@ from exo.shared.constants import EXO_CONFIG_FILE, EXO_DEFAULT_MODELS_DIR
 from exo.shared.types.backends import Backend
 from exo.shared.types.memory import Memory
 from exo.shared.types.profiling import (
+    CUDA_UNIFIED_USABLE_FRACTION,
     METAL_WORKING_SET_USABLE_FRACTION,
     DiskUsage,
     MemoryUsage,
@@ -608,6 +609,25 @@ class InfoGatherer:
                 usage: MemoryUsage | None = None
                 if report_vram:
                     usage = MemoryUsage.from_cuda(override_memory=override_memory)
+                    if usage is None:
+                        # Unified-memory CUDA device (e.g. DGX Spark GB10):
+                        # nvidia-smi cannot report VRAM, weights are wired
+                        # into system RAM, so reserve runtime headroom here.
+                        psutil_usage = MemoryUsage.from_psutil(
+                            override_memory=override_memory
+                        )
+                        capped_bytes = int(
+                            psutil_usage.ram_available.in_bytes
+                            * CUDA_UNIFIED_USABLE_FRACTION
+                        )
+                        # #region agent log
+                        _dbg_log_metal_cap(
+                            psutil_usage.ram_available.in_bytes, capped_bytes
+                        )
+                        # #endregion
+                        usage = psutil_usage.model_copy(
+                            update={"ram_available": Memory.from_bytes(capped_bytes)}
+                        )
                 if usage is None:
                     usage = MemoryUsage.from_psutil(override_memory=override_memory)
                 if (
