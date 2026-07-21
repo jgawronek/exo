@@ -802,6 +802,7 @@ def set_wired_limit_for_model(model_size: Memory):
     to exiting the context manager.
     """
     if not mx.metal.is_available():
+        _limit_cuda_allocator_cache(model_size)
         return
 
     max_rec_size = Memory.from_bytes(
@@ -816,6 +817,46 @@ def set_wired_limit_for_model(model_size: Memory):
         )
     mx.set_wired_limit(max_rec_size.in_bytes)
     logger.info(f"Wired limit set to {max_rec_size}.")
+
+
+CUDA_ALLOCATOR_BUDGET_FRACTION = 0.9
+
+
+def _limit_cuda_allocator_cache(model_size: Memory) -> None:
+    """Bound MLX's CUDA allocator so its buffer cache is recycled.
+
+    On Metal the wired limit bounds the allocator, but on CUDA MLX has no
+    default bound, so the buffer cache retains freed prefill activations
+    until cudaMallocAsync fails with out-of-memory (observed on a DGX Spark
+    during a ~10k-token multi-turn prefill with 98 GB of weights resident).
+    Setting a memory limit makes MLX reclaim cache before allocating fresh
+    memory. Sized from currently free memory so weights stay within budget.
+    """
+    if "gpu" not in str(mx.default_device()).lower():
+        return
+    import psutil
+
+    from exo.shared.types.profiling import (
+        _query_cuda_vram_bytes,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    vram = _query_cuda_vram_bytes()
+    if vram is not None:
+        # Discrete GPU: budget from free VRAM.
+        _total_vram, free_bytes = vram
+    else:
+        # Unified memory (e.g. DGX Spark GB10): budget from free system RAM.
+        free_bytes = psutil.virtual_memory().available
+    budget = max(
+        int(free_bytes * CUDA_ALLOCATOR_BUDGET_FRACTION),
+        model_size.in_bytes + 2 * 1024**3,
+    )
+    mx.set_memory_limit(budget)
+    logger.info(
+        f"CUDA MLX memory limit set to {Memory.from_bytes(budget)} "
+        f"(free at load: {Memory.from_bytes(free_bytes)}, "
+        f"weights: {model_size})"
+    )
 
 
 def mlx_cleanup(
