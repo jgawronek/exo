@@ -164,6 +164,9 @@ class ExoBatchGenerator:
         if self.kv_prefix_cache is not None and (
             not is_bench or task_params.use_prefix_cache
         ):
+            # Prefix entries are persistent allocations. Reclaim enough of them
+            # for prefill's temporary activations before copying a cache hit.
+            self.kv_prefix_cache.evict_for_prefill()
             cache, remaining_tokens, matched_index, is_exact_hit = (
                 self.kv_prefix_cache.get_kv_cache(
                     self.model, all_prompt_tokens, media_regions=media_regions

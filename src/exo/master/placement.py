@@ -103,6 +103,23 @@ def _cycle_download_score(
     )
 
 
+def _cycle_accelerator_score(
+    cycle: Cycle,
+    node_backends: Mapping[NodeId, list[Backend]],
+    required_backends: set[Backend],
+) -> int:
+    """Count nodes that can run on an accelerator instead of CPU fallback."""
+    accelerator_backends = {Backend.MlxMetal, Backend.MlxCuda}
+    return sum(
+        bool(
+            set(node_backends.get(node_id, []))
+            & required_backends
+            & accelerator_backends
+        )
+        for node_id in cycle
+    )
+
+
 def place_instance(
     command: PlaceInstance,
     topology: Topology,
@@ -116,6 +133,20 @@ def place_instance(
 ) -> dict[InstanceId, Instance]:
     cycles = topology.get_cycles()
     candidate_cycles = list(filter(lambda it: len(it) >= command.min_nodes, cycles))
+
+    if command.node_layers is not None:
+        if command.sharding != Sharding.Pipeline:
+            raise ValueError("Manual layer allocation requires Pipeline sharding")
+        requested_nodes = set(command.node_layers)
+        candidate_cycles = [
+            cycle
+            for cycle in candidate_cycles
+            if set(cycle.node_ids) == requested_nodes
+        ]
+        if not candidate_cycles:
+            raise ValueError(
+                "No connected cycle exactly matches the manual layer allocation nodes"
+            )
 
     # Filter to cycles containing all required nodes (subset matching)
     if required_nodes:
@@ -232,6 +263,7 @@ def place_instance(
     selected_cycle = max(
         candidate_cycles,
         key=lambda cycle: (
+            _cycle_accelerator_score(cycle, node_backends, required_backends),
             _cycle_download_score(
                 cycle, command.model_card.model_id, resolved_download_status
             ),
@@ -252,7 +284,11 @@ def place_instance(
         )
 
     shard_assignments = get_shard_assignments(
-        command.model_card, selected_cycle, command.sharding, node_memory
+        command.model_card,
+        selected_cycle,
+        command.sharding,
+        node_memory,
+        command.node_layers,
     )
 
     cycle_digraph: Topology = topology.get_subgraph_from_nodes(selected_cycle.node_ids)

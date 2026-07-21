@@ -105,6 +105,31 @@ class TestKVPrefix:
         cache.clear()
         assert len(cache.prompts) == 0
 
+    def test_evict_for_prefill_reserves_activation_headroom(self) -> None:
+        cache = KVPrefixCache(None)
+        cache.prompts = [mx.array([1]), mx.array([2])]
+        cache.caches = [[KVCache()], [KVCache()]]
+        cache._snapshots = [None, None]
+        cache._media_regions = [[], []]
+        cache._last_used = [0, 1]
+        cache.prefill_tps = [1.0, 2.0]
+
+        with (
+            patch(
+                "exo.worker.engines.mlx.cache._PREFILL_MEMORY_THRESHOLD",
+                0.70,
+            ),
+            patch.object(
+                cache,
+                "get_memory_used_percentage",
+                side_effect=[0.80, 0.65],
+            ),
+        ):
+            cache.evict_for_prefill()
+
+        assert len(cache.caches) == 1
+        assert cache.prompts[0].item() == 2
+
 
 def _load_gpt_oss() -> tuple[Model, object]:
     from mlx_lm.utils import load_model
