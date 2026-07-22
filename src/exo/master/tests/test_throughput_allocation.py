@@ -17,12 +17,13 @@ from exo.shared.types.backends import Backend
 from exo.shared.types.commands import PlaceInstance
 from exo.shared.types.common import CommandId, NodeId
 from exo.shared.types.memory import Memory
+from exo.shared.types.multiaddr import Multiaddr
 from exo.shared.types.profiling import (
     NetworkInterfaceInfo,
     NodeIdentity,
     NodeNetworkInfo,
 )
-from exo.shared.types.topology import Connection
+from exo.shared.types.topology import Connection, SocketConnection
 from exo.shared.types.worker.instances import InstanceMeta
 from exo.shared.types.worker.shards import Sharding
 
@@ -259,6 +260,84 @@ def test_ring_connections_scale_up_only_on_fast_measured_links() -> None:
     )
     assert get_ring_connections_per_host(cycle, topology, network(10_000)) == 1
     assert get_ring_connections_per_host(cycle, topology, network(None)) == 1
+
+
+def test_cycle_reordered_so_fast_link_is_a_ring_hop() -> None:
+    from exo.master.placement_utils import order_cycle_for_fastest_links
+    from exo.shared.types.topology import Cycle
+
+    node_a, node_b, node_c, node_d = NodeId(), NodeId(), NodeId(), NodeId()
+    fast_pair = {node_b, node_d}
+    lan_ip_by_node = {
+        node_a: "169.254.0.1",
+        node_b: "169.254.0.2",
+        node_c: "169.254.0.3",
+        node_d: "169.254.0.4",
+    }
+    fast_ip_by_node = {node_b: "169.254.1.2", node_d: "169.254.1.4"}
+
+    topology = Topology()
+    for node_id in lan_ip_by_node:
+        topology.add_node(node_id)
+    for source in lan_ip_by_node:
+        for sink in lan_ip_by_node:
+            if source == sink:
+                continue
+            topology.add_connection(
+                Connection(
+                    source=source,
+                    sink=sink,
+                    edge=create_socket_connection(
+                        int(lan_ip_by_node[sink].rsplit(".", 1)[1])
+                    ),
+                )
+            )
+    # Direct fast link between b and d, both directions.
+    for source, sink in ((node_b, node_d), (node_d, node_b)):
+        topology.add_connection(
+            Connection(
+                source=source,
+                sink=sink,
+                edge=SocketConnection(
+                    sink_multiaddr=Multiaddr(
+                        address=f"/ip4/{fast_ip_by_node[sink]}/tcp/1234"
+                    )
+                ),
+            )
+        )
+
+    def interfaces(node_id: NodeId) -> NodeNetworkInfo:
+        node_interfaces = [
+            NetworkInterfaceInfo(
+                name="eth0",
+                ip_address=lan_ip_by_node[node_id],
+                interface_type="ethernet",
+                link_speed_megabits=10_000,
+            )
+        ]
+        if node_id in fast_pair:
+            node_interfaces.append(
+                NetworkInterfaceInfo(
+                    name="enp1s0f0",
+                    ip_address=fast_ip_by_node[node_id],
+                    interface_type="ethernet",
+                    link_speed_megabits=200_000,
+                )
+            )
+        return NodeNetworkInfo(interfaces=node_interfaces)
+
+    node_network = {node_id: interfaces(node_id) for node_id in lan_ip_by_node}
+
+    # b and d are NOT adjacent in this order (a-b-c-d wraps d-a).
+    unordered = Cycle(node_ids=[node_a, node_b, node_c, node_d])
+    ordered = order_cycle_for_fastest_links(unordered, topology, node_network)
+
+    position = {node_id: i for i, node_id in enumerate(ordered.node_ids)}
+    distance = abs(position[node_b] - position[node_d])
+    assert distance in (1, len(ordered) - 1), (
+        f"fast pair should be ring-adjacent, got order {ordered.node_ids}"
+    )
+    assert set(ordered.node_ids) == set(unordered.node_ids)
 
 
 def test_find_ip_prioritised_falls_back_to_nominal_speeds_for_ring() -> None:

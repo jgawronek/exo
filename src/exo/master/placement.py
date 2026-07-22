@@ -11,6 +11,7 @@ from exo.master.placement_utils import (
     get_ring_connections_per_host,
     get_shard_assignments,
     get_smallest_cycles,
+    order_cycle_for_fastest_links,
 )
 from exo.shared.models.model_cards import ModelId
 from exo.shared.topology import Topology
@@ -290,6 +291,15 @@ def place_instance(
             }
         )
 
+    cycle_digraph: Topology = topology.get_subgraph_from_nodes(selected_cycle.node_ids)
+
+    if command.instance_meta == InstanceMeta.MlxRing:
+        # Cycle enumeration returns nodes in arbitrary order; put the fastest
+        # links (e.g. a direct 200GbE cable between two nodes) on ring hops.
+        selected_cycle = order_cycle_for_fastest_links(
+            selected_cycle, cycle_digraph, node_network
+        )
+
     shard_assignments = get_shard_assignments(
         command.model_card,
         selected_cycle,
@@ -298,8 +308,6 @@ def place_instance(
         command.node_layers,
         node_identities,
     )
-
-    cycle_digraph: Topology = topology.get_subgraph_from_nodes(selected_cycle.node_ids)
 
     instance_id = InstanceId()
     target_instances = dict(deepcopy(current_instances))

@@ -400,7 +400,9 @@ def apply_node_gathered_info(event: NodeGatheredInfo, state: State) -> State:
         case NodeNetworkInterfaces():
             update["node_network"] = {
                 **state.node_network,
-                event.node_id: NodeNetworkInfo(interfaces=info.ifaces),
+                event.node_id: NodeNetworkInfo(
+                    interfaces=info.ifaces, api_port=info.api_port
+                ),
             }
         case MacThunderboltIdentifiers():
             update["node_thunderbolt"] = {

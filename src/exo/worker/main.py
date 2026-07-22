@@ -103,7 +103,7 @@ class Worker:
         logger.info("Starting Worker")
 
         info_send, info_recv = channel[GatheredInfo]()
-        info_gatherer: InfoGatherer = InfoGatherer(info_send)
+        info_gatherer: InfoGatherer = InfoGatherer(info_send, api_port=self.api_port)
 
         try:
             async with self._tg as tg:
@@ -386,6 +386,10 @@ class Worker:
         self._tg.start_soon(runner.run)
         return runner
 
+    def _peer_api_port(self, node_id: NodeId) -> int:
+        network_info = self.state.node_network.get(node_id)
+        return network_info.api_port if network_info is not None else self.api_port
+
     async def _poll_connection_updates(self):
         while True:
             edges = set(
@@ -396,17 +400,17 @@ class Worker:
                 self.state.topology,
                 self.node_id,
                 self.state.node_network,
-                api_port=self.api_port,
             ):
                 if ip in conns[nid]:
                     continue
                 conns[nid].add(ip)
+                peer_api_port = self._peer_api_port(nid)
                 edge = SocketConnection(
                     # nonsense multiaddr
-                    sink_multiaddr=Multiaddr(address=f"/ip4/{ip}/tcp/{self.api_port}")
+                    sink_multiaddr=Multiaddr(address=f"/ip4/{ip}/tcp/{peer_api_port}")
                     if "." in ip
                     # nonsense multiaddr
-                    else Multiaddr(address=f"/ip6/{ip}/tcp/{self.api_port}"),
+                    else Multiaddr(address=f"/ip6/{ip}/tcp/{peer_api_port}"),
                 )
                 if edge not in edges:
                     logger.debug(f"ping discovered {edge=}")
@@ -420,7 +424,7 @@ class Worker:
                 if not isinstance(conn.edge, SocketConnection):
                     continue
                 # ignore mDNS discovered connections
-                if conn.edge.sink_multiaddr.port != self.api_port:
+                if conn.edge.sink_multiaddr.port != self._peer_api_port(conn.sink):
                     continue
                 if (
                     conn.sink not in conns

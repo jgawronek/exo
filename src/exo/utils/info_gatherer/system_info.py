@@ -7,7 +7,11 @@ from subprocess import CalledProcessError
 import psutil
 from anyio import run_process
 
-from exo.shared.types.profiling import InterfaceType, NetworkInterfaceInfo
+from exo.shared.types.profiling import (
+    InterfaceType,
+    NetworkInterfaceInfo,
+    pinned_cuda_device_index,
+)
 
 
 def get_os_version() -> str:
@@ -156,13 +160,21 @@ async def get_network_interfaces() -> list[NetworkInterfaceInfo]:
 
 
 async def _get_cuda_gpu_name() -> str | None:
-    """Name of the first CUDA GPU via nvidia-smi (e.g. "NVIDIA GeForce RTX 3090").
+    """Name of this process's CUDA GPU via nvidia-smi (e.g. "NVIDIA GeForce RTX 3090").
 
-    Returns None when nvidia-smi is unavailable or fails.
+    Targets the pinned device when CUDA_VISIBLE_DEVICES names one, since
+    nvidia-smi itself ignores that variable. Returns None when nvidia-smi is
+    unavailable or fails.
     """
+    pinned_index = pinned_cuda_device_index()
     try:
         process = await run_process(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            [
+                "nvidia-smi",
+                "--query-gpu=name",
+                "--format=csv,noheader",
+                *(["-i", pinned_index] if pinned_index is not None else []),
+            ],
             check=False,
         )
     except (CalledProcessError, OSError):

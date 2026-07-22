@@ -1,3 +1,4 @@
+import itertools
 from collections.abc import Generator, Mapping
 
 from loguru import logger
@@ -6,7 +7,12 @@ from exo.shared.models.model_cards import ModelCard
 from exo.shared.topology import Topology
 from exo.shared.types.common import Host, NodeId
 from exo.shared.types.memory import Memory
-from exo.shared.types.profiling import MemoryUsage, NodeIdentity, NodeNetworkInfo
+from exo.shared.types.profiling import (
+    MemoryUsage,
+    NetworkInterfaceInfo,
+    NodeIdentity,
+    NodeNetworkInfo,
+)
 from exo.shared.types.topology import Cycle, RDMAConnection, SocketConnection
 from exo.shared.types.worker.runners import RunnerId, ShardAssignments
 from exo.shared.types.worker.shards import (
@@ -73,6 +79,7 @@ _MEMORY_BANDWIDTH_GBPS_BY_CHIP_SUBSTRING: tuple[tuple[str, float], ...] = (
     ("RTX 4080", 717.0),
     ("RTX 3090", 936.0),
     ("RTX 3080", 760.0),
+    ("RTX 8000", 672.0),  # Quadro RTX 8000 (Turing)
 )
 
 
@@ -558,7 +565,7 @@ def _measured_link_speed_megabits(
     cycle_digraph: Topology,
     node_network: Mapping[NodeId, NodeNetworkInfo],
 ) -> int | None:
-    """Measured speed of the link ring host selection would pick, or None."""
+    """Measured (not nominal) speed of the link ring hosts would pick, or None."""
     selected_ip = find_ip_prioritised(
         source_node_id, sink_node_id, cycle_digraph, node_network, ring=True
     )
@@ -597,6 +604,94 @@ def get_ring_connections_per_host(
     return FAST_RING_LINK_CONNECTIONS
 
 
+def _effective_link_speed_megabits(interface: NetworkInterfaceInfo | None) -> int:
+    """Measured link speed when reported, otherwise a nominal per-type speed."""
+    if interface is None:
+        return _NOMINAL_LINK_SPEED_MEGABITS["unknown"]
+    if interface.link_speed_megabits is not None:
+        return interface.link_speed_megabits
+    return _NOMINAL_LINK_SPEED_MEGABITS.get(
+        interface.interface_type, _NOMINAL_LINK_SPEED_MEGABITS["unknown"]
+    )
+
+
+def effective_hop_speed_megabits(
+    source_node_id: NodeId,
+    sink_node_id: NodeId,
+    cycle_digraph: Topology,
+    node_network: Mapping[NodeId, NodeNetworkInfo],
+) -> int | None:
+    """Effective speed of the link ring host selection would pick for a hop.
+
+    Returns None when the nodes have no socket connection at all.
+    """
+    selected_ip = find_ip_prioritised(
+        source_node_id, sink_node_id, cycle_digraph, node_network, ring=True
+    )
+    if selected_ip is None:
+        return None
+    sink_network = node_network.get(sink_node_id, NodeNetworkInfo())
+    for interface in sink_network.interfaces:
+        if interface.ip_address == selected_ip:
+            return _effective_link_speed_megabits(interface)
+    return _effective_link_speed_megabits(None)
+
+
+def order_cycle_for_fastest_links(
+    selected_cycle: Cycle,
+    cycle_digraph: Topology,
+    node_network: Mapping[NodeId, NodeNetworkInfo],
+) -> Cycle:
+    """Reorder ring nodes to minimize the total per-byte wire cost of the ring.
+
+    Cycle enumeration returns nodes in arbitrary order, and hop cost is
+    order-sensitive: a pair of nodes with a direct 200GbE link only benefits
+    when they are ring-adjacent. Every chunk of pipeline traffic crosses
+    every hop, so the objective is the sum of reciprocal hop speeds — which
+    both rewards putting fast links on hops and penalizes slow bottlenecks.
+    Brute-forces all orderings (cycles are small); orderings with a
+    disconnected hop are invalid. Keeps the original order unless another is
+    strictly better, so placements stay stable.
+    """
+    node_ids = selected_cycle.node_ids
+    world_size = len(node_ids)
+    if world_size <= 2 or world_size > 8:
+        return selected_cycle
+
+    def hop_speed(a: NodeId, b: NodeId) -> int | None:
+        speeds: list[int] = []
+        for source, sink in ((a, b), (b, a)):
+            speed = effective_hop_speed_megabits(
+                source, sink, cycle_digraph, node_network
+            )
+            if speed is None or speed <= 0:
+                return None
+            speeds.append(speed)
+        return min(speeds)
+
+    def wire_cost(order: tuple[NodeId, ...]) -> float | None:
+        total = 0.0
+        for rank, node_id in enumerate(order):
+            speed = hop_speed(node_id, order[(rank + 1) % len(order)])
+            if speed is None:
+                return None
+            total += 1.0 / speed
+        return total
+
+    best_order = tuple(node_ids)
+    best_cost = wire_cost(best_order)
+    # Fix the first node: ring rotations are equivalent.
+    for permutation in itertools.permutations(node_ids[1:]):
+        order = (node_ids[0], *permutation)
+        cost = wire_cost(order)
+        if cost is None:
+            continue
+        if best_cost is None or cost < best_cost:
+            best_order, best_cost = order, cost
+
+    return Cycle(node_ids=list(best_order))
+
+
 def find_ip_prioritised(
     node_id: NodeId,
     other_node_id: NodeId,
@@ -617,18 +712,10 @@ def find_ip_prioritised(
     ip_to_interface = {iface.ip_address: iface for iface in other_network.interfaces}
 
     if ring:
-
-        def effective_link_speed_megabits(ip: str) -> int:
-            interface = ip_to_interface.get(ip)
-            if interface is None:
-                return _NOMINAL_LINK_SPEED_MEGABITS["unknown"]
-            if interface.link_speed_megabits is not None:
-                return interface.link_speed_megabits
-            return _NOMINAL_LINK_SPEED_MEGABITS.get(
-                interface.interface_type, _NOMINAL_LINK_SPEED_MEGABITS["unknown"]
-            )
-
-        return max(ips, key=effective_link_speed_megabits)
+        return max(
+            ips,
+            key=lambda ip: _effective_link_speed_megabits(ip_to_interface.get(ip)),
+        )
 
     # RDMA prefers ethernet coordinator
     priority = {

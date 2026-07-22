@@ -202,6 +202,7 @@ class StaticNodeInformation(TaggedModel):
 
 class NodeNetworkInterfaces(TaggedModel):
     ifaces: Sequence[NetworkInterfaceInfo]
+    api_port: int = 52415
 
 
 class MacThunderboltIdentifiers(TaggedModel):
@@ -444,6 +445,7 @@ def _mlx_uses_cuda_gpu() -> bool:
 @dataclass
 class InfoGatherer:
     info_sender: Sender[GatheredInfo]
+    api_port: int = 52415
     _tg: TaskGroup = field(init=False, default_factory=TaskGroup)
     _psutil_enabled: bool = field(init=False, default=False)
 
@@ -592,9 +594,7 @@ class InfoGatherer:
                     and usage.ram_available.in_bytes > metal_usable_bytes
                 ):
                     usage = usage.model_copy(
-                        update={
-                            "ram_available": Memory.from_bytes(metal_usable_bytes)
-                        }
+                        update={"ram_available": Memory.from_bytes(metal_usable_bytes)}
                     )
                 await self.info_sender.send(usage)
             except Exception as e:
@@ -606,7 +606,9 @@ class InfoGatherer:
             try:
                 with fail_after(10):
                     nics = await get_network_interfaces()
-                    await self.info_sender.send(NodeNetworkInterfaces(ifaces=nics))
+                    await self.info_sender.send(
+                        NodeNetworkInterfaces(ifaces=nics, api_port=self.api_port)
+                    )
             except Exception as e:
                 logger.opt(exception=e).warning("Error gathering network interfaces")
             await anyio.sleep(interface_watcher_interval)

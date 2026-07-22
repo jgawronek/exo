@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from collections.abc import Sequence
@@ -87,20 +88,32 @@ METAL_WORKING_SET_USABLE_FRACTION: Final = 0.85
 CUDA_UNIFIED_USABLE_FRACTION: Final = 0.85
 
 
-def _query_cuda_vram_bytes() -> tuple[int, int] | None:
-    """Total and free VRAM in bytes for the first CUDA GPU via ``nvidia-smi``.
+def pinned_cuda_device_index() -> str | None:
+    """The GPU index this process is pinned to, when CUDA_VISIBLE_DEVICES
+    names exactly one device (the multi-process one-GPU-per-node setup)."""
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    return visible_devices if visible_devices.isdigit() else None
 
-    Returns None if ``nvidia-smi`` is absent or its output cannot be parsed.
+
+def _query_cuda_vram_bytes() -> tuple[int, int] | None:
+    """Total and free VRAM in bytes for this process's CUDA GPU via ``nvidia-smi``.
+
+    nvidia-smi ignores CUDA_VISIBLE_DEVICES, so when the process is pinned to
+    a single GPU the query targets that index; otherwise the first GPU is
+    reported. Returns None if ``nvidia-smi`` is absent or its output cannot
+    be parsed.
     """
     nvidia_smi = shutil.which("nvidia-smi")
     if nvidia_smi is None:
         return None
+    pinned_index = pinned_cuda_device_index()
     try:
         completed = subprocess.run(
             [
                 nvidia_smi,
                 "--query-gpu=memory.total,memory.free",
                 "--format=csv,noheader,nounits",
+                *(["-i", pinned_index] if pinned_index is not None else []),
             ],
             capture_output=True,
             text=True,
@@ -178,6 +191,10 @@ class NodeNetworkInfo(FrozenModel):
     """Network interface information for a node."""
 
     interfaces: Sequence[NetworkInterfaceInfo] = []
+    # The API port this node serves on. Reachability probes must target the
+    # peer's own port: multiple exo processes on one host (e.g. one per GPU)
+    # listen on different ports.
+    api_port: int = 52415
 
 
 class NodeThunderboltInfo(FrozenModel):

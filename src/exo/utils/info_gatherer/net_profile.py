@@ -83,9 +83,12 @@ async def check_reachable(
     topology: Topology,
     self_node_id: NodeId,
     node_network: Mapping[NodeId, NodeNetworkInfo],
-    api_port: int,
 ) -> AsyncGenerator[tuple[str, NodeId], None]:
-    """Yield (ip, node_id) pairs as reachability probes complete."""
+    """Yield (ip, node_id) pairs as reachability probes complete.
+
+    Each peer is probed on its own advertised API port: multiple exo
+    processes on one host (e.g. one per GPU) listen on different ports.
+    """
 
     send, recv = channel[tuple[str, NodeId]]()
 
@@ -100,12 +103,15 @@ async def check_reachable(
     async def _probe(
         target_ip: str,
         expected_node_id: NodeId,
+        target_api_port: int,
         client: httpx.AsyncClient,
         send: Sender[tuple[str, NodeId]],
     ) -> None:
         async with send:
             out: defaultdict[NodeId, set[str]] = defaultdict(set)
-            await check_reachability(target_ip, expected_node_id, out, client, api_port)
+            await check_reachability(
+                target_ip, expected_node_id, out, client, target_api_port
+            )
             if expected_node_id in out:
                 await send.send((target_ip, expected_node_id))
 
@@ -118,8 +124,16 @@ async def check_reachable(
                 continue
             if node_id == self_node_id:
                 continue
+            peer_api_port = node_network[node_id].api_port
             for iface in node_network[node_id].interfaces:
-                tg.start_soon(_probe, iface.ip_address, node_id, client, send.clone())
+                tg.start_soon(
+                    _probe,
+                    iface.ip_address,
+                    node_id,
+                    peer_api_port,
+                    client,
+                    send.clone(),
+                )
         send.close()
 
         with recv:
