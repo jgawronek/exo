@@ -1,3 +1,5 @@
+import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 
 import anyio
@@ -17,6 +19,7 @@ from exo.routing.event_router import (
 )
 from exo.shared.apply import apply
 from exo.shared.constants import EXO_EVENT_LOG_DIR, EXO_TRACING_ENABLED
+from exo.shared.types.chunks import ErrorChunk
 from exo.shared.types.commands import (
     AddCustomModelCard,
     CreateInstance,
@@ -38,6 +41,7 @@ from exo.shared.types.commands import (
 )
 from exo.shared.types.common import CommandId, NodeId, SessionId, SystemId
 from exo.shared.types.events import (
+    ChunkGenerated,
     CustomModelCardAdded,
     CustomModelCardDeleted,
     Event,
@@ -66,6 +70,7 @@ from exo.shared.types.tasks import (
     ImageGeneration as ImageGenerationTask,
 )
 from exo.shared.types.tasks import (
+    Task,
     TaskId,
     TaskStatus,
 )
@@ -77,6 +82,41 @@ from exo.utils.channels import Receiver, Sender
 from exo.utils.disk_event_log import DiskEventLog
 from exo.utils.event_buffer import MultiSourceBuffer
 from exo.utils.task_group import TaskGroup
+
+# A generation task that produces no chunk (token, prefill progress, or
+# error) for this long is considered wedged: healthy decode emits chunks
+# every ~100ms and prefill reports progress per chunk, so even the largest
+# prompts tick far more often than this. Pipeline ranks stuck in a
+# distributed collective cannot recover on their own; the watchdog fails the
+# task, notifies the client, and tears the instance down so it can be
+# relaunched cleanly.
+GENERATION_STALL_TIMEOUT = timedelta(
+    seconds=float(os.environ.get("EXO_STALL_TIMEOUT_SECONDS", "120"))
+)
+
+
+def find_stalled_generation_tasks(
+    tasks: Mapping[TaskId, Task],
+    last_progress: Mapping[TaskId, datetime],
+    now: datetime,
+    stall_timeout: timedelta,
+) -> list[TextGenerationTask]:
+    """Running text-generation tasks whose last observed progress is too old.
+
+    Tasks without a recorded progress timestamp are skipped; the caller seeds
+    one when it first observes the task, so a fresh master never kills tasks
+    it has not watched for a full timeout window.
+    """
+    stalled: list[TextGenerationTask] = []
+    for task_id, task in tasks.items():
+        if not isinstance(task, TextGenerationTask):
+            continue
+        if task.task_status != TaskStatus.Running:
+            continue
+        observed = last_progress.get(task_id)
+        if observed is not None and now - observed > stall_timeout:
+            stalled.append(task)
+    return stalled
 
 
 def _prefill_endpoint_for(state: State, decode_instance_id: InstanceId) -> str | None:
@@ -146,6 +186,9 @@ class Master:
         self._event_log = DiskEventLog(EXO_EVENT_LOG_DIR / "master")
         self._pending_traces: dict[TaskId, dict[int, list[TraceEventData]]] = {}
         self._expected_ranks: dict[TaskId, set[int]] = {}
+        # Watchdog bookkeeping: last time each generation task showed progress
+        # (any chunk reaching the master), seeded when the task is first seen.
+        self._task_last_progress: dict[TaskId, datetime] = {}
 
     async def run(self):
         logger.info("Starting Master")
@@ -488,7 +531,64 @@ class Master:
                     logger.info(f"Manually removing node {node_id} due to inactivity")
                     await self.event_sender.send(NodeTimedOut(node_id=node_id))
 
+            await self._fail_stalled_tasks()
+
             await anyio.sleep(10)
+
+    def _record_task_progress(self, command_id: CommandId) -> None:
+        for task_id, task in self.state.tasks.items():
+            if isinstance(task, TextGenerationTask) and task.command_id == command_id:
+                self._task_last_progress[task_id] = datetime.now(tz=timezone.utc)
+                return
+
+    async def _fail_stalled_tasks(self) -> None:
+        """Fail generation tasks that stopped making progress and tear down
+        their instances.
+
+        Pipeline ranks wedged in a distributed collective can neither finish
+        nor cancel, so the stream would hang forever. The instance is deleted
+        (workers kill its runners) and the client receives a clean error.
+        """
+        now = datetime.now(tz=timezone.utc)
+
+        # Seed and prune bookkeeping so a fresh master watches every running
+        # task for a full window before judging it, and entries don't leak.
+        running_task_ids = {
+            task_id
+            for task_id, task in self.state.tasks.items()
+            if task.task_status == TaskStatus.Running
+        }
+        for task_id in running_task_ids:
+            _ = self._task_last_progress.setdefault(task_id, now)
+        for task_id in list(self._task_last_progress):
+            if task_id not in running_task_ids:
+                del self._task_last_progress[task_id]
+
+        for task in find_stalled_generation_tasks(
+            self.state.tasks, self._task_last_progress, now, GENERATION_STALL_TIMEOUT
+        ):
+            logger.error(
+                f"Task {task.task_id} made no progress for "
+                f"{GENERATION_STALL_TIMEOUT.total_seconds():.0f}s; failing it and "
+                f"restarting instance {task.instance_id}"
+            )
+            await self.event_sender.send(
+                ChunkGenerated(
+                    command_id=task.command_id,
+                    chunk=ErrorChunk(
+                        model=task.task_params.model,
+                        error_message=(
+                            "Generation stalled: no progress for "
+                            f"{GENERATION_STALL_TIMEOUT.total_seconds():.0f}s. "
+                            "The model instance was restarted; please retry."
+                        ),
+                    ),
+                )
+            )
+            await self.event_sender.send(
+                TaskStatusUpdated(task_id=task.task_id, task_status=TaskStatus.Failed)
+            )
+            await self.event_sender.send(InstanceDeleted(instance_id=task.instance_id))
 
     async def _event_processor(self) -> None:
         with self.local_event_receiver as local_events:
@@ -518,6 +618,9 @@ class Master:
 
                     indexed = IndexedEvent(event=event, idx=len(self._event_log))
                     self.state = apply(self.state, indexed)
+
+                    if isinstance(event, ChunkGenerated):
+                        self._record_task_progress(event.command_id)
 
                     self._event_log.append(event)
                     await self._send_indexed_event(indexed)
