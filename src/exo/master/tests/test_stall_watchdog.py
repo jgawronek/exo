@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from exo.master.main import find_stalled_generation_tasks
-from exo.shared.types.common import CommandId
+from exo.shared.types.common import CommandId, ModelId
 from exo.shared.types.tasks import TaskId, TaskStatus
 from exo.shared.types.tasks import TextGeneration as TextGenerationTask
 from exo.shared.types.text_generation import (
@@ -21,7 +21,7 @@ def _generation_task(task_status: TaskStatus) -> TextGenerationTask:
         instance_id=InstanceId(),
         task_status=task_status,
         task_params=TextGenerationTaskParams(
-            model="test-model",
+            model=ModelId("test-model"),
             input=[InputMessage(role="user", content=InputMessageContent("hi"))],
         ),
     )
