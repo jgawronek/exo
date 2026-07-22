@@ -932,7 +932,9 @@ async def download_shard(
     # Pick a writable directory with enough free space.
     total_size = sum(f.size or 0 for f in filtered_file_list)
     if skip_download:
-        existing = resolve_existing_model(model_id)
+        # Runs sync filesystem scans; keep them off the event loop because
+        # model directories may live on slow network mounts (NFS).
+        existing = await asyncio.to_thread(resolve_existing_model, model_id)
         target_dir = (
             existing
             if existing is not None
