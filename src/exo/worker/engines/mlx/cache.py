@@ -1,7 +1,7 @@
 import gc
 import os
 from copy import deepcopy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import mlx.core as mx
 import numpy as np
@@ -60,6 +60,11 @@ if not 0.0 <= _PREFILL_MEMORY_THRESHOLD <= _MEMORY_THRESHOLD:
         "EXO_PREFILL_MEMORY_THRESHOLD must be between 0 and "
         f"EXO_MEMORY_THRESHOLD ({_MEMORY_THRESHOLD})"
     )
+
+# Evicting the prefix cache only helps when it actually holds enough bytes to
+# move the needle; below this, memory pressure comes from weights/activations
+# and dropping the cache would sacrifice prefix hits for nothing.
+_MIN_RECLAIMABLE_EVICTION_BYTES = 256 * 1024 * 1024
 
 
 class CacheSnapshot:
@@ -455,27 +460,69 @@ class KVPrefixCache:
         if len(self.caches) == 0:
             return
 
-        evicted_any = False
-        # Evict LRU entries until below threshold
-        while len(self.caches) > 0 and self.get_memory_used_percentage() > threshold:
-            lru_index = self._last_used.index(min(self._last_used))
-            evicted_tokens = len(self.prompts[lru_index])
-            self.prompts.pop(lru_index)
-            self.caches.pop(lru_index)
-            self._snapshots.pop(lru_index)
-            self._media_regions.pop(lru_index)
-            self._last_used.pop(lru_index)
-            self.prefill_tps.pop(lru_index)
+        # A single distributed agreement decides the whole pass. The previous
+        # loop re-gathered cluster pressure per evicted entry and always ran
+        # gc + allocator flush, which cost seconds of time-to-first-token per
+        # request. Worse, system memory percent counts the model weights, so
+        # nodes packed with weights sit permanently above the threshold and
+        # wiped the prefix cache on every request even though evicting a few
+        # megabytes of KV could never bring pressure down — pure loss.
+        # Decisions must be rank-consistent, so both the pressure and the
+        # "is eviction even worth it" signal come from one all_gather.
+        pressure, reclaimable_bytes = self._agreed_pressure_and_reclaimable()
+        if pressure <= threshold:
+            return
+        if reclaimable_bytes < _MIN_RECLAIMABLE_EVICTION_BYTES:
+            # Eviction cannot meaningfully relieve pressure; keep the cache.
+            return
 
-            evicted_any = True
-            logger.info(
-                f"KV cache evicted LRU entry ({evicted_tokens} tokens) "
-                f"for {reason} (target={threshold:.0%})"
-            )
+        evicted_entries = len(self.caches)
+        evicted_tokens = sum(len(prompt) for prompt in self.prompts)
+        self.clear()
+        logger.info(
+            f"KV cache evicted {evicted_entries} entries ({evicted_tokens} tokens) "
+            f"for {reason} (target={threshold:.0%})"
+        )
+        gc.collect()
+        mx.clear_cache()
 
-        if evicted_any:
-            gc.collect()
-            mx.clear_cache()
+    def _reclaimable_cache_bytes(self) -> int:
+        total = 0
+        for entry in self.caches:
+            for layer_cache in entry:
+                nbytes = getattr(layer_cache, "nbytes", None)
+                if isinstance(nbytes, int):
+                    total += nbytes
+                    continue
+                # SSM/rotating caches don't expose nbytes; sum their state.
+                state = cast(object, getattr(layer_cache, "state", None))
+                if isinstance(state, (list, tuple)):
+                    state_items = cast("list[object]", list(state))  # pyright: ignore[reportUnknownArgumentType]
+                    for array in state_items:
+                        if isinstance(array, mx.array):
+                            total += array.nbytes
+        return total
+
+    def _agreed_pressure_and_reclaimable(self) -> tuple[float, int]:
+        """Cluster-max memory pressure and reclaimable cache bytes.
+
+        Gathered in one collective so every rank makes the same eviction
+        decision; divergent decisions would desynchronize later collectives.
+        """
+        local_pressure = get_memory_used_percentage()
+        local_reclaimable = float(self._reclaimable_cache_bytes())
+
+        if self._group is None:
+            return local_pressure, int(local_reclaimable)
+
+        gathered = mx.distributed.all_gather(
+            mx.array([local_pressure, local_reclaimable], dtype=mx.float32),
+            group=self._group,
+        )
+        values = gathered.reshape(-1, 2)
+        max_pressure = float(mx.max(values[:, 0]).item())
+        max_reclaimable = float(mx.max(values[:, 1]).item())
+        return max_pressure, int(max_reclaimable)
 
     def get_memory_used_percentage(self) -> float:
         local_pressure: float = get_memory_used_percentage()

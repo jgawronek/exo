@@ -105,7 +105,7 @@ class TestKVPrefix:
         cache.clear()
         assert len(cache.prompts) == 0
 
-    def test_evict_for_prefill_reserves_activation_headroom(self) -> None:
+    def _populated_cache(self) -> KVPrefixCache:
         cache = KVPrefixCache(None)
         cache.prompts = [mx.array([1]), mx.array([2])]
         cache.caches = [[KVCache()], [KVCache()]]
@@ -113,22 +113,70 @@ class TestKVPrefix:
         cache._media_regions = [[], []]
         cache._last_used = [0, 1]
         cache.prefill_tps = [1.0, 2.0]
+        return cache
+
+    def test_evict_for_prefill_reserves_activation_headroom(self) -> None:
+        cache = self._populated_cache()
 
         with (
             patch(
                 "exo.worker.engines.mlx.cache._PREFILL_MEMORY_THRESHOLD",
                 0.70,
             ),
+            patch(
+                "exo.worker.engines.mlx.cache.get_memory_used_percentage",
+                return_value=0.80,
+            ),
             patch.object(
                 cache,
-                "get_memory_used_percentage",
-                side_effect=[0.80, 0.65],
+                "_reclaimable_cache_bytes",
+                return_value=1024**3,
             ),
         ):
             cache.evict_for_prefill()
 
-        assert len(cache.caches) == 1
-        assert cache.prompts[0].item() == 2
+        assert len(cache.caches) == 0
+
+    def test_eviction_skipped_when_cache_cannot_relieve_pressure(self) -> None:
+        # Weight-packed nodes sit permanently above the pressure threshold;
+        # dropping a few KB of KV cache cannot help, so the cache survives.
+        cache = self._populated_cache()
+
+        with (
+            patch(
+                "exo.worker.engines.mlx.cache._PREFILL_MEMORY_THRESHOLD",
+                0.70,
+            ),
+            patch(
+                "exo.worker.engines.mlx.cache.get_memory_used_percentage",
+                return_value=0.95,
+            ),
+        ):
+            cache.evict_for_prefill()
+
+        assert len(cache.caches) == 2
+
+    def test_eviction_skipped_below_threshold(self) -> None:
+        cache = self._populated_cache()
+
+        with (
+            patch(
+                "exo.worker.engines.mlx.cache._PREFILL_MEMORY_THRESHOLD",
+                0.70,
+            ),
+            patch(
+                "exo.worker.engines.mlx.cache.get_memory_used_percentage",
+                return_value=0.50,
+            ),
+            patch.object(
+                cache,
+                "_reclaimable_cache_bytes",
+                return_value=1024**3,
+            ),
+        ):
+            cache.evict_for_prefill()
+
+        assert len(cache.caches) == 2
 
 
 def _load_gpt_oss() -> tuple[Model, object]:
@@ -593,10 +641,18 @@ class TestKVPrefixCacheWithModel:
         kv_prefix_cache._last_used[2] = 100.0
         # Entry 0 (_last_used=0.0) is LRU, entry 1 (_last_used=1.0) is next
 
-        # Simulate memory pressure: return usage above _MEMORY_THRESHOLD (0.9)
-        with patch(
-            "exo.worker.engines.mlx.cache.get_memory_used_percentage",
-            return_value=0.95,
+        # Simulate memory pressure: return usage above _MEMORY_THRESHOLD (0.9).
+        # The reclaimable-bytes floor is also forced so the small test caches
+        # qualify for eviction.
+        with (
+            patch(
+                "exo.worker.engines.mlx.cache.get_memory_used_percentage",
+                return_value=0.95,
+            ),
+            patch(
+                "exo.worker.engines.mlx.cache._MIN_RECLAIMABLE_EVICTION_BYTES",
+                0,
+            ),
         ):
             # Trigger eviction by adding a new entry
             task = TextGenerationTaskParams(
@@ -619,9 +675,8 @@ class TestKVPrefixCacheWithModel:
             )
             kv_prefix_cache.add_kv_cache(tokens, cache)
 
-        # LRU entries should have been evicted (entries 0, 1, 2 in order of _last_used)
-        # Since fake_active stays above threshold after each eviction (we don't change it),
-        # all old entries get evicted, leaving only the newly added one
+        # Sustained pressure now clears the cache in one deterministic sweep
+        # before the new entry is added, leaving only the newly added one
         assert len(kv_prefix_cache.prompts) == 1
         # The surviving entry should be the newly added one
         assert get_prefix_length(kv_prefix_cache.prompts[0], tokens) == len(tokens)
