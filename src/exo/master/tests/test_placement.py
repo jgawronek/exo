@@ -49,7 +49,7 @@ from exo.shared.types.worker.instances import (
     MlxJacclInstance,
     MlxRingInstance,
 )
-from exo.shared.types.worker.runners import ShardAssignments
+from exo.shared.types.worker.runners import RunnerId, ShardAssignments
 from exo.shared.types.worker.shards import PipelineShardMetadata, Sharding
 
 
@@ -442,6 +442,103 @@ def test_get_instance_placements_one_node_not_fit() -> None:
     with pytest.raises(ValueError, match="No cycles found with sufficient memory"):
         place_instance(
             cic, topology, {}, node_memory, node_network, _metal_only(node_memory)
+        )
+
+
+def _occupied_instance(node_id: NodeId, model_card: ModelCard) -> MlxRingInstance:
+    runner_id = RunnerId("runner-occupied")
+    return MlxRingInstance(
+        instance_id=InstanceId(),
+        shard_assignments=ShardAssignments(
+            model_id=model_card.model_id,
+            runner_to_shard={
+                runner_id: PipelineShardMetadata(
+                    start_layer=0,
+                    end_layer=model_card.n_layers,
+                    n_layers=model_card.n_layers,
+                    model_card=model_card,
+                    device_rank=0,
+                    world_size=1,
+                )
+            },
+            node_to_runner={node_id: runner_id},
+        ),
+        hosts_by_node={},
+        ephemeral_port=50000,
+    )
+
+
+def test_place_instance_excludes_occupied_nodes() -> None:
+    topology, node_a, node_b = _create_two_node_ring()
+    node_memory = {
+        node_a: create_node_memory(2000 * 1024),
+        node_b: create_node_memory(2000 * 1024),
+    }
+    node_network = {
+        node_a: create_node_network(),
+        node_b: create_node_network(),
+    }
+    model_card = ModelCard(
+        model_id=ModelId("test-model"),
+        storage_size=Memory.from_kb(1000),
+        n_layers=10,
+        hidden_size=1000,
+        supports_tensor=True,
+        tasks=[ModelTask.TextGeneration],
+        backends=[Backend.MlxMetal],
+    )
+    cic = place_instance_command(model_card)
+    existing = _occupied_instance(node_a, model_card.model_copy(
+        update={"model_id": ModelId("other-model")}
+    ))
+
+    placements = place_instance(
+        cic,
+        topology,
+        {existing.instance_id: existing},
+        node_memory,
+        node_network,
+        _metal_only(node_memory),
+    )
+
+    assert len(placements) == 2
+    new_instances = [
+        instance
+        for instance_id, instance in placements.items()
+        if instance_id != existing.instance_id
+    ]
+    assert len(new_instances) == 1
+    assert set(new_instances[0].shard_assignments.node_to_runner) == {node_b}
+
+
+def test_place_instance_fails_when_all_nodes_occupied() -> None:
+    topology = Topology()
+    node_id = NodeId()
+    topology.add_node(node_id)
+    node_memory = {node_id: create_node_memory(2000 * 1024)}
+    node_network = {node_id: create_node_network()}
+    model_card = ModelCard(
+        model_id=ModelId("test-model"),
+        storage_size=Memory.from_kb(1000),
+        n_layers=10,
+        hidden_size=1000,
+        supports_tensor=True,
+        tasks=[ModelTask.TextGeneration],
+        backends=[Backend.MlxMetal],
+    )
+    cic = place_instance_command(model_card)
+    existing = _occupied_instance(node_id, model_card.model_copy(
+        update={"model_id": ModelId("other-model")}
+    ))
+
+    with pytest.raises(ValueError, match="No free nodes available"):
+        place_instance(
+            cic,
+            topology,
+            {existing.instance_id: existing},
+            node_memory,
+            node_network,
+            _metal_only(node_memory),
         )
 
 

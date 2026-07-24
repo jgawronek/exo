@@ -142,6 +142,23 @@ def place_instance(
     cycles = topology.get_cycles()
     candidate_cycles = list(filter(lambda it: len(it) >= command.min_nodes, cycles))
 
+    # Nodes already assigned to a running instance cannot host a new one.
+    occupied_nodes = {
+        node_id
+        for instance in current_instances.values()
+        for node_id in instance.shard_assignments.node_to_runner
+    }
+    if occupied_nodes:
+        candidate_cycles = [
+            cycle
+            for cycle in candidate_cycles
+            if occupied_nodes.isdisjoint(cycle.node_ids)
+        ]
+        if not candidate_cycles:
+            raise ValueError(
+                "No free nodes available; all nodes are used by running instances"
+            )
+
     if command.node_layers is not None:
         if command.sharding != Sharding.Pipeline:
             raise ValueError("Manual layer allocation requires Pipeline sharding")

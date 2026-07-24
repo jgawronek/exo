@@ -1436,8 +1436,19 @@ class AppStore {
         this.handleTopologyChange();
       }
       if (data.instances) {
+        const previousOccupied = this.getOccupiedNodeIds();
         this.instances = data.instances;
         this.refreshConversationModelFromInstances();
+        // Re-fetch placement when occupied capacity changes
+        if (this.selectedPreviewModelId) {
+          const nextOccupied = this.getOccupiedNodeIds();
+          const occupiedChanged =
+            previousOccupied.size !== nextOccupied.size ||
+            [...previousOccupied].some((id) => !nextOccupied.has(id));
+          if (occupiedChanged) {
+            this.fetchPlacementPreviews(this.selectedPreviewModelId, false);
+          }
+        }
       }
       if (data.runners) {
         this.runners = data.runners;
@@ -1482,6 +1493,25 @@ class AppStore {
     }
   }
 
+  /** Nodes already assigned to any running instance. */
+  getOccupiedNodeIds(): Set<string> {
+    const occupied = new Set<string>();
+    for (const instanceWrapped of Object.values(this.instances)) {
+      if (!instanceWrapped || typeof instanceWrapped !== "object") continue;
+      const keys = Object.keys(instanceWrapped as Record<string, unknown>);
+      if (keys.length !== 1) continue;
+      const instance = (instanceWrapped as Record<string, unknown>)[keys[0]] as
+        | { shardAssignments?: { nodeToRunner?: Record<string, string> } }
+        | undefined;
+      const nodeToRunner = instance?.shardAssignments?.nodeToRunner;
+      if (!nodeToRunner) continue;
+      for (const nodeId of Object.keys(nodeToRunner)) {
+        occupied.add(nodeId);
+      }
+    }
+    return occupied;
+  }
+
   async fetchPlacementPreviews(modelId: string, showLoading = true) {
     if (!modelId) return;
 
@@ -1490,9 +1520,25 @@ class AppStore {
     }
     this.selectedPreviewModelId = modelId;
 
+    // Drop any occupied nodes the user may still have in the filter
+    this.pruneOccupiedNodesFromFilter();
+
     try {
+      const topologyNodeIds = this.topologyData
+        ? Object.keys(this.topologyData.nodes)
+        : [];
+      const occupied = this.getOccupiedNodeIds();
+      const hasFreeNodes = topologyNodeIds.some(
+        (nodeId) => !occupied.has(nodeId),
+      );
+      // No free capacity — do not request placements that could reuse busy nodes
+      if (topologyNodeIds.length > 0 && !hasFreeNodes) {
+        this.placementPreviews = [];
+        return;
+      }
+
       let url = `/instance/previews?model_id=${encodeURIComponent(modelId)}`;
-      // Add node filter if active
+      // User filter: only free nodes; backend excludes occupied from cycles
       if (this.previewNodeFilter.size > 0) {
         for (const nodeId of this.previewNodeFilter) {
           url += `&node_ids=${encodeURIComponent(nodeId)}`;
@@ -1513,6 +1559,17 @@ class AppStore {
       if (showLoading) {
         this.isLoadingPreviews = false;
       }
+    }
+  }
+
+  private pruneOccupiedNodesFromFilter() {
+    if (this.previewNodeFilter.size === 0) return;
+    const occupied = this.getOccupiedNodeIds();
+    const next = new Set(
+      [...this.previewNodeFilter].filter((nodeId) => !occupied.has(nodeId)),
+    );
+    if (next.size !== this.previewNodeFilter.size) {
+      this.previewNodeFilter = next;
     }
   }
 
@@ -1549,9 +1606,16 @@ class AppStore {
   }
 
   /**
-   * Toggle a node in the preview filter and re-fetch placements
+   * Toggle a node in the preview filter and re-fetch placements.
+   * Nodes already used by a running instance cannot be selected.
    */
   togglePreviewNodeFilter(nodeId: string) {
+    if (
+      this.selectedPreviewModelId &&
+      this.getOccupiedNodeIds().has(nodeId)
+    ) {
+      return;
+    }
     const next = new Set(this.previewNodeFilter);
     if (next.has(nodeId)) {
       next.delete(nodeId);
@@ -3681,6 +3745,7 @@ export const togglePreviewNodeFilter = (nodeId: string) =>
   appStore.togglePreviewNodeFilter(nodeId);
 export const clearPreviewNodeFilter = () => appStore.clearPreviewNodeFilter();
 export const previewNodeFilter = () => appStore.previewNodeFilter;
+export const occupiedNodeIds = () => appStore.getOccupiedNodeIds();
 export const deleteMessage = (messageId: string) =>
   appStore.deleteMessage(messageId);
 export const editMessage = (messageId: string, newContent: string) =>

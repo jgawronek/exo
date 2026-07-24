@@ -39,6 +39,7 @@
     togglePreviewNodeFilter,
     clearPreviewNodeFilter,
     previewNodeFilter,
+    occupiedNodeIds,
     createConversation,
     setSelectedChatModel,
     selectedChatModel,
@@ -106,6 +107,11 @@
   const tbIdentifiers = $derived(nodeThunderbolt());
   const rdmaCtlData = $derived(nodeRdmaCtl());
   const nodeFilter = $derived(previewNodeFilter());
+  const occupiedNodes = $derived(occupiedNodeIds());
+  /** When creating a new instance, nodes already in use cannot be selected. */
+  const placementDisabledNodes = $derived(
+    selectedModelId ? occupiedNodes : new Set<string>(),
+  );
 
   // Aggregate active download progress across all instances for header indicator
   const activeDownloadSummary = $derived.by(() => {
@@ -2548,205 +2554,6 @@
   function formatSpeed(bps: number): string {
     if (!bps || bps <= 0) return "0 B/s";
     return formatBytes(bps, 1) + "/s";
-  }
-
-  function getNodeLabel(nodeId: string): string {
-    const node = data?.nodes?.[nodeId];
-    return node?.friendly_name || nodeId.slice(0, 8);
-  }
-
-  function getInterfaceLabel(
-    nodeId: string,
-    ip?: string,
-  ): { label: string; missing: boolean } {
-    if (!ip) return { label: "?", missing: true };
-    const node = data?.nodes?.[nodeId];
-    if (!node) return { label: "?", missing: true };
-
-    // Prefer explicit network_interfaces from NodePerformanceProfile
-    const matchFromInterfaces = node.network_interfaces?.find((iface) =>
-      (iface.addresses || []).some((addr) => addr === ip),
-    );
-    if (matchFromInterfaces?.name) {
-      return {
-        label: `${matchFromInterfaces.name} on ${getNodeLabel(nodeId)}`,
-        missing: false,
-      };
-    }
-
-    // Fallback to derived ip_to_interface map
-    const mapped = node.ip_to_interface?.[ip];
-    if (mapped && mapped.trim().length > 0) {
-      return { label: `${mapped} on ${getNodeLabel(nodeId)}`, missing: false };
-    }
-
-    return { label: "?", missing: true };
-  }
-
-  function getOrderedRunnerNodes(
-    instance: Record<string, unknown>,
-    shardType: "Pipeline" | "Tensor",
-  ) {
-    const runnerToShard =
-      (
-        instance.shardAssignments as
-          | { runnerToShard?: Record<string, unknown> }
-          | undefined
-      )?.runnerToShard || {};
-    const nodeToRunner =
-      (
-        instance.shardAssignments as
-          | { nodeToRunner?: Record<string, string> }
-          | undefined
-      )?.nodeToRunner || {};
-    const runnerEntries = Object.entries(runnerToShard).map(
-      ([runnerId, shardWrapped]) => {
-        const [tag, shard] = getTagged(shardWrapped);
-        const meta = shard as
-          | {
-              modelMeta?: {
-                worldSize?: number;
-                nLayers?: number;
-                deviceRank?: number;
-              };
-            }
-          | undefined;
-        const deviceRank = meta?.modelMeta?.deviceRank ?? 0;
-        return { runnerId, tag, deviceRank };
-      },
-    );
-
-    const ordered = runnerEntries
-      .filter((r) =>
-        shardType === "Pipeline"
-          ? r.tag === "PipelineShardMetadata"
-          : r.tag === "TensorShardMetadata",
-      )
-      .sort((a, b) => a.deviceRank - b.deviceRank)
-      .map((r, idx) => {
-        const nodeId = Object.entries(nodeToRunner).find(
-          ([, rid]) => rid === r.runnerId,
-        )?.[0];
-        return { nodeId, runnerId: r.runnerId, order: idx };
-      })
-      .filter((item) => item.nodeId);
-
-    return ordered as Array<{
-      nodeId: string;
-      runnerId: string;
-      order: number;
-    }>;
-  }
-
-  function pickHost(
-    hosts?: Array<{ ip: string; port: number }>,
-  ): { ip: string; port: number } | null {
-    if (!hosts || hosts.length === 0) return null;
-    const scored = hosts
-      .filter((h) => h.ip && h.ip !== "0.0.0.0" && h.port && h.port > 0)
-      .map((h) => {
-        const ip = h.ip;
-        const score =
-          ip.startsWith("10.") ||
-          ip.startsWith("172.") ||
-          ip.startsWith("192.168")
-            ? 3
-            : ip.startsWith("169.254")
-              ? 2
-              : 1;
-        return { host: h, score };
-      });
-    if (scored.length === 0) return null;
-    scored.sort((a, b) => b.score - a.score);
-    return scored[0].host;
-  }
-
-  function getInstanceConnections(instanceWrapped: unknown): Array<{
-    from: string;
-    to: string;
-    ip: string;
-    ifaceLabel: string;
-    missingIface: boolean;
-  }> {
-    const [instanceTag, instance] = getTagged(instanceWrapped);
-    if (!instance || typeof instance !== "object") return [];
-
-    // Jaccl (RDMA) – show RDMA interfaces from ibvDevices
-    if (instanceTag === "MlxJacclInstance") {
-      const ordered = getOrderedRunnerNodes(
-        instance as Record<string, unknown>,
-        "Tensor",
-      );
-      const ibvDevices =
-        (instance as { ibvDevices?: Array<Array<string | null>> }).ibvDevices ||
-        [];
-      const rows: Array<{
-        from: string;
-        to: string;
-        ip: string;
-        ifaceLabel: string;
-        missingIface: boolean;
-      }> = [];
-
-      for (let i = 0; i < ordered.length; i++) {
-        for (let j = i + 1; j < ordered.length; j++) {
-          const iface = ibvDevices[i]?.[j] ?? ibvDevices[j]?.[i] ?? null;
-          if (!iface) continue;
-          const fromId = ordered[i].nodeId;
-          const toId = ordered[j].nodeId;
-          rows.push({
-            from: getNodeLabel(fromId),
-            to: getNodeLabel(toId),
-            ip: iface,
-            ifaceLabel: `RDMA ${iface}`,
-            missingIface: false,
-          });
-        }
-      }
-      return rows;
-    }
-
-    // Ring – derive ring order from pipeline shard ranks and pick host IPs from hostsByNode
-    if (instanceTag === "MlxRingInstance") {
-      const ordered = getOrderedRunnerNodes(
-        instance as Record<string, unknown>,
-        "Pipeline",
-      );
-      const hostsByNode =
-        (
-          instance as {
-            hostsByNode?: Record<string, Array<{ ip: string; port: number }>>;
-          }
-        ).hostsByNode || {};
-      const rows: Array<{
-        from: string;
-        to: string;
-        ip: string;
-        ifaceLabel: string;
-        missingIface: boolean;
-      }> = [];
-      if (ordered.length === 0) return rows;
-
-      for (let idx = 0; idx < ordered.length; idx++) {
-        const current = ordered[idx];
-        const next = ordered[(idx + 1) % ordered.length];
-        const host = pickHost(hostsByNode[next.nodeId]);
-        const ip = host ? `${host.ip}:${host.port}` : "?";
-        const ifaceInfo = host
-          ? getInterfaceLabel(next.nodeId, host.ip)
-          : { label: "?", missing: true };
-        rows.push({
-          from: getNodeLabel(current.nodeId),
-          to: getNodeLabel(next.nodeId),
-          ip,
-          ifaceLabel: ifaceInfo.label,
-          missingIface: ifaceInfo.missing,
-        });
-      }
-      return rows;
-    }
-
-    return [];
   }
 
   function formatEta(ms: number): string {
@@ -5362,6 +5169,7 @@
             class="w-full h-full"
             highlightedNodes={highlightedNodes()}
             filteredNodes={nodeFilter}
+            disabledNodes={placementDisabledNodes}
             onNodeClick={togglePreviewNodeFilter}
           />
           {@render debugModeButton()}
@@ -5489,6 +5297,7 @@
               class="w-full h-full"
               highlightedNodes={highlightedNodes()}
               filteredNodes={nodeFilter}
+              disabledNodes={placementDisabledNodes}
               onNodeClick={togglePreviewNodeFilter}
             />
             {@render debugModeButton()}
@@ -5740,8 +5549,6 @@
                   <!-- Instance Card -->
                   {@const instanceModelId = getInstanceModelId(instance)}
                   {@const instanceInfo = getInstanceInfo(instance)}
-                  {@const instanceConnections =
-                    getInstanceConnections(instance)}
                   {@const stageTimingRows = getInstanceStageTimingRows(
                     id,
                     instance,
@@ -5977,24 +5784,6 @@
                                     : "REBALANCE"}
                               </button>
                             {/if}
-                          </div>
-                        {/if}
-                        {#if debugEnabled && instanceConnections.length > 0}
-                          <div class="mt-2 space-y-1">
-                            {#each instanceConnections as conn}
-                              <div
-                                class="text-[11px] leading-snug font-mono text-white/70"
-                              >
-                                <span>{conn.from} -> {conn.to}: {conn.ip}</span>
-                                <span
-                                  class={conn.missingIface
-                                    ? "text-red-400"
-                                    : "text-white/60"}
-                                >
-                                  ({conn.ifaceLabel})</span
-                                >
-                              </div>
-                            {/each}
                           </div>
                         {/if}
 
@@ -7038,8 +6827,6 @@
                     <!-- Instance Card -->
                     {@const instanceModelId = getInstanceModelId(instance)}
                     {@const instanceInfo = getInstanceInfo(instance)}
-                    {@const instanceConnections =
-                      getInstanceConnections(instance)}
                     {@const stageTimingRows = getInstanceStageTimingRows(
                       id,
                       instance,
@@ -7276,26 +7063,6 @@
                                       : "REBALANCE"}
                                 </button>
                               {/if}
-                            </div>
-                          {/if}
-                          {#if debugEnabled && instanceConnections.length > 0}
-                            <div class="mt-2 space-y-1">
-                              {#each instanceConnections as conn}
-                                <div
-                                  class="text-[11px] leading-snug font-mono text-white/70"
-                                >
-                                  <span
-                                    >{conn.from} -> {conn.to}: {conn.ip}</span
-                                  >
-                                  <span
-                                    class={conn.missingIface
-                                      ? "text-red-400"
-                                      : "text-white/60"}
-                                  >
-                                    ({conn.ifaceLabel})</span
-                                  >
-                                </div>
-                              {/each}
                             </div>
                           {/if}
 

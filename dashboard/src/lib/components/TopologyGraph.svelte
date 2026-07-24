@@ -24,6 +24,8 @@
     class?: string;
     highlightedNodes?: Set<string>;
     filteredNodes?: Set<string>;
+    /** Nodes that cannot be selected (e.g. already used by a running instance). */
+    disabledNodes?: Set<string>;
     onNodeClick?: (nodeId: string) => void;
   }
 
@@ -31,6 +33,7 @@
     class: className = "",
     highlightedNodes = new Set(),
     filteredNodes = new Set(),
+    disabledNodes = new Set(),
     onNodeClick,
   }: Props = $props();
 
@@ -821,31 +824,39 @@
       const modelLower = modelId.toLowerCase();
 
       // Check node states for styling
+      const isDisabled = disabledNodes.has(nodeInfo.id);
       const isHighlighted = highlightedNodes.has(nodeInfo.id);
       const isInFilter =
-        filteredNodes.size > 0 && filteredNodes.has(nodeInfo.id);
+        !isDisabled &&
+        filteredNodes.size > 0 &&
+        filteredNodes.has(nodeInfo.id);
       const isFilteredOut =
         filteredNodes.size > 0 && !filteredNodes.has(nodeInfo.id);
-      const isHovered = hoveredNodeId === nodeInfo.id && !isInFilter;
+      const isHovered =
+        !isDisabled && hoveredNodeId === nodeInfo.id && !isInFilter;
 
       // Holographic wireframe colors - bright yellow for filter, subtle yellow for hover, grey for filtered out
-      const wireColor = isInFilter
-        ? "oklch(0.78 0.17 145 / 1)" // Bright yellow for filter selection
-        : isHovered
-          ? "oklch(0.78 0.17 145 / 0.7)" // Subtle yellow for hover
-          : isHighlighted
-            ? "oklch(0.78 0.17 145 / 0.9)" // Yellow for instance highlight
-            : isFilteredOut
-              ? "rgba(140,140,140,0.6)" // Grey for filtered out
-              : "rgba(179,179,179,0.8)"; // Default
+      const wireColor = isDisabled
+        ? "rgba(100,100,100,0.45)"
+        : isInFilter
+          ? "oklch(0.78 0.17 145 / 1)" // Bright yellow for filter selection
+          : isHovered
+            ? "oklch(0.78 0.17 145 / 0.7)" // Subtle yellow for hover
+            : isHighlighted
+              ? "oklch(0.78 0.17 145 / 0.9)" // Yellow for instance highlight
+              : isFilteredOut
+                ? "rgba(140,140,140,0.6)" // Grey for filtered out
+                : "rgba(179,179,179,0.8)"; // Default
       const wireColorBright = "rgba(255,255,255,0.9)";
-      const fillColor = isInFilter
-        ? "oklch(0.78 0.17 145 / 0.25)"
-        : isHovered
-          ? "oklch(0.78 0.17 145 / 0.12)"
-          : isHighlighted
-            ? "oklch(0.78 0.17 145 / 0.15)"
-            : "oklch(0.78 0.17 145 / 0.08)";
+      const fillColor = isDisabled
+        ? "rgba(40,40,40,0.35)"
+        : isInFilter
+          ? "oklch(0.78 0.17 145 / 0.25)"
+          : isHovered
+            ? "oklch(0.78 0.17 145 / 0.12)"
+            : isHighlighted
+              ? "oklch(0.78 0.17 145 / 0.15)"
+              : "oklch(0.78 0.17 145 / 0.08)";
       const strokeWidth = isInFilter
         ? 3
         : isHovered
@@ -859,19 +870,21 @@
       const nodeG = nodesGroup
         .append("g")
         .attr("class", "graph-node")
-        .style("cursor", onNodeClick ? "pointer" : "default")
-        .style("opacity", isFilteredOut ? 0.5 : 1);
+        .style(
+          "cursor",
+          isDisabled ? "not-allowed" : onNodeClick ? "pointer" : "default",
+        )
+        .style("opacity", isDisabled ? 0.35 : isFilteredOut ? 0.5 : 1);
 
       // Add click and hover handlers - hover just updates state, styling is applied during render
       nodeG
         .on("click", (event: MouseEvent) => {
-          if (onNodeClick) {
-            event.stopPropagation();
-            onNodeClick(nodeInfo.id);
-          }
+          if (isDisabled || !onNodeClick) return;
+          event.stopPropagation();
+          onNodeClick(nodeInfo.id);
         })
         .on("mouseenter", () => {
-          if (onNodeClick) {
+          if (!isDisabled && onNodeClick) {
             hoveredNodeId = nodeInfo.id;
           }
         })
@@ -885,7 +898,9 @@
       nodeG
         .append("title")
         .text(
-          `${friendlyName}\nID: ${nodeInfo.id.slice(-8)}\nMemory: ${formatBytes(ramUsed)}/${formatBytes(ramTotal)}`,
+          isDisabled
+            ? `${friendlyName}\nIn use by a running instance`
+            : `${friendlyName}\nID: ${nodeInfo.id.slice(-8)}\nMemory: ${formatBytes(ramUsed)}/${formatBytes(ramTotal)}`,
         );
 
       if (modelLower === "mac studio") {
@@ -1721,6 +1736,8 @@
     const _hoveredNodeId = hoveredNodeId;
     const _filteredNodes = filteredNodes;
     const _highlightedNodes = highlightedNodes;
+    const _disabledNodes = disabledNodes;
+    void _disabledNodes;
     const _nodeLayerLabels = nodeLayerLabels;
     const _nodeEfficiencyLabels = nodeEfficiencyLabels;
     const _nodeTokPerSec = nodeTokPerSec;
