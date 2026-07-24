@@ -828,7 +828,7 @@
             {/if}
           {/if}
 
-          {#each preview.nodes as node}
+          {#each preview.nodes as node, nodeIndex}
             <g
               transform="translate({node.x}, {node.y})"
               opacity={node.isUsed ? 1 : 0.25}
@@ -991,19 +991,49 @@
                   {/if}
                 </g>
               {:else}
-                <!-- Unknown device - hexagon -->
+                <!-- Unknown device - hexagon with memory fill -->
+                {@const hexPoints = `${node.iconSize / 2},0 ${node.iconSize},${
+                  node.iconSize * 0.25
+                } ${node.iconSize},${node.iconSize * 0.75} ${
+                  node.iconSize / 2
+                },${node.iconSize} 0,${node.iconSize * 0.75} 0,${
+                  node.iconSize * 0.25
+                }`}
                 <g
                   transform="translate({-node.iconSize / 2}, {-node.iconSize /
                     2})"
                 >
+                  <clipPath id="hexClip-{filterId}-{nodeIndex}">
+                    <polygon points={hexPoints} />
+                  </clipPath>
+                  <!-- Memory fill background -->
+                  <polygon points={hexPoints} fill="#0a0a0a" />
+                  <g clip-path="url(#hexClip-{filterId}-{nodeIndex})">
+                    <!-- Current memory fill -->
+                    <rect
+                      x="0"
+                      y={node.iconSize * (1 - node.currentPercent / 100)}
+                      width={node.iconSize}
+                      height={node.iconSize * (node.currentPercent / 100)}
+                      fill="#374151"
+                    />
+                    <!-- New model memory fill -->
+                    {#if node.modelUsageGB > 0 && node.isUsed}
+                      <rect
+                        x="0"
+                        y={node.iconSize * (1 - node.newPercent / 100)}
+                        width={node.iconSize}
+                        height={node.iconSize *
+                          ((node.newPercent - node.currentPercent) / 100)}
+                        fill="#FFD700"
+                        filter="url(#memGlow-{filterId})"
+                        class="animate-pulse-slow"
+                      />
+                    {/if}
+                  </g>
                   <polygon
-                    points="{node.iconSize /
-                      2},0 {node.iconSize},{node.iconSize *
-                      0.25} {node.iconSize},{node.iconSize *
-                      0.75} {node.iconSize /
-                      2},{node.iconSize} 0,{node.iconSize *
-                      0.75} 0,{node.iconSize * 0.25}"
-                    fill={node.isUsed ? "rgba(255,215,0,0.1)" : "#0a0a0a"}
+                    points={hexPoints}
+                    fill={node.isUsed ? "rgba(255,215,0,0.1)" : "none"}
                     stroke={node.isUsed ? "#FFD700" : "#4B5563"}
                     stroke-width="1.5"
                   />
