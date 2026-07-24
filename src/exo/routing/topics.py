@@ -8,6 +8,12 @@ from exo.shared.types.events import (
     GlobalForwarderEvent,
     LocalForwarderEvent,
 )
+from exo.shared.types.state_snapshots import (
+    StateSnapshotChunk,
+    StateSnapshotManifest,
+    StateSnapshotRequest,
+    StateSnapshotUnavailable,
+)
 from exo.utils.pydantic_ext import FrozenModel
 
 
@@ -28,6 +34,7 @@ class TypedTopic[T: FrozenModel]:
     model_type: type[
         T
     ]  # This can be worked around with evil type hacking, see https://stackoverflow.com/a/71720366 - I don't think it's necessary here.
+    max_payload_size: int = 16 * 1024 * 1024
 
     @staticmethod
     def serialize(t: T) -> bytes:
@@ -48,4 +55,28 @@ CONNECTION_MESSAGES = TypedTopic(
 )
 DOWNLOAD_COMMANDS = TypedTopic(
     "download_commands", PublishPolicy.Always, ForwarderDownloadCommand
+)
+STATE_SNAPSHOT_REQUESTS = TypedTopic(
+    "state_snapshot_requests",
+    PublishPolicy.Always,
+    StateSnapshotRequest,
+    max_payload_size=64 * 1024,
+)
+STATE_SNAPSHOT_MANIFESTS = TypedTopic(
+    "state_snapshot_manifests",
+    PublishPolicy.Always,
+    StateSnapshotManifest,
+    max_payload_size=64 * 1024,
+)
+STATE_SNAPSHOT_CHUNKS = TypedTopic(
+    "state_snapshot_chunks",
+    PublishPolicy.Always,
+    StateSnapshotChunk,
+    max_payload_size=1024 * 1024,
+)
+STATE_SNAPSHOT_UNAVAILABLE = TypedTopic(
+    "state_snapshot_unavailable",
+    PublishPolicy.Always,
+    StateSnapshotUnavailable,
+    max_payload_size=64 * 1024,
 )

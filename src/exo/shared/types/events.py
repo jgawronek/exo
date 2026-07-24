@@ -97,6 +97,13 @@ class NodeTimedOut(BaseEvent):
     node_id: NodeId
 
 
+class MasterAnnounced(BaseEvent):
+    """Indexed by the master on startup so every replica knows which node
+    coordinates the cluster (e.g. for advertising a stable API base URL)."""
+
+    node_id: NodeId
+
+
 # TODO: bikeshed this name
 class NodeGatheredInfo(BaseEvent):
     node_id: NodeId
@@ -177,6 +184,7 @@ Event = (
     | RunnerStatusUpdated
     | StageTimingsUpdated
     | NodeTimedOut
+    | MasterAnnounced
     | NodeGatheredInfo
     | NodeDownloadProgress
     | ChunkGenerated

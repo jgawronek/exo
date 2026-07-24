@@ -49,6 +49,9 @@ class ModelListModel(BaseModel):
     base_model: str = Field(default="")
     capabilities: list[str] = Field(default_factory=list)
     reasoning_dialect: ReasoningDialect = "none"
+    # Set on per-instance alias entries (id == "<model-id>@<instance-prefix>"):
+    # the full id of the running instance this alias pins requests to.
+    instance_id: str | None = Field(default=None)
 
 
 class ModelList(BaseModel):

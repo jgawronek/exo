@@ -141,3 +141,22 @@ async def test_drain_and_ingest_with_new_sequence(buffer: OrderedBuffer[Event]):
     assert [e[0] for e in drained] == [2]
     assert buffer.next_idx_to_release == 3
     assert 4 in buffer.store
+
+
+def test_bootstrap_advances_to_event_after_snapshot_and_preserves_tail(
+    buffer: OrderedBuffer[Event],
+) -> None:
+    snapshot_index = 4
+    stale_event = make_indexed_event(snapshot_index)
+    first_tail_event = make_indexed_event(snapshot_index + 1)
+    second_tail_event = make_indexed_event(snapshot_index + 2)
+
+    buffer.ingest(*second_tail_event)
+    buffer.ingest(*stale_event)
+    buffer.ingest(*first_tail_event)
+
+    buffer.bootstrap(snapshot_index=snapshot_index)
+
+    assert buffer.next_idx_to_release == snapshot_index + 1
+    assert buffer.drain_indexed() == [first_tail_event, second_tail_event]
+    assert not buffer.store

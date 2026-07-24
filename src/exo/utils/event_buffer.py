@@ -25,6 +25,16 @@ class OrderedBuffer[T]:
             return
         self.store[idx] = t
 
+    def bootstrap(self, *, snapshot_index: int) -> None:
+        """Advance past a restored snapshot while retaining its journal tail."""
+        next_idx_to_release = snapshot_index + 1
+        self.store = {
+            idx: event
+            for idx, event in self.store.items()
+            if idx >= next_idx_to_release
+        }
+        self.next_idx_to_release = next_idx_to_release
+
     def drain(self) -> list[T]:
         """Drain all available events from the buffer"""
         ret: list[T] = []

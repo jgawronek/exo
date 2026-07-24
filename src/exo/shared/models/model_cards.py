@@ -194,7 +194,9 @@ class ModelCard(FrozenModel):
     sampling_defaults: SamplingDefaults = Field(default_factory=SamplingDefaults)
 
     @model_validator(mode="after")
-    def _autodetect_vision(self) -> "ModelCard":
+    def _autodetect_vision(self, validation_info: ValidationInfo) -> "ModelCard":
+        if validation_info.context == {"skip_local_model_enrichment": True}:
+            return self
         if self.vision is None:
             detected = detect_vision_from_config(self.model_id)
             if detected is not None:
@@ -202,7 +204,12 @@ class ModelCard(FrozenModel):
         return self
 
     @model_validator(mode="after")
-    def _autodetect_mixture_of_experts(self) -> "ModelCard":
+    def _autodetect_mixture_of_experts(
+        self,
+        validation_info: ValidationInfo,
+    ) -> "ModelCard":
+        if validation_info.context == {"skip_local_model_enrichment": True}:
+            return self
         if self.mixture_of_experts is None:
             config_data = load_local_config_data(self.model_id)
             if config_data is not None:

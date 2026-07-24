@@ -269,6 +269,8 @@ interface RawStateResponse {
     string,
     { total: { inBytes: number }; available: { inBytes: number } }
   >;
+  // Node currently coordinating the cluster (elected master)
+  masterNodeId?: string | null;
 }
 
 export interface MessageAttachment {
@@ -597,6 +599,8 @@ class AppStore {
   previewNodeFilter = $state<Set<string>>(new Set());
   lastUpdate = $state<number | null>(null);
   nodeIdentities = $state<Record<string, RawNodeIdentity>>({});
+  nodeNetwork = $state<Record<string, RawNodeNetworkInfo>>({});
+  masterNodeId = $state<string | null>(null);
   thunderboltBridgeCycles = $state<string[][]>([]);
   nodeThunderbolt = $state<
     Record<
@@ -1467,6 +1471,8 @@ class AppStore {
       }
       // Node identities (for OS version mismatch detection)
       this.nodeIdentities = data.nodeIdentities ?? {};
+      this.nodeNetwork = data.nodeNetwork ?? {};
+      this.masterNodeId = data.masterNodeId ?? null;
       // Thunderbolt identifiers per node
       this.nodeThunderbolt = data.nodeThunderbolt ?? {};
       // RDMA ctl status per node
@@ -3810,6 +3816,10 @@ export const isConnected = () => appStore.isConnected;
 
 // Node identities (for OS version mismatch detection)
 export const nodeIdentities = () => appStore.nodeIdentities;
+
+// Master node + per-node network info (for advertising the API base URL)
+export const masterNodeId = () => appStore.masterNodeId;
+export const nodeNetwork = () => appStore.nodeNetwork;
 
 // Thunderbolt & RDMA status
 export const nodeThunderbolt = () => appStore.nodeThunderbolt;

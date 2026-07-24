@@ -18,6 +18,7 @@ from exo.shared.types.events import (
     InstanceLinkCreated,
     InstanceLinkDeleted,
     InstanceShardAssignmentsUpdated,
+    MasterAnnounced,
     NodeDownloadProgress,
     NodeGatheredInfo,
     NodeTimedOut,
@@ -107,6 +108,8 @@ def event_apply(event: Event, state: State) -> State:
             return apply_instance_shard_assignments_updated(event, state)
         case NodeTimedOut():
             return apply_node_timed_out(event, state)
+        case MasterAnnounced():
+            return apply_master_announced(event, state)
         case NodeDownloadProgress():
             return apply_node_download_progress(event, state)
         case NodeGatheredInfo():
@@ -344,6 +347,10 @@ def apply_runner_status_updated(event: RunnerStatusUpdated, state: State) -> Sta
             event.runner_id: event.runner_status.prefill_server_port,
         }
     return state.model_copy(update=update)
+
+
+def apply_master_announced(event: MasterAnnounced, state: State) -> State:
+    return state.model_copy(update={"master_node_id": event.node_id})
 
 
 def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:

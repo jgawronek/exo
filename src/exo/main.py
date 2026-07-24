@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Self
 
 import anyio
-from anyio.lowlevel import checkpoint as anyio_checkpoint
+from anyio import CancelScope, to_thread
 from daemon import DaemonContext  # pyright: ignore[reportMissingTypeStubs]
 from exo_rs import Pidfile, PidfileError
 from loguru import logger
@@ -21,18 +21,39 @@ from exo.api.main import API
 from exo.download.coordinator import DownloadCoordinator
 from exo.download.impl_shard_downloader import exo_shard_downloader
 from exo.master.main import Master
-from exo.routing.event_router import EventRouter
+from exo.routing.event_router import EventRouter, SnapshotTransport
 from exo.routing.router import Router, get_node_zid
-from exo.shared.constants import EXO_DEFAULT_MODELS_DIR, EXO_LOG, EXO_PID_FILE
+from exo.shared.constants import (
+    EXO_DEFAULT_MODELS_DIR,
+    EXO_EVENT_LOG_DIR,
+    EXO_LOG,
+    EXO_PID_FILE,
+)
 from exo.shared.election import Election, ElectionResult
 from exo.shared.environment import get_compatible_environment_value
 from exo.shared.logging import logger_cleanup, logger_setup
 from exo.shared.types.common import NodeId, SessionId
+from exo.shared.types.state import State
 from exo.utils import STDIO_FDS
 from exo.utils.channels import Receiver, channel
 from exo.utils.pydantic_ext import FrozenModel
+from exo.utils.replica_store import ReplicaStore, ReplicaStoreError
+from exo.utils.state_replica import StateReplica
 from exo.utils.task_group import TaskGroup
 from exo.worker.main import Worker
+
+
+def _create_snapshot_transport(router: Router) -> SnapshotTransport:
+    return SnapshotTransport(
+        request_sender=router.sender(topics.STATE_SNAPSHOT_REQUESTS),
+        request_receiver=router.receiver(topics.STATE_SNAPSHOT_REQUESTS),
+        manifest_sender=router.sender(topics.STATE_SNAPSHOT_MANIFESTS),
+        manifest_receiver=router.receiver(topics.STATE_SNAPSHOT_MANIFESTS),
+        chunk_sender=router.sender(topics.STATE_SNAPSHOT_CHUNKS),
+        chunk_receiver=router.receiver(topics.STATE_SNAPSHOT_CHUNKS),
+        unavailable_sender=router.sender(topics.STATE_SNAPSHOT_UNAVAILABLE),
+        unavailable_receiver=router.receiver(topics.STATE_SNAPSHOT_UNAVAILABLE),
+    )
 
 
 @dataclass
@@ -45,11 +66,15 @@ class Node:
     election_result_receiver: Receiver[ElectionResult]
     master: Master | None
     api: API | None
+    state_replica: StateReplica
+    replica_store: ReplicaStore
 
     node_id: NodeId
     offline: bool
     _api_port: int
     _tg: TaskGroup = field(init=False, default_factory=TaskGroup)
+    _has_completed_election: bool = field(init=False, default=False)
+    _recovery_cancel_scope: CancelScope | None = field(init=False, default=None)
 
     @classmethod
     async def create(cls, args: "Args") -> Self:
@@ -67,11 +92,42 @@ class Node:
         await router.register_topic(topics.ELECTION_MESSAGES)
         await router.register_topic(topics.CONNECTION_MESSAGES)
         await router.register_topic(topics.DOWNLOAD_COMMANDS)
+        await router.register_topic(topics.STATE_SNAPSHOT_REQUESTS)
+        await router.register_topic(topics.STATE_SNAPSHOT_MANIFESTS)
+        await router.register_topic(topics.STATE_SNAPSHOT_CHUNKS)
+        await router.register_topic(topics.STATE_SNAPSHOT_UNAVAILABLE)
+        replica_store = ReplicaStore(EXO_EVENT_LOG_DIR / "replica")
+        try:
+            recovered_replica = replica_store.recover()
+        except ReplicaStoreError as exception:
+            logger.opt(exception=exception).warning(
+                "Ignoring invalid local state replica; recovering from the cluster"
+            )
+            replica_store.clear()
+            recovered_replica = None
+        if recovered_replica is None:
+            state_replica = StateReplica(
+                session=session_id,
+                initial_state=State(),
+                ready=True,
+            )
+        else:
+            state_replica = recovered_replica
+            state_replica.rebase_session(session_id)
+            replica_store.write_checkpoint(
+                session_id,
+                state_replica.state,
+                compact_journal=True,
+            )
         event_router = EventRouter(
             session_id,
             command_sender=router.sender(topics.COMMANDS),
             external_outbound=router.sender(topics.LOCAL_EVENTS),
             external_inbound=router.receiver(topics.GLOBAL_EVENTS),
+            node_id=node_id,
+            state_replica=state_replica,
+            snapshot_transport=_create_snapshot_transport(router),
+            replica_store=replica_store,
         )
 
         logger.info(f"Starting node {node_id}")
@@ -99,6 +155,7 @@ class Node:
                 command_sender=router.sender(topics.COMMANDS),
                 download_command_sender=router.sender(topics.DOWNLOAD_COMMANDS),
                 election_receiver=router.receiver(topics.ELECTION_MESSAGES),
+                state_replica=state_replica,
             )
         else:
             api = None
@@ -111,6 +168,7 @@ class Node:
                 command_sender=router.sender(topics.COMMANDS),
                 download_command_sender=router.sender(topics.DOWNLOAD_COMMANDS),
                 api_port=args.api_port,
+                state_replica=state_replica,
             )
         else:
             worker = None
@@ -124,6 +182,8 @@ class Node:
             local_event_receiver=router.receiver(topics.LOCAL_EVENTS),
             command_receiver=router.receiver(topics.COMMANDS),
             download_command_sender=router.sender(topics.DOWNLOAD_COMMANDS),
+            state_replica=state_replica,
+            replica_store=replica_store,
         )
 
         er_send, er_recv = channel[ElectionResult]()
@@ -149,6 +209,8 @@ class Node:
             er_recv,
             master,
             api,
+            state_replica,
+            replica_store,
             node_id,
             args.offline,
             args.api_port,
@@ -195,13 +257,46 @@ class Node:
                 # - Shut down and re-create the API
 
                 if result.is_new_master:
-                    await anyio_checkpoint()
+                    if self._recovery_cancel_scope is not None:
+                        self._recovery_cancel_scope.cancel()
                     self.event_router.shutdown()
+                    if (
+                        self.master is not None
+                        and result.session_id.master_node_id != self.node_id
+                    ):
+                        await self.master.shutdown()
+                        self.master = None
+                    await self.event_router.wait_stopped()
+
+                    preserve_state = result.session_id.master_node_id == self.node_id
+                    if self.state_replica.ready and preserve_state:
+                        self.state_replica.rebase_session(result.session_id)
+                        try:
+                            await to_thread.run_sync(
+                                self.replica_store.write_compacted_checkpoint,
+                                result.session_id,
+                                self.state_replica.state,
+                            )
+                        except (OSError, ReplicaStoreError) as exception:
+                            logger.opt(exception=exception).warning(
+                                "Failed to persist rebased state replica"
+                            )
+                    else:
+                        self.state_replica.start_unready_session(result.session_id)
+                        self.replica_store.clear()
+                    if result.session_id.master_node_id == self.node_id:
+                        self.state_replica.mark_ready()
+
                     self.event_router = EventRouter(
                         result.session_id,
                         self.router.sender(topics.COMMANDS),
                         self.router.receiver(topics.GLOBAL_EVENTS),
                         self.router.sender(topics.LOCAL_EVENTS),
+                        node_id=self.node_id,
+                        state_replica=self.state_replica,
+                        snapshot_transport=_create_snapshot_transport(self.router),
+                        replica_store=self.replica_store,
+                        allow_legacy_fallback=not self._has_completed_election,
                     )
 
                 if (
@@ -227,6 +322,8 @@ class Node:
                         download_command_sender=self.router.sender(
                             topics.DOWNLOAD_COMMANDS
                         ),
+                        state_replica=self.state_replica,
+                        replica_store=self.replica_store,
                     )
                     self._tg.start_soon(self.master.run)
                 elif (
@@ -243,38 +340,59 @@ class Node:
                         f"Node {result.session_id.master_node_id} elected master"
                     )
                 if result.is_new_master:
-                    if self.download_coordinator:
-                        await self.download_coordinator.shutdown()
-                        self.download_coordinator = DownloadCoordinator(
-                            self.node_id,
-                            exo_shard_downloader(offline=self.offline),
-                            event_sender=self.event_router.sender(),
-                            download_command_receiver=self.router.receiver(
-                                topics.DOWNLOAD_COMMANDS
-                            ),
-                            offline=self.offline,
-                        )
-                        self._tg.start_soon(self.download_coordinator.run)
-                    if self.worker:
-                        await self.worker.shutdown()
-                        # TODO: add profiling etc to resource monitor
-                        self.worker = Worker(
-                            self.node_id,
-                            event_receiver=self.event_router.receiver(),
-                            event_sender=self.event_router.sender(),
-                            command_sender=self.router.sender(topics.COMMANDS),
-                            download_command_sender=self.router.sender(
-                                topics.DOWNLOAD_COMMANDS
-                            ),
-                            api_port=self._api_port,
-                        )
-                        self._tg.start_soon(self.worker.run)
-                    if self.api:
-                        self.api.reset(result.won_clock, self.event_router.receiver())
                     self._tg.start_soon(self.event_router.run)
+                    self._tg.start_soon(
+                        self._activate_recovered_session,
+                        result,
+                        self.event_router,
+                    )
                 else:
-                    if self.api:
+                    if self.api and self.state_replica.ready:
                         self.api.unpause(result.won_clock)
+                self._has_completed_election = True
+
+    async def _activate_recovered_session(
+        self,
+        result: ElectionResult,
+        event_router: EventRouter,
+    ) -> None:
+        with CancelScope() as recovery_scope:
+            self._recovery_cancel_scope = recovery_scope
+            try:
+                await self.state_replica.wait_ready()
+                if self.event_router is not event_router:
+                    return
+                if self.download_coordinator:
+                    await self.download_coordinator.shutdown()
+                    self.download_coordinator = DownloadCoordinator(
+                        self.node_id,
+                        exo_shard_downloader(offline=self.offline),
+                        event_sender=event_router.sender(),
+                        download_command_receiver=self.router.receiver(
+                            topics.DOWNLOAD_COMMANDS
+                        ),
+                        offline=self.offline,
+                    )
+                    self._tg.start_soon(self.download_coordinator.run)
+                if self.worker:
+                    await self.worker.shutdown()
+                    self.worker = Worker(
+                        self.node_id,
+                        event_receiver=event_router.receiver(),
+                        event_sender=event_router.sender(),
+                        command_sender=self.router.sender(topics.COMMANDS),
+                        download_command_sender=self.router.sender(
+                            topics.DOWNLOAD_COMMANDS
+                        ),
+                        api_port=self._api_port,
+                        state_replica=self.state_replica,
+                    )
+                    self._tg.start_soon(self.worker.run)
+                if self.api:
+                    self.api.reset(result.won_clock, event_router.receiver())
+            finally:
+                if self._recovery_cancel_scope is recovery_scope:
+                    self._recovery_cancel_scope = None
 
 
 def main():

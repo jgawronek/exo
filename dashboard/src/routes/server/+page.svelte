@@ -3,12 +3,19 @@
   import { fade } from "svelte/transition";
   import HeaderNav from "$lib/components/HeaderNav.svelte";
   import IntegrationCard from "$lib/components/IntegrationCard.svelte";
-  import { instances, refreshState } from "$lib/stores/app.svelte";
+  import {
+    instances,
+    masterNodeId,
+    nodeIdentities,
+    nodeNetwork,
+    refreshState,
+  } from "$lib/stores/app.svelte";
   import { onMount } from "svelte";
 
-  const apiUrl = browser
+  const fallbackApiUrl = browser
     ? window.location.origin.replace("localhost", "127.0.0.1")
     : "http://127.0.0.1:52415";
+  const apiPort = browser && window.location.port ? window.location.port : "52415";
 
   const instancesData = $derived(instances());
 
@@ -16,85 +23,142 @@
   let modelContextLengths = $state<Record<string, number>>({});
   let modelReasoningDialects = $state<Record<string, string>>({});
 
-  const runningModels = $derived.by(() => {
-    const models: string[] = [];
-    for (const [, wrapper] of Object.entries(instancesData)) {
-      if (wrapper && typeof wrapper === "object") {
-        const values = Object.values(wrapper as Record<string, unknown>);
-        if (values.length > 0) {
-          const instance = values[0];
-          if (instance && typeof instance === "object") {
-            const inst = instance as {
-              shardAssignments?: { modelId?: string };
-            };
-            const modelId = inst.shardAssignments?.modelId;
-            if (modelId && !models.includes(modelId)) {
-              models.push(modelId);
-            }
-          }
-        }
-      }
-    }
-    return models;
-  });
-
-  function estimateParamSize(modelId: string): number {
-    const match = modelId.match(/(\d+(?:\.\d+)?)[Bb]/);
-    return match ? parseFloat(match[1]) : 0;
+  interface RunningInstance {
+    instanceId: string;
+    shortId: string;
+    modelId: string;
+    alias: string;
+    nodeIds: string[];
   }
 
-  const modelsBySize = $derived(
-    [...runningModels].sort(
-      (a, b) => estimateParamSize(b) - estimateParamSize(a),
-    ),
+  const runningInstances = $derived.by(() => {
+    const result: RunningInstance[] = [];
+    for (const [instanceId, wrapper] of Object.entries(instancesData)) {
+      if (!wrapper || typeof wrapper !== "object") continue;
+      const values = Object.values(wrapper as Record<string, unknown>);
+      if (values.length === 0) continue;
+      const inst = values[0] as {
+        shardAssignments?: {
+          modelId?: string;
+          nodeToRunner?: Record<string, string>;
+        };
+      };
+      const modelId = inst?.shardAssignments?.modelId;
+      if (!modelId) continue;
+      const shortId = instanceId.slice(0, 8);
+      result.push({
+        instanceId,
+        shortId,
+        modelId,
+        alias: `${modelId}@${shortId}`,
+        nodeIds: Object.keys(inst.shardAssignments?.nodeToRunner ?? {}),
+      });
+    }
+    return result;
+  });
+
+  let selectedInstanceId = $state<string | null>(null);
+  $effect(() => {
+    if (runningInstances.length === 0) {
+      selectedInstanceId = null;
+      return;
+    }
+    if (
+      !runningInstances.some((inst) => inst.instanceId === selectedInstanceId)
+    ) {
+      selectedInstanceId = runningInstances[0].instanceId;
+    }
+  });
+
+  const selectedInstance = $derived(
+    runningInstances.find((inst) => inst.instanceId === selectedInstanceId) ??
+      null,
+  );
+  const selectedAlias = $derived(selectedInstance?.alias ?? "your-model-id");
+  const instanceAliases = $derived(runningInstances.map((inst) => inst.alias));
+
+  function nodeName(nodeId: string): string {
+    return nodeIdentities()[nodeId]?.friendlyName || nodeId.slice(0, 8);
+  }
+
+  // Prefer the elected master's LAN IP so configs work from other machines,
+  // not just the one the dashboard happens to be open on.
+  function isUsableIpv4(address: string): boolean {
+    return (
+      /^\d+\.\d+\.\d+\.\d+$/.test(address) &&
+      !address.startsWith("127.") &&
+      !address.startsWith("169.254.")
+    );
+  }
+
+  const masterIp = $derived.by(() => {
+    const id = masterNodeId();
+    if (!id) return null;
+    const network = nodeNetwork()[id];
+    const candidates: string[] = [];
+    for (const iface of network?.interfaces ?? []) {
+      if (typeof iface.ipAddress === "string") candidates.push(iface.ipAddress);
+      if (typeof iface.ipv4 === "string") candidates.push(iface.ipv4);
+      for (const addr of iface.addresses ?? []) {
+        if (typeof addr === "string") candidates.push(addr);
+        else if (addr?.address) candidates.push(addr.address);
+      }
+      for (const addr of iface.ipAddresses ?? []) candidates.push(addr);
+      for (const addr of iface.ips ?? []) candidates.push(addr);
+    }
+    const usable = candidates.filter(isUsableIpv4);
+    const lan = usable.find(
+      (address) =>
+        address.startsWith("192.168.") ||
+        address.startsWith("10.") ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(address),
+    );
+    return lan ?? usable[0] ?? null;
+  });
+
+  const apiUrl = $derived(
+    masterIp ? `http://${masterIp}:${apiPort}` : fallbackApiUrl,
   );
 
-  const defaultTiers = $derived.by(() => {
-    const n = modelsBySize.length;
-    if (n === 0)
-      return {
-        opus: "your-model-id",
-        sonnet: "your-model-id",
-        haiku: "your-model-id",
-      };
-    if (n === 1)
-      return {
-        opus: modelsBySize[0],
-        sonnet: modelsBySize[0],
-        haiku: modelsBySize[0],
-      };
-    if (n === 2)
-      return {
-        opus: modelsBySize[0],
-        sonnet: modelsBySize[1],
-        haiku: modelsBySize[1],
-      };
-    return {
-      opus: modelsBySize[0],
-      sonnet: modelsBySize[Math.floor(n / 2)],
-      haiku: modelsBySize[n - 1],
-    };
-  });
+  // Capability lookups accept either a plain model id or an instance alias
+  // (model@shortid); alias entries come from /v1/models but fall back to the
+  // base model's card if the fetch predates the instance.
+  function capsOf(idOrAlias: string): string[] {
+    return (
+      modelCapabilities[idOrAlias] ??
+      modelCapabilities[idOrAlias.split("@")[0]] ??
+      []
+    );
+  }
+  function contextLengthOf(idOrAlias: string): number {
+    return (
+      modelContextLengths[idOrAlias] ??
+      modelContextLengths[idOrAlias.split("@")[0]] ??
+      0
+    );
+  }
+  function dialectOf(idOrAlias: string): string | undefined {
+    return (
+      modelReasoningDialects[idOrAlias] ??
+      modelReasoningDialects[idOrAlias.split("@")[0]]
+    );
+  }
 
   let opusModel = $state("");
   let sonnetModel = $state("");
   let haikuModel = $state("");
-
-  $effect(() => {
-    opusModel = defaultTiers.opus;
-    sonnetModel = defaultTiers.sonnet;
-    haikuModel = defaultTiers.haiku;
-  });
-
   let codexModel = $state("");
   let codexMcpPath = $state("/Users/username");
   let openClawModel = $state("");
   let piModel = $state("");
+
   $effect(() => {
-    const def = modelsBySize.length > 0 ? modelsBySize[0] : "your-model-id";
-    codexModel = def;
-    openClawModel = def;
-    piModel = def;
+    opusModel = selectedAlias;
+    sonnetModel = selectedAlias;
+    haikuModel = selectedAlias;
+    codexModel = selectedAlias;
+    openClawModel = selectedAlias;
+    piModel = selectedAlias;
   });
 
   const claudeShellCommand = $derived(
@@ -130,11 +194,11 @@
 
   const openCodeConfig = $derived.by(() => {
     const models: Record<string, Record<string, unknown>> = {};
-    for (const modelId of runningModels) {
-      const caps = modelCapabilities[modelId] || [];
-      const ctxLen = modelContextLengths[modelId] || 0;
-      const dialect = modelReasoningDialects[modelId];
-      const entry: Record<string, unknown> = { name: modelId };
+    for (const instance of runningInstances) {
+      const caps = capsOf(instance.alias);
+      const ctxLen = contextLengthOf(instance.alias);
+      const dialect = dialectOf(instance.alias);
+      const entry: Record<string, unknown> = { name: instance.alias };
       if (ctxLen > 0) {
         entry.limit = { context: ctxLen, output: Math.min(ctxLen, 16384) };
       }
@@ -162,13 +226,11 @@
       ) {
         entry.interleaved = { field: "reasoning_content" };
       }
-      models[modelId] = entry;
+      models[instance.alias] = entry;
     }
     if (Object.keys(models).length === 0) {
       models["your-model-id"] = { name: "your-model-name" };
     }
-    const firstModel =
-      runningModels.length > 0 ? runningModels[0] : "your-model-id";
     return JSON.stringify(
       {
         $schema: "https://opencode.ai/config.json",
@@ -183,7 +245,7 @@
             models,
           },
         },
-        model: `exo/${firstModel}`,
+        model: `exo/${selectedAlias}`,
       },
       null,
       2,
@@ -222,9 +284,7 @@
                 {
                   id: openClawModel,
                   name: "XEO local",
-                  input: (modelCapabilities[openClawModel] || []).includes(
-                    "vision",
-                  )
+                  input: capsOf(openClawModel).includes("vision")
                     ? ["text", "image"]
                     : ["text"],
                 },
@@ -245,10 +305,10 @@
 
   const piModelsJson = $derived.by(() => {
     const models: Record<string, unknown>[] = [];
-    for (const modelId of runningModels) {
-      const caps = modelCapabilities[modelId] || [];
-      const ctxLen = modelContextLengths[modelId] || 0;
-      const entry: Record<string, unknown> = { id: modelId };
+    for (const instance of runningInstances) {
+      const caps = capsOf(instance.alias);
+      const ctxLen = contextLengthOf(instance.alias);
+      const entry: Record<string, unknown> = { id: instance.alias };
       if (caps.includes("vision")) {
         entry.input = ["text", "image"];
       }
@@ -293,7 +353,7 @@
   const piShellCommand = $derived(`pi --provider exo --model ${piModel}`);
 
   const ollamaCommand = $derived(
-    `OLLAMA_HOST=${apiUrl}/ollama ollama run ${modelsBySize.length > 0 ? modelsBySize[0] : "your-model-id"}`,
+    `OLLAMA_HOST=${apiUrl}/ollama ollama run ${selectedAlias}`,
   );
 
   const openWebUiCommand = $derived(
@@ -330,7 +390,7 @@
       `2. Add an "AI Agent" or "Basic LLM Chain" node`,
       `3. Inside it, add an "OpenAI Chat Model" sub-node`,
       `4. Select the OpenAI credential you just created`,
-      `5. Set Model to "From list" and pick your model (e.g. ${modelsBySize.length > 0 ? modelsBySize[0] : "your-model-id"})`,
+      `5. Set Model to "From list" and pick your instance (e.g. ${selectedAlias})`,
       `6. Optionally toggle "Use Responses API", add Built-in Tools, or click "Add Option" for sampling settings`,
       `7. Connect a "Chat Trigger" node for interactive chat`,
       `8. On the Chat Trigger, enable "Allow File Uploads" for vision`,
@@ -417,23 +477,69 @@
     </div>
 
     <!-- Status -->
-    <div class="mb-8">
+    <div class="mb-6">
       <span class="text-xeo-light-gray/70 text-xs uppercase tracking-wider"
         >API Endpoint</span
       >
       <span class="text-white font-mono text-sm ml-2">{apiUrl}</span>
-      {#if runningModels.length > 0}
-        <div class="text-xeo-light-gray/50 text-xs mt-2">
-          Running model{runningModels.length > 1 ? "s" : ""}:
-          <ul class="mt-1 space-y-0.5 list-none">
-            {#each runningModels as model}
-              <li class="text-xeo-green font-mono">{model}</li>
-            {/each}
-          </ul>
+      {#if masterIp}
+        <span class="text-xeo-light-gray/40 text-[10px] ml-2 uppercase"
+          >master node</span
+        >
+      {/if}
+    </div>
+
+    <!-- Available Instances -->
+    <div class="mb-8">
+      <span
+        class="text-xeo-light-gray/70 text-xs uppercase tracking-wider block mb-2"
+        >Available Instances</span
+      >
+      {#if runningInstances.length > 0}
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {#each runningInstances as instance (instance.instanceId)}
+            <button
+              onclick={() => (selectedInstanceId = instance.instanceId)}
+              class="text-left rounded-md px-3 py-2.5 border transition-all cursor-pointer
+                {selectedInstanceId === instance.instanceId
+                ? 'bg-xeo-green/10 border-xeo-green/40'
+                : 'bg-black/20 border-xeo-light-gray/10 hover:border-xeo-light-gray/30'}"
+            >
+              <div class="flex items-baseline justify-between gap-2">
+                <span
+                  class="text-sm font-medium truncate
+                    {selectedInstanceId === instance.instanceId
+                    ? 'text-xeo-green'
+                    : 'text-white/90'}"
+                >
+                  {instance.modelId.split("/").pop()}
+                </span>
+                <span
+                  class="text-[10px] font-mono text-xeo-light-gray/50 shrink-0"
+                  >@{instance.shortId}</span
+                >
+              </div>
+              <div
+                class="text-[10px] font-mono text-xeo-light-gray/60 truncate mt-0.5"
+              >
+                {instance.alias}
+              </div>
+              <div class="text-[10px] text-xeo-light-gray/40 mt-1">
+                {instance.nodeIds.length} node{instance.nodeIds.length === 1
+                  ? ""
+                  : "s"}: {instance.nodeIds.map(nodeName).join(", ")}
+              </div>
+            </button>
+          {/each}
         </div>
+        <p class="text-xeo-light-gray/40 text-[11px] mt-2">
+          Configs below target the selected instance. Use the plain model id
+          instead of the alias to load-balance across all instances of that
+          model.
+        </p>
       {:else}
-        <p class="text-xeo-light-gray/40 text-xs mt-2 italic">
-          No models currently running
+        <p class="text-xeo-light-gray/40 text-xs italic">
+          No instances currently running
         </p>
       {/if}
     </div>
@@ -490,7 +596,7 @@
     <!-- Tab Content -->
     <div class="space-y-4">
       {#if activeTab === "Claude Code"}
-        {#if runningModels.length > 1}
+        {#if instanceAliases.length > 1}
           <div class="grid grid-cols-3 gap-3 text-xs">
             {#each [{ label: "Opus", bind: () => opusModel, set: (v: string) => (opusModel = v) }, { label: "Sonnet", bind: () => sonnetModel, set: (v: string) => (sonnetModel = v) }, { label: "Haiku", bind: () => haikuModel, set: (v: string) => (haikuModel = v) }] as tier}
               <div>
@@ -504,8 +610,8 @@
                     tier.set((e.target as HTMLSelectElement).value)}
                   class="w-full {selectClass}"
                 >
-                  {#each runningModels as model}
-                    <option value={model}>{model.split("/").pop()}</option>
+                  {#each instanceAliases as alias}
+                    <option value={alias}>{alias.split("/").pop()}</option>
                   {/each}
                 </select>
               </div>
@@ -529,20 +635,20 @@
         <IntegrationCard
           title="Config File"
           subtitle="opencode.json"
-          description="Add this to your project root or ~/.config/opencode/opencode.json for global config. Vision models automatically get image input modality."
+          description="Add this to your project root or ~/.config/opencode/opencode.json for global config. Each running instance is listed as its own model. Vision models automatically get image input modality."
           config={openCodeConfig}
         />
       {:else if activeTab === "Codex"}
         <div class="flex gap-3 text-xs">
-          {#if runningModels.length > 1}
+          {#if instanceAliases.length > 1}
             <div>
               <span
                 class="text-xeo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
-                >Model</span
+                >Instance</span
               >
               <select bind:value={codexModel} class={selectClass}>
-                {#each runningModels as model}
-                  <option value={model}>{model.split("/").pop()}</option>
+                {#each instanceAliases as alias}
+                  <option value={alias}>{alias.split("/").pop()}</option>
                 {/each}
               </select>
             </div>
@@ -573,15 +679,15 @@
           language="bash"
         />
       {:else if activeTab === "OpenClaw"}
-        {#if runningModels.length > 1}
+        {#if instanceAliases.length > 1}
           <div class="text-xs">
             <span
               class="text-xeo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
-              >Model</span
+              >Instance</span
             >
             <select bind:value={openClawModel} class={selectClass}>
-              {#each runningModels as model}
-                <option value={model}>{model.split("/").pop()}</option>
+              {#each instanceAliases as alias}
+                <option value={alias}>{alias.split("/").pop()}</option>
               {/each}
             </select>
           </div>
@@ -596,19 +702,19 @@
           title="Setup Commands"
           subtitle="Run in terminal"
           description="After saving the config, run these commands to fix metadata and start the gateway."
-          config={`openclaw doctor --fix${(modelCapabilities[openClawModel] || []).includes("vision") ? `\nopenclaw models set-image exo/${openClawModel}` : ""}\nopenclaw gateway &\nopenclaw dashboard`}
+          config={`openclaw doctor --fix${capsOf(openClawModel).includes("vision") ? `\nopenclaw models set-image exo/${openClawModel}` : ""}\nopenclaw gateway &\nopenclaw dashboard`}
           language="bash"
         />
       {:else if activeTab === "Pi"}
-        {#if runningModels.length > 1}
+        {#if instanceAliases.length > 1}
           <div class="text-xs">
             <span
               class="text-xeo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
-              >Model</span
+              >Instance</span
             >
             <select bind:value={piModel} class={selectClass}>
-              {#each runningModels as model}
-                <option value={model}>{model.split("/").pop()}</option>
+              {#each instanceAliases as alias}
+                <option value={alias}>{alias.split("/").pop()}</option>
               {/each}
             </select>
           </div>
@@ -637,7 +743,7 @@
         <IntegrationCard
           title="2. Open & Select Model"
           subtitle="http://localhost:3000"
-          description={`Open http://localhost:3000 in your browser. Select the running model from the dropdown at the top: ${runningModels.length > 0 ? runningModels.join(", ") : "no models running"}`}
+          description={`Open http://localhost:3000 in your browser. Select the running instance from the dropdown at the top: ${instanceAliases.length > 0 ? instanceAliases.join(", ") : "no instances running"}`}
           config={"open http://localhost:3000"}
           language="bash"
         />

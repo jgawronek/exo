@@ -84,16 +84,33 @@ class TopicRouter[T: FrozenModel]:
         self.senders -= to_clear
 
     async def publish_bytes(self, data: bytes):
-        await self.publish(self.topic.deserialize(data))
+        if len(data) > self.topic.max_payload_size:
+            logger.warning(
+                f"Dropping oversized {self.topic.topic} message: {len(data)} bytes"
+            )
+            return
+        try:
+            item = self.topic.deserialize(data)
+        except (UnicodeDecodeError, ValueError) as exception:
+            logger.opt(exception=exception).warning(
+                f"Dropping invalid {self.topic.topic} message"
+            )
+            return
+        await self.publish(item)
 
     def new_sender(self) -> Sender[T]:
         return self._sender.clone()
 
     async def _send_out(self, item: T):
         logger.trace(f"TopicRouter {self.topic.topic} sending {item}")
-        await self.networking_sender.send(
-            (str(self.topic.topic), self.topic.serialize(item))
-        )
+        serialized_item = self.topic.serialize(item)
+        if len(serialized_item) > self.topic.max_payload_size:
+            logger.warning(
+                f"Dropping oversized outbound {self.topic.topic} message: "
+                f"{len(serialized_item)} bytes"
+            )
+            return
+        await self.networking_sender.send((str(self.topic.topic), serialized_item))
 
 
 class Router:

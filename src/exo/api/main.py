@@ -15,7 +15,7 @@ import anyio
 from anyio import BrokenResourceError, ClosedResourceError
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from hypercorn.asyncio import serve  # pyright: ignore[reportUnknownVariableType]
 from hypercorn.config import Config
@@ -102,6 +102,7 @@ from exo.api.types import (
     TraceStatsResponse,
     normalize_image_size,
 )
+from exo.routing.event_router import ReplicatedEventDelivery
 from exo.api.types.claude_api import (
     ClaudeMessagesRequest,
     ClaudeMessagesResponse,
@@ -215,6 +216,7 @@ from exo.utils.banner import print_startup_banner
 from exo.utils.channels import Receiver, Sender, channel
 from exo.utils.disk_event_log import DiskEventLog
 from exo.utils.power_sampler import PowerSampler
+from exo.utils.state_replica import StateReplica
 from exo.utils.task_group import TaskGroup
 
 _API_EVENT_LOG_DIR = EXO_EVENT_LOG_DIR / "api"
@@ -251,13 +253,15 @@ class API:
         node_id: NodeId,
         *,
         port: int,
-        event_receiver: Receiver[IndexedEvent],
+        event_receiver: Receiver[ReplicatedEventDelivery],
         command_sender: Sender[ForwarderCommand],
         download_command_sender: Sender[ForwarderDownloadCommand],
         # This lets us pause the API if an election is running
         election_receiver: Receiver[ElectionMessage],
+        state_replica: StateReplica | None = None,
     ) -> None:
-        self.state = State()
+        self.state_replica = state_replica
+        self._state = State()
         self._event_log = DiskEventLog(_API_EVENT_LOG_DIR)
         self._system_id = SystemId()
         self.command_sender = command_sender
@@ -278,8 +282,17 @@ class API:
         async def _log_requests(  # pyright: ignore[reportUnusedFunction]
             request: Request,
             call_next: Callable[[Request], Awaitable[StreamingResponse]],
-        ) -> StreamingResponse:
+        ) -> Response:
             logger.debug(f"API request: {request.method} {request.url.path}")
+            if (
+                self.state_replica is not None
+                and not self.state_replica.ready
+                and request.url.path != "/node_id"
+            ):
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Cluster state recovery is in progress"},
+                )
             return await call_next(request)
 
         self._setup_exception_handlers()
@@ -305,11 +318,28 @@ class API:
         self._image_store = ImageStore(EXO_IMAGE_CACHE_DIR)
         self._tg: TaskGroup = TaskGroup()
 
-    def reset(self, result_clock: int, event_receiver: Receiver[IndexedEvent]):
+    @property
+    def state(self) -> State:
+        if self.state_replica is not None:
+            return self.state_replica.state
+        return self._state
+
+    @state.setter
+    def state(self, state: State) -> None:
+        if self.state_replica is not None:
+            raise RuntimeError("Cannot replace state owned by the shared replica")
+        self._state = state
+
+    def reset(
+        self,
+        result_clock: int,
+        event_receiver: Receiver[ReplicatedEventDelivery],
+    ) -> None:
         logger.info("Resetting API State")
         self._event_log.close()
         self._event_log = DiskEventLog(_API_EVENT_LOG_DIR)
-        self.state = State()
+        if self.state_replica is None:
+            self._state = State()
         self._system_id = SystemId()
         self._text_generation_queues = {}
         self._image_generation_queues = {}
@@ -726,8 +756,7 @@ class API:
             for node_id, runner_id in shard_assignments.node_to_runner.items()
         }
         if not all(
-            isinstance(shard, PipelineShardMetadata)
-            for shard in node_to_shard.values()
+            isinstance(shard, PipelineShardMetadata) for shard in node_to_shard.values()
         ):
             raise HTTPException(
                 status_code=400,
@@ -739,7 +768,9 @@ class API:
                 detail="Rebalancing requires an instance spanning at least two nodes",
             )
         missing_memory_nodes = [
-            node_id for node_id in node_to_shard if node_id not in self.state.node_memory
+            node_id
+            for node_id in node_to_shard
+            if node_id not in self.state.node_memory
         ]
         if missing_memory_nodes:
             raise HTTPException(
@@ -973,12 +1004,16 @@ class API:
         )
 
     async def _send_text_generation_with_images(
-        self, task_params: TextGenerationTaskParams
+        self,
+        task_params: TextGenerationTaskParams,
+        pinned_instance_id: InstanceId | None = None,
     ) -> TextGeneration:
         task_params = task_params.with_card_sampling_defaults()
         images = task_params.images
         if not images:
-            command = TextGeneration(task_params=task_params)
+            command = TextGeneration(
+                task_params=task_params, pinned_instance_id=pinned_instance_id
+            )
             await self._send(command)
             return command
 
@@ -987,7 +1022,9 @@ class API:
         task_params = task_params.model_copy(
             update={"images": [], "image_hashes": all_hashes}
         )
-        command = TextGeneration(task_params=task_params)
+        command = TextGeneration(
+            task_params=task_params, pinned_instance_id=pinned_instance_id
+        )
 
         new_images: list[tuple[int, str]] = []
         for idx, (img, h) in enumerate(zip(images, hashes, strict=True)):
@@ -1026,10 +1063,14 @@ class API:
     ) -> ChatCompletionResponse | StreamingResponse:
         """OpenAI Chat Completions API - adapter."""
         task_params = await chat_request_to_text_generation(payload)
-        validated_model = await self._validate_model_has_instance(task_params.model)
+        validated_model, pinned_instance_id = await self._resolve_model_and_instance(
+            task_params.model
+        )
         task_params = task_params.model_copy(update={"model": validated_model})
 
-        command = await self._send_text_generation_with_images(task_params)
+        command = await self._send_text_generation_with_images(
+            task_params, pinned_instance_id
+        )
 
         if payload.stream:
             return StreamingResponse(
@@ -1059,8 +1100,8 @@ class API:
         self, payload: BenchChatCompletionRequest
     ) -> BenchChatCompletionResponse | StreamingResponse:
         task_params = await chat_request_to_text_generation(payload)
-        validated_model = await self._validate_model_has_instance(
-            ModelId(task_params.model)
+        validated_model, pinned_instance_id = await self._resolve_model_and_instance(
+            task_params.model
         )
         task_params = task_params.model_copy(update={"model": validated_model})
 
@@ -1072,7 +1113,9 @@ class API:
             }
         )
 
-        command = await self._send_text_generation_with_images(task_params)
+        command = await self._send_text_generation_with_images(
+            task_params, pinned_instance_id
+        )
 
         if payload.stream:
             return StreamingResponse(
@@ -1091,6 +1134,42 @@ class API:
             )
 
         return await self._collect_text_generation_with_stats(command.command_id)
+
+    async def _resolve_model_and_instance(
+        self, requested_model: str
+    ) -> tuple[ModelId, InstanceId | None]:
+        """Resolve a requested model name to a servable model and optional pinned instance.
+
+        Accepts either a plain model id (the master load-balances across all
+        instances serving it) or a per-instance alias of the form
+        ``<model-id>@<instance-id-prefix>`` which pins the request to that
+        exact instance.
+
+        Raises HTTPException (404 unknown, 400 ambiguous prefix); handled by FastAPI.
+        """
+        model_part, separator, instance_prefix = requested_model.rpartition("@")
+        if separator and model_part and instance_prefix:
+            model_id = ModelId(model_part)
+            matching_instance_ids = [
+                instance_id
+                for instance_id, instance in self.state.instances.items()
+                if instance.shard_assignments.model_id == model_id
+                and str(instance_id).startswith(instance_prefix)
+            ]
+            if not matching_instance_ids:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No running instance matches {requested_model}",
+                )
+            if len(matching_instance_ids) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Instance alias {requested_model} is ambiguous",
+                )
+            return model_id, matching_instance_ids[0]
+
+        model_id = await self._validate_model_has_instance(ModelId(requested_model))
+        return model_id, None
 
     async def _validate_model_has_instance(self, model_id: ModelId) -> ModelId:
         """Validate a model has an active instance.
@@ -1642,12 +1721,14 @@ class API:
     ) -> ClaudeMessagesResponse | StreamingResponse:
         """Claude Messages API - adapter."""
         task_params = await claude_request_to_text_generation(payload)
-        validated_model = await self._validate_model_has_instance(
-            ModelId(task_params.model)
+        validated_model, pinned_instance_id = await self._resolve_model_and_instance(
+            task_params.model
         )
         task_params = task_params.model_copy(update={"model": validated_model})
 
-        command = await self._send_text_generation_with_images(task_params)
+        command = await self._send_text_generation_with_images(
+            task_params, pinned_instance_id
+        )
 
         if payload.stream:
             return StreamingResponse(
@@ -1680,10 +1761,14 @@ class API:
     ) -> ResponsesResponse | StreamingResponse:
         """OpenAI Responses API."""
         task_params = await responses_request_to_text_generation(payload)
-        validated_model = await self._validate_model_has_instance(task_params.model)
+        validated_model, pinned_instance_id = await self._resolve_model_and_instance(
+            task_params.model
+        )
         task_params = task_params.model_copy(update={"model": validated_model})
 
-        command = await self._send_text_generation_with_images(task_params)
+        command = await self._send_text_generation_with_images(
+            task_params, pinned_instance_id
+        )
 
         if payload.stream:
             return StreamingResponse(
@@ -1723,12 +1808,14 @@ class API:
         body = await request.body()
         payload = OllamaChatRequest.model_validate_json(body)
         task_params = ollama_request_to_text_generation(payload)
-        validated_model = await self._validate_model_has_instance(
-            ModelId(task_params.model)
+        validated_model, pinned_instance_id = await self._resolve_model_and_instance(
+            task_params.model
         )
         task_params = task_params.model_copy(update={"model": validated_model})
 
-        command = await self._send_text_generation_with_images(task_params)
+        command = await self._send_text_generation_with_images(
+            task_params, pinned_instance_id
+        )
 
         if payload.stream:
             return StreamingResponse(
@@ -1759,12 +1846,14 @@ class API:
         body = await request.body()
         payload = OllamaGenerateRequest.model_validate_json(body)
         task_params = ollama_generate_request_to_text_generation(payload)
-        validated_model = await self._validate_model_has_instance(
-            ModelId(task_params.model)
+        validated_model, pinned_instance_id = await self._resolve_model_and_instance(
+            task_params.model
         )
         task_params = task_params.model_copy(update={"model": validated_model})
 
-        command = await self._send_text_generation_with_images(task_params)
+        command = await self._send_text_generation_with_images(
+            task_params, pinned_instance_id
+        )
 
         if payload.stream:
             return StreamingResponse(
@@ -1903,28 +1992,53 @@ class API:
                         downloaded_model_ids.add(dl.shard_metadata.model_card.model_id)
             cards = [c for c in cards if c.model_id in downloaded_model_ids]
 
-        return ModelList(
-            data=[
+        data = [
+            ModelListModel(
+                id=card.model_id,
+                hugging_face_id=card.model_id,
+                name=card.model_id.short(),
+                description="",
+                tags=[],
+                storage_size_megabytes=card.storage_size.in_mb,
+                supports_tensor=card.supports_tensor,
+                tasks=[task.value for task in card.tasks],
+                is_custom=card.is_custom,
+                family=card.family,
+                quantization=card.quantization,
+                base_model=card.base_model,
+                capabilities=card.capabilities,
+                reasoning_dialect=card.reasoning_dialect,
+                context_length=card.context_length,
+            )
+            for card in cards
+        ]
+        data.extend(self._running_instance_alias_models())
+        return ModelList(data=data)
+
+    def _running_instance_alias_models(self) -> list[ModelListModel]:
+        """One model entry per running instance, addressable via its alias.
+
+        The alias id (``<model-id>@<instance-id-prefix>``) can be used as the
+        ``model`` field on any text endpoint to pin requests to that instance.
+        """
+        alias_models: list[ModelListModel] = []
+        for instance_id, instance in self.state.instances.items():
+            model_id = instance.shard_assignments.model_id
+            card = model_cards.card_cache.get(model_id)
+            alias_models.append(
                 ModelListModel(
-                    id=card.model_id,
-                    hugging_face_id=card.model_id,
-                    name=card.model_id.short(),
-                    description="",
-                    tags=[],
-                    storage_size_megabytes=card.storage_size.in_mb,
-                    supports_tensor=card.supports_tensor,
-                    tasks=[task.value for task in card.tasks],
-                    is_custom=card.is_custom,
-                    family=card.family,
-                    quantization=card.quantization,
-                    base_model=card.base_model,
-                    capabilities=card.capabilities,
-                    reasoning_dialect=card.reasoning_dialect,
-                    context_length=card.context_length,
+                    id=f"{model_id}@{str(instance_id)[:8]}",
+                    hugging_face_id=model_id,
+                    name=f"{model_id.short()} @{str(instance_id)[:8]}",
+                    description=f"Running instance of {model_id}",
+                    instance_id=str(instance_id),
+                    tasks=[task.value for task in card.tasks] if card else [],
+                    capabilities=card.capabilities if card else [],
+                    reasoning_dialect=card.reasoning_dialect if card else "none",
+                    context_length=card.context_length if card else 0,
                 )
-                for card in cards
-            ]
-        )
+            )
+        return alias_models
 
     async def add_custom_model(self, payload: AddCustomModelParams) -> ModelListModel:
         """Fetch a model from HuggingFace and save as a custom model card, then sync across the cluster."""
@@ -2076,9 +2190,11 @@ class API:
 
     async def _apply_state(self):
         with self.event_receiver as events:
-            async for i_event in events:
+            async for delivery in events:
+                i_event = delivery.indexed_event
                 self._event_log.append(i_event.event)
-                self.state = apply(self.state, i_event)
+                if self.state_replica is None:
+                    self._state = apply(self._state, i_event)
                 event = i_event.event
 
                 if isinstance(event, ChunkGenerated):
@@ -2099,13 +2215,21 @@ class API:
                         except (BrokenResourceError, ClosedResourceError):
                             self._text_generation_queues.pop(event.command_id, None)
                 if isinstance(event, InstanceDeleted):
-                    self._close_streams_for_instance(event.instance_id)
+                    self._close_streams_for_instance(
+                        event.instance_id,
+                        delivery.state_after_event,
+                    )
                 if isinstance(event, TracesMerged):
                     self._save_merged_trace(event)
 
-    def _close_streams_for_instance(self, instance_id: InstanceId) -> None:
+    def _close_streams_for_instance(
+        self,
+        instance_id: InstanceId,
+        event_state: State | None = None,
+    ) -> None:
         """Close any active generation streams for commands running on the given instance."""
-        for task in self.state.tasks.values():
+        state = self.state if event_state is None else event_state
+        for task in state.tasks.values():
             if task.instance_id != instance_id:
                 continue
             if not isinstance(

@@ -5,7 +5,8 @@ from unittest.mock import MagicMock
 
 from exo.api.main import API
 from exo.api.types import ImageGenerationTaskParams
-from exo.shared.types.common import CommandId, ModelId
+from exo.shared.types.common import CommandId, ModelId, NodeId, SessionId
+from exo.shared.types.events import IndexedEvent, TestEvent
 from exo.shared.types.state import State
 from exo.shared.types.tasks import ImageGeneration, TextGeneration
 from exo.shared.types.text_generation import (
@@ -14,15 +15,30 @@ from exo.shared.types.text_generation import (
     TextGenerationTaskParams,
 )
 from exo.shared.types.worker.instances import InstanceId
+from exo.utils.state_replica import StateReplica
 
 
 def _make_api_with_state(state: State) -> API:
     """Create a minimal API instance with pre-set state."""
     api = object.__new__(API)
+    api.state_replica = None
     api.state = state
     api._text_generation_queues = {}  # pyright: ignore[reportPrivateUsage]
     api._image_generation_queues = {}  # pyright: ignore[reportPrivateUsage]
     return api
+
+
+def test_api_reads_current_shared_replica_state() -> None:
+    session = SessionId(master_node_id=NodeId("master"), election_clock=1)
+    state_replica = StateReplica(session=session, initial_state=State(), ready=True)
+    api = object.__new__(API)
+    api.state_replica = state_replica
+    api._state = State()  # pyright: ignore[reportPrivateUsage]
+
+    state_replica.apply(IndexedEvent(idx=0, event=TestEvent()))
+
+    assert api.state is state_replica.state
+    assert api.state.last_event_applied_idx == 0
 
 
 def _make_text_gen_task(

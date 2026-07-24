@@ -21,7 +21,6 @@ from exo.routing.event_router import (
     EventRouterBrokenResourceError,
     EventRouterClosedResourceError,
 )
-from exo.shared.apply import apply
 from exo.shared.constants import EXO_EVENT_LOG_DIR, EXO_TRACING_ENABLED
 from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.chunks import ErrorChunk
@@ -59,6 +58,7 @@ from exo.shared.types.events import (
     InstanceLinkDeleted,
     InstanceShardAssignmentsUpdated,
     LocalForwarderEvent,
+    MasterAnnounced,
     NodeGatheredInfo,
     NodeTimedOut,
     TaskCreated,
@@ -93,6 +93,8 @@ from exo.shared.types.worker.shards import PipelineShardMetadata
 from exo.utils.channels import Receiver, Sender
 from exo.utils.disk_event_log import DiskEventLog
 from exo.utils.event_buffer import MultiSourceBuffer
+from exo.utils.replica_store import ReplicaStore
+from exo.utils.state_replica import StateReplica
 from exo.utils.task_group import TaskGroup
 
 # A generation task that produces no chunk (token, prefill progress, or
@@ -188,10 +190,17 @@ class Master:
         local_event_receiver: Receiver[LocalForwarderEvent],
         global_event_sender: Sender[GlobalForwarderEvent],
         download_command_sender: Sender[ForwarderDownloadCommand],
+        state_replica: StateReplica | None = None,
+        replica_store: ReplicaStore | None = None,
     ):
         self.node_id = node_id
         self.session_id = session_id
-        self.state = State()
+        self.state_replica = state_replica or StateReplica(
+            session=session_id,
+            initial_state=State(),
+            ready=True,
+        )
+        self.replica_store = replica_store
         self._tg: TaskGroup = TaskGroup()
         self.command_task_mapping: dict[CommandId, TaskId] = {}
         self.command_receiver = command_receiver
@@ -215,6 +224,10 @@ class Master:
         ] = {}
         self._shift_task_instance: dict[TaskId, InstanceId] = {}
 
+    @property
+    def state(self) -> State:
+        return self.state_replica.state
+
     async def run(self):
         logger.info("Starting Master")
 
@@ -223,6 +236,7 @@ class Master:
                 tg.start_soon(self._event_processor)
                 tg.start_soon(self._command_processor)
                 tg.start_soon(self._plan)
+                await self.event_sender.send(MasterAnnounced(node_id=self.node_id))
         except* (EventRouterBrokenResourceError, EventRouterClosedResourceError):
             # Event router has been closed (try-star syntax handles error groups)
             pass
@@ -281,14 +295,23 @@ class Master:
                                     f"No instance found for model {command.task_params.model}"
                                 )
 
-                            available_instance_ids = sorted(
-                                instance_task_counts.keys(),
-                                key=lambda instance_id: instance_task_counts[
-                                    instance_id
-                                ],
-                            )
-
-                            decode_instance_id = available_instance_ids[0]
+                            if command.pinned_instance_id is not None:
+                                if (
+                                    command.pinned_instance_id
+                                    not in instance_task_counts
+                                ):
+                                    raise ValueError(
+                                        f"Pinned instance {command.pinned_instance_id} is not "
+                                        f"serving model {command.task_params.model}"
+                                    )
+                                decode_instance_id = command.pinned_instance_id
+                            else:
+                                decode_instance_id = min(
+                                    instance_task_counts,
+                                    key=lambda instance_id: instance_task_counts[
+                                        instance_id
+                                    ],
+                                )
                             task_id = TaskId()
                             params = command.task_params.model_copy(
                                 update={
@@ -626,9 +649,7 @@ class Master:
                 )
             )
             if plan:
-                follow_up_events.append(
-                    self._create_shift_task(instance_id, plan[0])
-                )
+                follow_up_events.append(self._create_shift_task(instance_id, plan[0]))
             else:
                 del self._layer_shift_plans[instance_id]
                 logger.info(f"Live layer shift for instance {instance_id} complete")
@@ -747,7 +768,9 @@ class Master:
                         )
 
                     indexed = IndexedEvent(event=event, idx=len(self._event_log))
-                    self.state = apply(self.state, indexed)
+                    if self.replica_store is not None:
+                        self.replica_store.append(self.session_id, indexed)
+                    self.state_replica.apply(indexed)
 
                     if isinstance(event, ChunkGenerated):
                         self._record_task_progress(event.command_id)

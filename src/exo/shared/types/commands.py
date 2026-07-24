@@ -24,6 +24,9 @@ class TestCommand(BaseCommand):
 
 class TextGeneration(BaseCommand):
     task_params: TextGenerationTaskParams
+    # When set, the master routes the request to this exact instance instead
+    # of load-balancing across all instances serving the model.
+    pinned_instance_id: InstanceId | None = None
 
 
 class ImageGeneration(BaseCommand):

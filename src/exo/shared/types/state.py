@@ -51,6 +51,9 @@ class State(FrozenModel):
     last_seen: Mapping[NodeId, datetime] = {}
     topology: Topology = Field(default_factory=Topology)
     last_event_applied_idx: int = Field(default=-1, ge=-1)
+    # Node currently coordinating the cluster (set when a master announces
+    # itself); lets clients advertise a stable API base URL.
+    master_node_id: NodeId | None = None
 
     # Granular node state mappings (update independently at different frequencies)
     node_identities: Mapping[NodeId, NodeIdentity] = {}

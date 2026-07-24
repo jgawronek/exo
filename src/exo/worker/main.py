@@ -11,6 +11,7 @@ from exo.download.download_utils import is_read_only_model_dir, resolve_existing
 from exo.routing.event_router import (
     EventRouterBrokenResourceError,
     EventRouterClosedResourceError,
+    ReplicatedEventDelivery,
 )
 from exo.shared.apply import apply
 from exo.shared.constants import EXO_MAX_INSTANCE_RETRIES
@@ -57,6 +58,7 @@ from exo.utils.channels import Receiver, Sender, channel
 from exo.utils.info_gatherer.info_gatherer import GatheredInfo, InfoGatherer
 from exo.utils.info_gatherer.net_profile import check_reachable
 from exo.utils.keyed_backoff import KeyedBackoff
+from exo.utils.state_replica import StateReplica
 from exo.utils.task_group import TaskGroup
 from exo.worker.plan import plan
 from exo.worker.runner.supervisor import RunnerSupervisor
@@ -67,13 +69,14 @@ class Worker:
         self,
         node_id: NodeId,
         *,
-        event_receiver: Receiver[IndexedEvent],
+        event_receiver: Receiver[ReplicatedEventDelivery],
         event_sender: Sender[Event],
         # This is for requesting updates. It doesn't need to be a general command sender right now,
         # but I think it's the correct way to be thinking about commands
         command_sender: Sender[ForwarderCommand],
         download_command_sender: Sender[ForwarderDownloadCommand],
         api_port: int,
+        state_replica: StateReplica | None = None,
     ):
         self.node_id: NodeId = node_id
         self.event_receiver = event_receiver
@@ -81,8 +84,9 @@ class Worker:
         self.command_sender = command_sender
         self.download_command_sender = download_command_sender
         self.api_port = api_port
+        self.state_replica = state_replica
 
-        self.state: State = State()
+        self._state = State()
         self.runners: dict[RunnerId, RunnerSupervisor] = {}
         self._tg: TaskGroup = TaskGroup()
 
@@ -98,6 +102,12 @@ class Worker:
             base=0.5, cap=10.0
         )
         self._stopped: anyio.Event = anyio.Event()
+
+    @property
+    def state(self) -> State:
+        if self.state_replica is not None:
+            return self.state_replica.state
+        return self._state
 
     async def run(self):
         logger.info("Starting Worker")
@@ -139,10 +149,11 @@ class Worker:
 
     async def _event_applier(self):
         with self.event_receiver as events:
-            async for event in events:
-                # 2. for each event, apply it to the state
-                self.state = apply(self.state, event=event)
-                event = event.event
+            async for delivery in events:
+                indexed_event = delivery.indexed_event
+                if self.state_replica is None:
+                    self._state = apply(self._state, event=indexed_event)
+                event = indexed_event.event
 
                 if isinstance(event, InstanceDeleted):
                     self._instance_backoff.reset(event.instance_id)
