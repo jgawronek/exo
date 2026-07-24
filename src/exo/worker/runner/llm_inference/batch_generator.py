@@ -8,6 +8,7 @@ from typing import BinaryIO
 import mlx.core as mx
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
+from exo.download.download_utils import build_model_path
 from exo.shared.constants import EXO_MAX_CONCURRENT_REQUESTS
 from exo.shared.types.chunks import ErrorChunk, GenerationChunk, PrefillProgressChunk
 from exo.shared.types.common import ModelId
@@ -26,9 +27,8 @@ from exo.shared.types.worker.runner_response import (
     FinishedResponse,
     GenerationResponse,
 )
-from exo.utils.channels import MpReceiver, MpSender
-from exo.download.download_utils import build_model_path
 from exo.shared.types.worker.shards import PipelineShardMetadata
+from exo.utils.channels import MpReceiver, MpSender
 from exo.worker.disaggregated.server import PrefillRequest
 from exo.worker.engines.base import Engine
 from exo.worker.engines.mlx.auto_parallel import decode_timings, shift_pipeline_layers
