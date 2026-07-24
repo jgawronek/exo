@@ -158,7 +158,7 @@
     />
   </button>
 
-  <!-- Right: Downloads + Mobile Right Toggle -->
+  <!-- Right: Library + Mobile Right Toggle -->
   <nav
     class="absolute right-4 md:right-6 top-1/2 -translate-y-1/2 flex items-center gap-2 md:gap-4"
     aria-label="Main navigation"
@@ -200,9 +200,9 @@
       </button>
     {/if}
     <a
-      href="/#/downloads"
+      href="/#/library"
       class="text-xs md:text-sm text-white/70 hover:text-xeo-green transition-colors tracking-wider uppercase flex items-center gap-1.5 md:gap-2 cursor-pointer"
-      title="View downloads overview"
+      title="View model library"
     >
       {#if downloadProgress}
         <!-- Compact download progress indicator -->
@@ -253,12 +253,12 @@
           <path d="M5 21h14" />
         </svg>
       {/if}
-      <span class="hidden sm:inline">Downloads</span>
+      <span class="hidden sm:inline">Library</span>
     </a>
     <a
-      href="/#/integrations"
+      href="/#/server"
       class="text-xs md:text-sm text-white/70 hover:text-xeo-green transition-colors tracking-wider uppercase flex items-center gap-1.5 md:gap-2 cursor-pointer"
-      title="Integration configs for external tools"
+      title="Server connections for external tools"
     >
       <svg
         class="w-4 h-4"
@@ -274,7 +274,7 @@
           d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
         />
       </svg>
-      <span class="hidden sm:inline">Integrations</span>
+      <span class="hidden sm:inline">Server</span>
     </a>
     {#if showAdvanced}
       <a
