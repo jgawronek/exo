@@ -89,6 +89,8 @@ def detach_speculative_state(batch: GenerationBatch) -> None:
         # The row is gone (finished or cancelled); its cache rows were
         # dropped with it, so there is nothing to trim.
         state.queue.clear()
+    if state.rounds > 0:
+        _log_acceptance(state)
 
 
 def flush_speculative_tokens(batch: GenerationBatch, state: SpeculativeState) -> None:
@@ -205,12 +207,16 @@ def _run_speculative_round(
     state.drafted_tokens += len(proposals)
     state.accepted_tokens += matched_proposals
     if state.rounds % _ACCEPTANCE_LOG_INTERVAL_ROUNDS == 0:
-        acceptance = state.accepted_tokens / max(1, state.drafted_tokens)
-        tokens_per_round = (state.accepted_tokens + state.rounds) / state.rounds
-        logger.info(
-            f"speculative decode: {acceptance:.0%} draft acceptance, "
-            f"{tokens_per_round:.2f} tokens/target-pass over {state.rounds} rounds"
-        )
+        _log_acceptance(state)
+
+
+def _log_acceptance(state: SpeculativeState) -> None:
+    acceptance = state.accepted_tokens / max(1, state.drafted_tokens)
+    tokens_per_round = (state.accepted_tokens + state.rounds) / state.rounds
+    logger.info(
+        f"speculative decode: {acceptance:.0%} draft acceptance, "
+        f"{tokens_per_round:.2f} tokens/target-pass over {state.rounds} rounds"
+    )
 
 
 def _draft_proposals(

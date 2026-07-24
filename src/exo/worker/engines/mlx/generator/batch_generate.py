@@ -517,6 +517,11 @@ class ExoBatchGenerator:
 
             if is_done:
                 del self._active_tasks[response.uid]
+                if self._speculative is not None and (
+                    self._speculative.uid == response.uid
+                ):
+                    detach_speculative_state(gb)
+                    self._speculative = None
             elif (
                 max_stop_len > 0
                 and len(state.potential_stop_sequence_text) > max_stop_len
