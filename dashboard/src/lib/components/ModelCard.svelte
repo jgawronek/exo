@@ -288,8 +288,6 @@
       y: number;
       iconSize: number;
       screenHeight: number;
-      currentFillHeight: number;
-      modelFillHeight: number;
     }> = [];
 
     // Use API placement data directly
@@ -321,8 +319,6 @@
         y: centerY + Math.sin(angle) * radius,
         iconSize,
         screenHeight,
-        currentFillHeight: screenHeight * (currentPercent / 100),
-        modelFillHeight: screenHeight * ((newPercent - currentPercent) / 100),
       };
     });
 
@@ -665,17 +661,6 @@
               </feMerge>
             </filter>
 
-            <!-- Strong glow for new memory -->
-            <filter
-              id="memGlow-{filterId}"
-              x="-100%"
-              y="-100%"
-              width="300%"
-              height="300%"
-            >
-              <feGaussianBlur stdDeviation="3" result="blur" />
-              <feComposite in="SourceGraphic" in2="blur" operator="over" />
-            </filter>
           </defs>
 
           <!-- Connection lines between nodes (if multiple) -->
@@ -860,27 +845,14 @@
                     height={node.screenHeight}
                     fill="#0a0a0a"
                   />
-                  <!-- Current memory fill -->
-                  <rect
-                    x="4"
-                    y={2 + node.screenHeight - node.currentFillHeight}
-                    width={node.iconSize - 8}
-                    height={node.currentFillHeight}
-                    fill="rgba(255,215,0,0.75)"
-                  />
-                  <!-- New model memory fill (glowing yellow) -->
-                  {#if node.modelUsageGB > 0 && node.isUsed}
+                  <!-- Projected memory fill (bottom-up, matches main topology) -->
+                  {#if node.newPercent > 0}
                     <rect
                       x="4"
-                      y={2 +
-                        node.screenHeight -
-                        node.currentFillHeight -
-                        node.modelFillHeight}
+                      y={2 + node.screenHeight * (1 - node.newPercent / 100)}
                       width={node.iconSize - 8}
-                      height={node.modelFillHeight}
-                      fill="#FFD700"
-                      filter="url(#memGlow-{filterId})"
-                      class="animate-pulse-slow"
+                      height={node.screenHeight * (node.newPercent / 100)}
+                      fill="rgba(255,215,0,0.75)"
                     />
                   {/if}
                   <!-- Base/keyboard -->
@@ -918,26 +890,14 @@
                     height={node.iconSize - 8}
                     fill="#0a0a0a"
                   />
-                  <!-- Current memory fill -->
-                  <rect
-                    x="4"
-                    y={4 +
-                      (node.iconSize - 8) * (1 - node.currentPercent / 100)}
-                    width={node.iconSize - 8}
-                    height={(node.iconSize - 8) * (node.currentPercent / 100)}
-                    fill="rgba(255,215,0,0.75)"
-                  />
-                  <!-- New model memory fill -->
-                  {#if node.modelUsageGB > 0 && node.isUsed}
+                  <!-- Projected memory fill (bottom-up, matches main topology) -->
+                  {#if node.newPercent > 0}
                     <rect
                       x="4"
                       y={4 + (node.iconSize - 8) * (1 - node.newPercent / 100)}
                       width={node.iconSize - 8}
-                      height={(node.iconSize - 8) *
-                        ((node.newPercent - node.currentPercent) / 100)}
-                      fill="#FFD700"
-                      filter="url(#memGlow-{filterId})"
-                      class="animate-pulse-slow"
+                      height={(node.iconSize - 8) * (node.newPercent / 100)}
+                      fill="rgba(255,215,0,0.75)"
                     />
                   {/if}
                 </g>
@@ -965,28 +925,15 @@
                     height={node.iconSize * 0.36}
                     fill="#0a0a0a"
                   />
-                  <!-- Current memory fill -->
-                  <rect
-                    x="4"
-                    y={node.iconSize * 0.32 +
-                      node.iconSize * 0.36 * (1 - node.currentPercent / 100)}
-                    width={node.iconSize - 8}
-                    height={node.iconSize * 0.36 * (node.currentPercent / 100)}
-                    fill="rgba(255,215,0,0.75)"
-                  />
-                  <!-- New model memory fill -->
-                  {#if node.modelUsageGB > 0 && node.isUsed}
+                  <!-- Projected memory fill (bottom-up, matches main topology) -->
+                  {#if node.newPercent > 0}
                     <rect
                       x="4"
                       y={node.iconSize * 0.32 +
                         node.iconSize * 0.36 * (1 - node.newPercent / 100)}
                       width={node.iconSize - 8}
-                      height={node.iconSize *
-                        0.36 *
-                        ((node.newPercent - node.currentPercent) / 100)}
-                      fill="#FFD700"
-                      filter="url(#memGlow-{filterId})"
-                      class="animate-pulse-slow"
+                      height={node.iconSize * 0.36 * (node.newPercent / 100)}
+                      fill="rgba(255,215,0,0.75)"
                     />
                   {/if}
                 </g>
@@ -1009,25 +956,14 @@
                   <!-- Memory fill background -->
                   <polygon points={hexPoints} fill="#0a0a0a" />
                   <g clip-path="url(#hexClip-{filterId}-{nodeIndex})">
-                    <!-- Current memory fill -->
-                    <rect
-                      x="0"
-                      y={node.iconSize * (1 - node.currentPercent / 100)}
-                      width={node.iconSize}
-                      height={node.iconSize * (node.currentPercent / 100)}
-                      fill="rgba(255,215,0,0.75)"
-                    />
-                    <!-- New model memory fill -->
-                    {#if node.modelUsageGB > 0 && node.isUsed}
+                    <!-- Projected memory fill (bottom-up, matches main topology) -->
+                    {#if node.newPercent > 0}
                       <rect
                         x="0"
                         y={node.iconSize * (1 - node.newPercent / 100)}
                         width={node.iconSize}
-                        height={node.iconSize *
-                          ((node.newPercent - node.currentPercent) / 100)}
-                        fill="#FFD700"
-                        filter="url(#memGlow-{filterId})"
-                        class="animate-pulse-slow"
+                        height={node.iconSize * (node.newPercent / 100)}
+                        fill="rgba(255,215,0,0.75)"
                       />
                     {/if}
                   </g>
@@ -1087,17 +1023,3 @@
   </div>
 </div>
 
-<style>
-  @keyframes pulse-slow {
-    0%,
-    100% {
-      opacity: 0.8;
-    }
-    50% {
-      opacity: 1;
-    }
-  }
-  .animate-pulse-slow {
-    animation: pulse-slow 1.5s ease-in-out infinite;
-  }
-</style>
