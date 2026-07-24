@@ -109,9 +109,15 @@
   const rdmaCtlData = $derived(nodeRdmaCtl());
   const nodeFilter = $derived(previewNodeFilter());
   const occupiedNodes = $derived(occupiedNodeIds());
-  /** When creating a new instance, nodes already in use cannot be selected. */
+  /** Instance card the user selected (also filters the topology map). */
+  let selectedInstanceId = $state<string | null>(null);
+  /**
+   * When creating a new instance, nodes already in use cannot be selected.
+   * Suppressed while an instance is selected: the map then shows only that
+   * instance's (occupied) nodes and they should render at full brightness.
+   */
   const placementDisabledNodes = $derived(
-    selectedModelId ? occupiedNodes : new Set<string>(),
+    selectedModelId && !selectedInstanceId ? occupiedNodes : new Set<string>(),
   );
 
   // Aggregate active download progress across all instances for header indicator
@@ -1033,7 +1039,6 @@
 
   // Instance hover state for highlighting nodes in topology
   let hoveredInstanceId = $state<string | null>(null);
-  let selectedInstanceId = $state<string | null>(null);
 
   // Preview card hover state for highlighting nodes in topology
   let hoveredPreviewNodes = $state<Set<string>>(new Set());
