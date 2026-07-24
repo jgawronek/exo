@@ -72,10 +72,12 @@ class StateReplica:
             raise ReplicaSequenceError(
                 "Snapshot session does not match replica session"
             )
+        was_ready = self._ready
         self._state = state
         self._last_event = None
         self._ready = False
-        self._ready_event = anyio.Event()
+        if was_ready:
+            self._ready_event = anyio.Event()
 
     def install_snapshot(self, session: SessionId, state: State) -> None:
         self.prepare_snapshot(session, state)

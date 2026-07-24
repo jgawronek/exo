@@ -1,3 +1,4 @@
+import anyio
 import pytest
 
 from exo.shared.types.common import NodeId, SessionId
@@ -81,3 +82,27 @@ def test_session_rebase_retains_state_and_resets_event_cursor() -> None:
         update={"last_event_applied_idx": -1}
     )
     assert replica.apply(make_indexed_test_event(0)).last_event_applied_idx == 0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_preparation_preserves_existing_readiness_waiters() -> None:
+    session = make_session("master", 1)
+    replica = StateReplica(
+        session=session,
+        initial_state=State(),
+        ready=False,
+    )
+    waiter_completed = anyio.Event()
+
+    async def wait_for_ready() -> None:
+        await replica.wait_ready()
+        waiter_completed.set()
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(wait_for_ready)
+        await anyio.sleep(0)
+        replica.prepare_snapshot(session, State(last_event_applied_idx=5))
+        replica.mark_ready()
+        with anyio.fail_after(0.1):
+            await waiter_completed.wait()
+        task_group.cancel_scope.cancel()
