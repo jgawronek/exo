@@ -102,7 +102,6 @@ from exo.api.types import (
     TraceStatsResponse,
     normalize_image_size,
 )
-from exo.routing.event_router import ReplicatedEventDelivery
 from exo.api.types.claude_api import (
     ClaudeMessagesRequest,
     ClaudeMessagesResponse,
@@ -131,6 +130,7 @@ from exo.master.placement_utils import (
     allocate_layers_by_measured_speed,
     plan_pipeline_layer_shift_steps,
 )
+from exo.routing.event_router import ReplicatedEventDelivery
 from exo.shared.apply import apply
 from exo.shared.constants import (
     DASHBOARD_DIR,
@@ -185,7 +185,6 @@ from exo.shared.types.common import CommandId, Id, NodeId, SystemId
 from exo.shared.types.events import (
     ChunkGenerated,
     Event,
-    IndexedEvent,
     InstanceDeleted,
     TracesMerged,
 )

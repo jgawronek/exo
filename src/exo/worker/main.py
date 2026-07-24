@@ -26,7 +26,6 @@ from exo.shared.types.commands import (
 from exo.shared.types.common import CommandId, NodeId, SystemId
 from exo.shared.types.events import (
     Event,
-    IndexedEvent,
     InputChunkReceived,
     InstanceDeleted,
     NodeDownloadProgress,
