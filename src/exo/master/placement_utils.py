@@ -94,6 +94,12 @@ def estimate_memory_bandwidth_gigabytes_per_second(
     return None
 
 
+# Bandwidth assumed for chips missing from the table above, so latency
+# estimates stay computable on unrecognised hardware. Deliberately modest:
+# unknown chips should not look like an upgrade over known ones.
+_FALLBACK_MEMORY_BANDWIDTH_GBPS = 100.0
+
+
 def allocate_layers_by_throughput(
     total_layers: int,
     node_throughputs: list[float],
@@ -690,6 +696,100 @@ def order_cycle_for_fastest_links(
             best_order, best_cost = order, cost
 
     return Cycle(node_ids=list(best_order))
+
+
+# Fixed cost of one TCP ring hop during decode: syscall, kernel network
+# stack, and wire round trip. Decode payloads are a few KiB, so this
+# constant dominates the per-hop term on any link faster than ~1 Gb/s.
+RING_HOP_BASE_LATENCY_SECONDS = 0.0003
+
+# Decode activations are hidden_size elements of (b)float16 per token.
+_DECODE_PAYLOAD_BYTES_PER_HIDDEN_ELEMENT = 2
+
+
+def estimate_cycle_decode_seconds_per_token(
+    cycle: Cycle,
+    cycle_digraph: Topology,
+    node_network: Mapping[NodeId, NodeNetworkInfo],
+    node_identities: Mapping[NodeId, NodeIdentity],
+    node_memory: Mapping[NodeId, MemoryUsage],
+    model_card: ModelCard,
+) -> float:
+    """Estimated per-token pipeline decode latency for a candidate cycle.
+
+    Per-token pipeline decode latency is the sum of every stage's compute
+    time plus the cost of every ring hop. Decode is memory-bandwidth bound,
+    so stage time is the weight bytes a node reads per token divided by its
+    memory bandwidth; hop cost is a fixed per-hop latency plus the decode
+    payload over the hop's link speed. Placement uses this to rank candidate
+    cycles, rewarding fast ring links and penalising slow hops (e.g. a node
+    reachable only over 1 Gb Ethernet).
+
+    Layer allocation mirrors what ``get_shard_assignments`` would produce via
+    ``allocate_layers_by_throughput``. Its ValueError (a cycle whose nodes
+    cannot hold the model's layers) is handled here by returning
+    ``float("inf")``: such a cycle ranks behind every feasible one instead of
+    aborting placement while alternatives remain.
+    """
+    ordered_cycle = order_cycle_for_fastest_links(cycle, cycle_digraph, node_network)
+    node_ids = ordered_cycle.node_ids
+
+    node_bandwidths = [
+        estimate_memory_bandwidth_gigabytes_per_second(
+            node_identities.get(node_id, NodeIdentity())
+        )
+        or _FALLBACK_MEMORY_BANDWIDTH_GBPS
+        for node_id in node_ids
+    ]
+    max_layers_per_node = [
+        (node_memory[node_id].ram_available.in_bytes * model_card.n_layers)
+        // model_card.storage_size.in_bytes
+        for node_id in node_ids
+    ]
+    try:
+        layer_allocations = allocate_layers_by_throughput(
+            total_layers=model_card.n_layers,
+            node_throughputs=node_bandwidths,
+            max_layers_per_node=max_layers_per_node,
+        )
+    except ValueError:
+        return float("inf")
+
+    bytes_per_layer = model_card.storage_size.in_bytes / model_card.n_layers
+    compute_seconds = sum(
+        layer_count * bytes_per_layer / (bandwidth * 1e9)
+        for layer_count, bandwidth in zip(
+            layer_allocations, node_bandwidths, strict=True
+        )
+    )
+
+    world_size = len(node_ids)
+    if world_size == 1:
+        return compute_seconds
+
+    payload_bits = model_card.hidden_size * _DECODE_PAYLOAD_BYTES_PER_HIDDEN_ELEMENT * 8
+    hop_seconds = 0.0
+    for rank, node_id in enumerate(node_ids):
+        right_neighbor = node_ids[(rank + 1) % world_size]
+        directional_speeds = [
+            speed
+            for source, sink in ((node_id, right_neighbor), (right_neighbor, node_id))
+            if (
+                speed := effective_hop_speed_megabits(
+                    source, sink, cycle_digraph, node_network
+                )
+            )
+            is not None
+            and speed > 0
+        ]
+        hop_speed_megabits = min(
+            directional_speeds, default=_NOMINAL_LINK_SPEED_MEGABITS["unknown"]
+        )
+        hop_seconds += RING_HOP_BASE_LATENCY_SECONDS + payload_bits / (
+            hop_speed_megabits * 1e6
+        )
+
+    return compute_seconds + hop_seconds
 
 
 def find_ip_prioritised(

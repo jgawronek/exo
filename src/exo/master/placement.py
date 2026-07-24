@@ -4,13 +4,13 @@ from typing import Sequence
 
 from exo.master.placement_utils import (
     Cycle,
+    estimate_cycle_decode_seconds_per_token,
     filter_cycles_by_memory,
     get_mlx_jaccl_coordinators,
     get_mlx_jaccl_devices_matrix,
     get_mlx_ring_hosts_by_node,
     get_ring_connections_per_host,
     get_shard_assignments,
-    get_smallest_cycles,
     order_cycle_for_fastest_links,
 )
 from exo.shared.models.model_cards import ModelId
@@ -211,8 +211,6 @@ def place_instance(
                 "Pipeline parallelism is not supported for Gemma 4; use tensor parallelism instead."
             )
 
-    smallest_cycles = get_smallest_cycles(cycles_with_sufficient_memory)
-
     required_backends = set(INSTANCE_META_BACKENDS[command.instance_meta]) & set(
         command.model_card.backends
     )
@@ -223,14 +221,14 @@ def place_instance(
             f"{command.instance_meta.value} which requires "
             f"{sorted(b.value for b in INSTANCE_META_BACKENDS[command.instance_meta])}"
         )
-    smallest_cycles = [
+    feasible_cycles = [
         cycle
-        for cycle in smallest_cycles
+        for cycle in cycles_with_sufficient_memory
         if all(
             set(node_backends.get(node_id, [])) & required_backends for node_id in cycle
         )
     ]
-    if not smallest_cycles:
+    if not feasible_cycles:
         raise ValueError(
             f"No cycle where every node supports a backend in "
             f"{sorted(b.value for b in required_backends)} for {command.model_card.model_id}"
@@ -244,37 +242,60 @@ def place_instance(
             for node_id in cycle
         )
 
-    smallest_rdma_cycles = [
+    rdma_cycles = [
         cycle
-        for cycle in smallest_cycles
+        for cycle in feasible_cycles
         if topology.is_rdma_cycle(cycle) and _all_rdma_ctl_enabled(cycle)
     ]
 
     if command.instance_meta == InstanceMeta.MlxJaccl:
-        if not smallest_rdma_cycles:
+        if not rdma_cycles:
             raise ValueError(
                 "Requested RDMA (MlxJaccl) but no RDMA-connected cycles available"
             )
-        smallest_cycles = smallest_rdma_cycles
+        feasible_cycles = rdma_cycles
 
     cycles_with_leaf_nodes: list[Cycle] = [
         cycle
-        for cycle in smallest_cycles
+        for cycle in feasible_cycles
         if any(topology.node_is_leaf(node_id) for node_id in cycle)
     ]
 
     resolved_download_status = download_status or {}
     candidate_cycles = (
-        cycles_with_leaf_nodes if cycles_with_leaf_nodes != [] else smallest_cycles
+        cycles_with_leaf_nodes if cycles_with_leaf_nodes != [] else feasible_cycles
     )
 
+    def _estimated_decode_latency(cycle: Cycle) -> float:
+        # The latency model covers pipeline decode only; other shardings fall
+        # back to the remaining ranking keys.
+        if command.sharding != Sharding.Pipeline:
+            return 0.0
+        return estimate_cycle_decode_seconds_per_token(
+            cycle=cycle,
+            cycle_digraph=topology.get_subgraph_from_nodes(cycle.node_ids),
+            node_network=node_network,
+            node_identities=node_identities or {},
+            node_memory=node_memory,
+            model_card=command.model_card,
+        )
+
+    # Fewest nodes first: every extra node adds a mandatory ring hop each
+    # token, and the compute it could offload is overstated by the
+    # storage-based latency model for sparse (MoE) models — so cycle size
+    # outranks estimated latency, which then picks the fastest same-size
+    # cycle (best links, best hardware).
     selected_cycle = max(
         candidate_cycles,
         key=lambda cycle: (
-            _cycle_accelerator_score(cycle, node_backends, required_backends),
+            _cycle_accelerator_score(cycle, node_backends, required_backends)
+            / len(cycle),
+            -len(cycle),
+            -_estimated_decode_latency(cycle),
             _cycle_download_score(
                 cycle, command.model_card.model_id, resolved_download_status
-            ),
+            )
+            / len(cycle),
             sum(
                 (node_memory[node_id].ram_available for node_id in cycle),
                 start=Memory(),
