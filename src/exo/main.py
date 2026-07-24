@@ -363,7 +363,12 @@ class Node:
                 if self.event_router is not event_router:
                     return
                 if self.download_coordinator:
-                    await self.download_coordinator.shutdown()
+                    with anyio.fail_after(10):
+                        await self.download_coordinator.shutdown()
+                if self.worker:
+                    with anyio.fail_after(10):
+                        await self.worker.shutdown()
+                if self.download_coordinator:
                     self.download_coordinator = DownloadCoordinator(
                         self.node_id,
                         exo_shard_downloader(offline=self.offline),
@@ -375,7 +380,6 @@ class Node:
                     )
                     self._tg.start_soon(self.download_coordinator.run)
                 if self.worker:
-                    await self.worker.shutdown()
                     self.worker = Worker(
                         self.node_id,
                         event_receiver=event_router.receiver(),
