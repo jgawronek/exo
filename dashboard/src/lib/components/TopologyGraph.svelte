@@ -9,6 +9,7 @@
     nodeRdmaCtl,
     nodeIdentities,
     instances,
+    instanceStageTimings,
     type NodeInfo,
   } from "$lib/stores/app.svelte";
 
@@ -85,6 +86,47 @@
         const range = `L${shard.startLayer}-${shard.endLayer - 1}`;
         const label = total ? `${range} (${held}/${total})` : range;
         labels[nodeId] = labels[nodeId] ? `${labels[nodeId]} ${label}` : label;
+      }
+    }
+    return labels;
+  });
+
+  const stageTimingsData = $derived(instanceStageTimings());
+
+  // Measured decode effectiveness per node, relative to the fastest node's
+  // per-layer rate (100% = fastest). This is the same measurement the
+  // rebalance allocator optimizes from.
+  const nodeEfficiencyLabels = $derived.by(() => {
+    const labels: Record<string, { text: string; color: string }> = {};
+    for (const timings of Object.values(stageTimingsData || {})) {
+      const entries = Object.entries(timings || {}).filter(
+        ([, timing]) =>
+          timing.layersHeld > 0 && timing.computeMsPerToken > 0,
+      );
+      if (entries.length < 2) continue;
+      const ratesByNode = entries.map(([nodeId, timing]) => ({
+        nodeId,
+        computeMsPerToken: timing.computeMsPerToken,
+        ratePerLayer: timing.layersHeld / timing.computeMsPerToken,
+      }));
+      const bestRate = Math.max(
+        ...ratesByNode.map((entry) => entry.ratePerLayer),
+      );
+      if (bestRate <= 0) continue;
+      for (const entry of ratesByNode) {
+        const efficiencyPercent = Math.round(
+          (entry.ratePerLayer / bestRate) * 100,
+        );
+        const color =
+          efficiencyPercent >= 75
+            ? "rgba(74,222,128,0.85)"
+            : efficiencyPercent >= 40
+              ? "rgba(250,204,21,0.85)"
+              : "rgba(248,113,113,0.85)";
+        labels[entry.nodeId] = {
+          text: `${entry.computeMsPerToken.toFixed(1)}ms/tok · ${efficiencyPercent}% eff`,
+          color,
+        };
       }
     }
     return labels;
@@ -262,7 +304,7 @@
       .append("path")
       .attr("d", "M 0 0 L 10 5 L 0 10")
       .attr("fill", "none")
-      .attr("stroke", "var(--exo-light-gray, #B3B3B3)")
+      .attr("stroke", "var(--xeo-light-gray, #B3B3B3)")
       .attr("stroke-width", "1.6")
       .attr("stroke-linecap", "round")
       .attr("stroke-linejoin", "round")
@@ -275,7 +317,7 @@
         .attr("y", centerY)
         .attr("text-anchor", "middle")
         .attr("dominant-baseline", "middle")
-        .attr("fill", "rgba(255,215,0,0.4)")
+        .attr("fill", "oklch(0.78 0.17 145 / 0.4)")
         .attr("font-size", isMinimized ? 10 : 12)
         .attr("font-family", "SF Mono, monospace")
         .attr("letter-spacing", "0.1em")
@@ -619,22 +661,22 @@
 
       // Holographic wireframe colors - bright yellow for filter, subtle yellow for hover, grey for filtered out
       const wireColor = isInFilter
-        ? "rgba(255,215,0,1)" // Bright yellow for filter selection
+        ? "oklch(0.78 0.17 145 / 1)" // Bright yellow for filter selection
         : isHovered
-          ? "rgba(255,215,0,0.7)" // Subtle yellow for hover
+          ? "oklch(0.78 0.17 145 / 0.7)" // Subtle yellow for hover
           : isHighlighted
-            ? "rgba(255,215,0,0.9)" // Yellow for instance highlight
+            ? "oklch(0.78 0.17 145 / 0.9)" // Yellow for instance highlight
             : isFilteredOut
               ? "rgba(140,140,140,0.6)" // Grey for filtered out
               : "rgba(179,179,179,0.8)"; // Default
       const wireColorBright = "rgba(255,255,255,0.9)";
       const fillColor = isInFilter
-        ? "rgba(255,215,0,0.25)"
+        ? "oklch(0.78 0.17 145 / 0.25)"
         : isHovered
-          ? "rgba(255,215,0,0.12)"
+          ? "oklch(0.78 0.17 145 / 0.12)"
           : isHighlighted
-            ? "rgba(255,215,0,0.15)"
-            : "rgba(255,215,0,0.08)";
+            ? "oklch(0.78 0.17 145 / 0.15)"
+            : "oklch(0.78 0.17 145 / 0.08)";
       const strokeWidth = isInFilter
         ? 3
         : isHovered
@@ -643,7 +685,7 @@
             ? 2.5
             : 1.5;
       const screenFill = "rgba(0,20,40,0.9)";
-      const glowColor = "rgba(255,215,0,0.3)";
+      const glowColor = "oklch(0.78 0.17 145 / 0.3)";
 
       const nodeG = nodesGroup
         .append("g")
@@ -725,7 +767,7 @@
             )
             .attr("width", iconBaseWidth)
             .attr("height", memFillActualHeight)
-            .attr("fill", "rgba(255,215,0,0.75)")
+            .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
             .attr("clip-path", `url(#${studioClipId})`);
         }
 
@@ -808,7 +850,7 @@
             )
             .attr("width", iconBaseWidth)
             .attr("height", memFillActualHeight)
-            .attr("fill", "rgba(255,215,0,0.75)")
+            .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
             .attr("clip-path", `url(#${miniClipId})`);
         }
 
@@ -896,7 +938,7 @@
             )
             .attr("width", screenWidth - screenBezel * 2)
             .attr("height", memFillActualHeight)
-            .attr("fill", "rgba(255,215,0,0.85)")
+            .attr("fill", "oklch(0.78 0.17 145 / 0.85)")
             .attr("clip-path", `url(#${screenClipId})`);
         }
 
@@ -998,7 +1040,7 @@
             )
             .attr("width", hexRadius * 2)
             .attr("height", memFillActualHeight)
-            .attr("fill", "rgba(255,215,0,0.75)")
+            .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
             .attr("clip-path", `url(#${hexClipId})`);
 
           // Redraw the outline so the fill doesn't blur the wireframe edge
@@ -1120,7 +1162,7 @@
           .attr("y", nameY)
           .attr("text-anchor", "middle")
           .attr("dominant-baseline", "middle")
-          .attr("fill", "#FFD700")
+          .attr("fill", "oklch(0.78 0.17 145)")
           .attr("font-size", fontSize)
           .attr("font-weight", 500)
           .attr("font-family", "SF Mono, Monaco, monospace")
@@ -1137,7 +1179,7 @@
           .attr("font-family", "SF Mono, Monaco, monospace");
         memText
           .append("tspan")
-          .attr("fill", "rgba(255,215,0,0.9)")
+          .attr("fill", "oklch(0.78 0.17 145 / 0.9)")
           .text(`${formatBytes(ramUsed)}`);
         memText
           .append("tspan")
@@ -1159,6 +1201,18 @@
             .attr("font-size", fontSize * 0.8)
             .attr("font-family", "SF Mono, Monaco, monospace")
             .text(layerLabel);
+          const efficiency = nodeEfficiencyLabels[nodeInfo.id];
+          if (efficiency) {
+            nodeG
+              .append("text")
+              .attr("x", nodeInfo.x)
+              .attr("y", infoY + fontSize * 2.25)
+              .attr("text-anchor", "middle")
+              .attr("fill", efficiency.color)
+              .attr("font-size", fontSize * 0.75)
+              .attr("font-family", "SF Mono, Monaco, monospace")
+              .text(efficiency.text);
+          }
         }
       } else if (showCompactLabels) {
         // COMPACT MODE: Just name and basic info (4+ nodes)
@@ -1175,7 +1229,7 @@
           .attr("x", nodeInfo.x)
           .attr("y", nameY)
           .attr("text-anchor", "middle")
-          .attr("fill", "#FFD700")
+          .attr("fill", "oklch(0.78 0.17 145)")
           .attr("font-size", fontSize)
           .attr("font-family", "SF Mono, Monaco, monospace")
           .text(shortName);
@@ -1187,7 +1241,7 @@
           .attr("x", nodeInfo.x)
           .attr("y", statsY)
           .attr("text-anchor", "middle")
-          .attr("fill", "rgba(255,215,0,0.7)")
+          .attr("fill", "oklch(0.78 0.17 145 / 0.7)")
           .attr("font-size", fontSize * 0.85)
           .attr("font-family", "SF Mono, Monaco, monospace")
           .text(
@@ -1205,6 +1259,18 @@
             .attr("font-size", fontSize * 0.85)
             .attr("font-family", "SF Mono, Monaco, monospace")
             .text(layerLabelCompact);
+          const efficiencyCompact = nodeEfficiencyLabels[nodeInfo.id];
+          if (efficiencyCompact) {
+            nodeG
+              .append("text")
+              .attr("x", nodeInfo.x)
+              .attr("y", statsY + 18)
+              .attr("text-anchor", "middle")
+              .attr("fill", efficiencyCompact.color)
+              .attr("font-size", fontSize * 0.8)
+              .attr("font-family", "SF Mono, Monaco, monospace")
+              .text(efficiencyCompact.text);
+          }
         }
       } else {
         // MINIMIZED MODE: Show name above and memory info below (like main topology)
@@ -1221,7 +1287,7 @@
           .attr("x", nodeInfo.x)
           .attr("y", nameY)
           .attr("text-anchor", "middle")
-          .attr("fill", "#FFD700")
+          .attr("fill", "oklch(0.78 0.17 145)")
           .attr("font-size", fontSize)
           .attr("font-weight", "500")
           .attr("font-family", "SF Mono, Monaco, monospace")
@@ -1238,7 +1304,7 @@
           .attr("font-family", "SF Mono, Monaco, monospace");
         memTextMini
           .append("tspan")
-          .attr("fill", "rgba(255,215,0,0.9)")
+          .attr("fill", "oklch(0.78 0.17 145 / 0.9)")
           .text(`${formatBytes(ramUsed)}`);
         memTextMini
           .append("tspan")
@@ -1260,6 +1326,18 @@
             .attr("font-size", fontSize * 0.8)
             .attr("font-family", "SF Mono, Monaco, monospace")
             .text(layerLabelMini);
+          const efficiencyMini = nodeEfficiencyLabels[nodeInfo.id];
+          if (efficiencyMini) {
+            nodeG
+              .append("text")
+              .attr("x", nodeInfo.x)
+              .attr("y", infoY + 17)
+              .attr("text-anchor", "middle")
+              .attr("fill", efficiencyMini.color)
+              .attr("font-size", fontSize * 0.75)
+              .attr("font-family", "SF Mono, Monaco, monospace")
+              .text(efficiencyMini.text);
+          }
         }
       }
 
@@ -1333,6 +1411,7 @@
     const _filteredNodes = filteredNodes;
     const _highlightedNodes = highlightedNodes;
     const _nodeLayerLabels = nodeLayerLabels;
+    const _nodeEfficiencyLabels = nodeEfficiencyLabels;
     if (_data) {
       renderGraph();
     }
@@ -1360,7 +1439,7 @@
     transition: opacity 0.2s ease;
   }
   :global(.graph-link) {
-    stroke: var(--exo-light-gray, #b3b3b3);
+    stroke: var(--xeo-light-gray, #b3b3b3);
     stroke-width: 1px;
     stroke-dasharray: 4, 4;
     opacity: 0.8;
