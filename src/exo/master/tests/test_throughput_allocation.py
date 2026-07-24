@@ -263,6 +263,32 @@ def test_ring_connections_scale_up_only_on_fast_measured_links() -> None:
     assert get_ring_connections_per_host(cycle, topology, network(None)) == 1
 
 
+def test_ring_connections_scale_up_when_any_hop_is_fast() -> None:
+    from exo.master.placement_utils import (
+        FAST_RING_LINK_CONNECTIONS,
+        get_ring_connections_per_host,
+    )
+    from exo.shared.types.topology import Cycle
+
+    topology, node_network, _identities, mac, spark_a, spark_b, pc_3090 = (
+        _heterogeneous_cluster_topology()
+    )
+    # sparks adjacent: the 200G spark-spark hop is fast even though every
+    # other hop runs over the slow LAN.
+    mixed_cycle = Cycle(node_ids=[mac, spark_a, spark_b, pc_3090])
+    assert (
+        get_ring_connections_per_host(mixed_cycle, topology, node_network)
+        == FAST_RING_LINK_CONNECTIONS
+    )
+
+    # without the fast spark link every hop is slow -> single connection.
+    slow_topology, slow_network, _identities2, mac2, spark_a2, spark_b2, pc2 = (
+        _heterogeneous_cluster_topology(spark_link_megabits=None)
+    )
+    slow_cycle = Cycle(node_ids=[mac2, spark_a2, spark_b2, pc2])
+    assert get_ring_connections_per_host(slow_cycle, slow_topology, slow_network) == 1
+
+
 def test_cycle_reordered_so_fast_link_is_a_ring_hop() -> None:
     from exo.master.placement_utils import order_cycle_for_fastest_links
     from exo.shared.types.topology import Cycle

@@ -588,7 +588,7 @@ _NOMINAL_LINK_SPEED_MEGABITS: Mapping[str, int] = {
 }
 
 # A single TCP stream saturates well below line rate on fast links, so the
-# ring backend opens several parallel connections per neighbour when every
+# ring backend opens several parallel connections per neighbour when any
 # ring link reports a measured speed at or above this threshold.
 FAST_RING_LINK_MIN_MEGABITS = 25_000
 FAST_RING_LINK_CONNECTIONS = 4
@@ -620,23 +620,34 @@ def get_ring_connections_per_host(
 ) -> int:
     """Parallel TCP connections per ring neighbour for an instance.
 
-    Conservative: multiple connections are only used when every ring link in
-    both directions has a measured (not nominal) speed of at least
-    FAST_RING_LINK_MIN_MEGABITS, since extra connections on slow links only
-    add ports and sockets without improving throughput.
+    The MLX ring backend requires every rank to hold the same number of
+    connections to its left and right neighbour, which transitively forces
+    one count for the whole ring - per-hop counts are not expressible.
+    Multiple connections are therefore used when *any* ring hop is fast in
+    both directions: fast hops (e.g. a 200G spark-spark link) need several
+    streams to approach line rate during prefill, while the extra sockets
+    on slow hops are close to free - transfers under 256 KiB (every decode
+    payload) use a single socket, and larger prefill transfers split into
+    parallel streams on the same interface without losing throughput.
     """
     world_size = len(selected_cycle)
     if world_size < 2:
         return 1
     for rank, node_id in enumerate(selected_cycle.node_ids):
         right_neighbor = selected_cycle.node_ids[(rank + 1) % world_size]
-        for source, sink in ((node_id, right_neighbor), (right_neighbor, node_id)):
-            speed = _measured_link_speed_megabits(
-                source, sink, cycle_digraph, node_network
+        hop_is_fast = all(
+            (
+                speed := _measured_link_speed_megabits(
+                    source, sink, cycle_digraph, node_network
+                )
             )
-            if speed is None or speed < FAST_RING_LINK_MIN_MEGABITS:
-                return 1
-    return FAST_RING_LINK_CONNECTIONS
+            is not None
+            and speed >= FAST_RING_LINK_MIN_MEGABITS
+            for source, sink in ((node_id, right_neighbor), (right_neighbor, node_id))
+        )
+        if hop_is_fast:
+            return FAST_RING_LINK_CONNECTIONS
+    return 1
 
 
 def _effective_link_speed_megabits(interface: NetworkInterfaceInfo | None) -> int:
