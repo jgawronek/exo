@@ -113,6 +113,7 @@ class ExoBatchGenerator:
     _active_tasks: dict[int, _EngineTask] = field(default_factory=dict, init=False)
     _supports_token_relay: bool = field(init=False)
     _speculative: SpeculativeState | None = field(default=None, init=False)
+    _untrimmable_cache_logged: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self._mlx_gen = MlxBatchGenerator(
@@ -579,6 +580,13 @@ class ExoBatchGenerator:
         if gb.uids != [task.uid]:
             return None
         if not can_trim_prompt_cache(gb.prompt_cache):
+            if not self._untrimmable_cache_logged:
+                self._untrimmable_cache_logged = True
+                logger.warning(
+                    "speculative decoding disabled: the model's KV cache is "
+                    "not trimmable (hybrid SSM/linear-attention layers cannot "
+                    "roll back rejected draft tokens)"
+                )
             return None
         return task
 
