@@ -8,6 +8,7 @@
     nodeThunderboltBridge,
     nodeRdmaCtl,
     nodeIdentities,
+    instances,
     type NodeInfo,
   } from "$lib/stores/app.svelte";
 
@@ -35,6 +36,59 @@
   const tbBridgeData = $derived(nodeThunderboltBridge());
   const rdmaCtlData = $derived(nodeRdmaCtl());
   const identitiesData = $derived(nodeIdentities());
+  const instancesData = $derived(instances());
+
+  function unwrapTagged(wrapped: unknown): unknown {
+    if (!wrapped || typeof wrapped !== "object") return null;
+    const keys = Object.keys(wrapped as Record<string, unknown>);
+    return keys.length === 1
+      ? (wrapped as Record<string, unknown>)[keys[0]]
+      : null;
+  }
+
+  // Per-node layer ranges held by running instances, e.g. "L0-28 (29/32)".
+  const nodeLayerLabels = $derived.by(() => {
+    const labels: Record<string, string> = {};
+    for (const instanceWrapped of Object.values(instancesData || {})) {
+      const instance = unwrapTagged(instanceWrapped) as {
+        shardAssignments?: {
+          nodeToRunner?: Record<string, string>;
+          runnerToShard?: Record<string, unknown>;
+        };
+      } | null;
+      const assignments = instance?.shardAssignments;
+      if (!assignments) continue;
+      const runnerToNode: Record<string, string> = {};
+      for (const [nodeId, runnerId] of Object.entries(
+        assignments.nodeToRunner || {},
+      )) {
+        runnerToNode[runnerId] = nodeId;
+      }
+      for (const [runnerId, shardWrapped] of Object.entries(
+        assignments.runnerToShard || {},
+      )) {
+        const shard = unwrapTagged(shardWrapped) as {
+          startLayer?: number;
+          endLayer?: number;
+          nLayers?: number;
+        } | null;
+        const nodeId = runnerToNode[runnerId];
+        if (
+          !nodeId ||
+          shard?.startLayer === undefined ||
+          shard?.endLayer === undefined
+        ) {
+          continue;
+        }
+        const held = shard.endLayer - shard.startLayer;
+        const total = shard.nLayers;
+        const range = `L${shard.startLayer}-${shard.endLayer - 1}`;
+        const label = total ? `${range} (${held}/${total})` : range;
+        labels[nodeId] = labels[nodeId] ? `${labels[nodeId]} ${label}` : label;
+      }
+    }
+    return labels;
+  });
 
   function getNodeLabel(nodeId: string): string {
     const node = data?.nodes?.[nodeId];
@@ -1093,6 +1147,19 @@
           .append("tspan")
           .attr("fill", "rgba(179,179,179,0.7)")
           .text(` (${ramUsagePercent.toFixed(0)}%)`);
+
+        const layerLabel = nodeLayerLabels[nodeInfo.id];
+        if (layerLabel) {
+          nodeG
+            .append("text")
+            .attr("x", nodeInfo.x)
+            .attr("y", infoY + fontSize * 1.15)
+            .attr("text-anchor", "middle")
+            .attr("fill", "rgba(0,255,170,0.85)")
+            .attr("font-size", fontSize * 0.8)
+            .attr("font-family", "SF Mono, Monaco, monospace")
+            .text(layerLabel);
+        }
       } else if (showCompactLabels) {
         // COMPACT MODE: Just name and basic info (4+ nodes)
         const fontSize = Math.max(7, nodeRadius * 0.11);
@@ -1126,6 +1193,19 @@
           .text(
             `${ramUsagePercent.toFixed(0)}%${!isNaN(gpuTemp) ? " " + gpuTemp.toFixed(0) + "°C" : ""}`,
           );
+
+        const layerLabelCompact = nodeLayerLabels[nodeInfo.id];
+        if (layerLabelCompact) {
+          nodeG
+            .append("text")
+            .attr("x", nodeInfo.x)
+            .attr("y", statsY + 9)
+            .attr("text-anchor", "middle")
+            .attr("fill", "rgba(0,255,170,0.85)")
+            .attr("font-size", fontSize * 0.85)
+            .attr("font-family", "SF Mono, Monaco, monospace")
+            .text(layerLabelCompact);
+        }
       } else {
         // MINIMIZED MODE: Show name above and memory info below (like main topology)
         const fontSize = 8;
@@ -1168,6 +1248,19 @@
           .append("tspan")
           .attr("fill", "rgba(179,179,179,0.7)")
           .text(` (${ramUsagePercent.toFixed(0)}%)`);
+
+        const layerLabelMini = nodeLayerLabels[nodeInfo.id];
+        if (layerLabelMini) {
+          nodeG
+            .append("text")
+            .attr("x", nodeInfo.x)
+            .attr("y", infoY + 9)
+            .attr("text-anchor", "middle")
+            .attr("fill", "rgba(0,255,170,0.85)")
+            .attr("font-size", fontSize * 0.8)
+            .attr("font-family", "SF Mono, Monaco, monospace")
+            .text(layerLabelMini);
+        }
       }
 
       // Debug mode: Show TB bridge and RDMA status
@@ -1239,6 +1332,7 @@
     const _hoveredNodeId = hoveredNodeId;
     const _filteredNodes = filteredNodes;
     const _highlightedNodes = highlightedNodes;
+    const _nodeLayerLabels = nodeLayerLabels;
     if (_data) {
       renderGraph();
     }
