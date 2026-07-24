@@ -275,27 +275,27 @@
           <!-- Assistant message header -->
           <div class="flex items-center gap-1.5 sm:gap-2 mb-1.5 sm:mb-2">
             <div
-              class="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-exo-yellow rounded-full shadow-[0_0_10px_rgba(255,215,0,0.5)]"
+              class="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-xeo-green rounded-full shadow-[0_0_10px_oklch(0.78_0.17_145/0.5)]"
             ></div>
             <span
-              class="text-sm sm:text-xs text-exo-yellow tracking-[0.15em] sm:tracking-[0.2em] uppercase font-medium"
-              >EXO</span
+              class="text-sm sm:text-xs text-xeo-green tracking-[0.15em] sm:tracking-[0.2em] uppercase font-medium"
+              >XEO</span
             >
             <span
-              class="text-xs sm:text-sm text-exo-light-gray tracking-wider tabular-nums"
+              class="text-xs sm:text-sm text-xeo-light-gray tracking-wider tabular-nums"
               >{formatTimestamp(message.timestamp)}</span
             >
             {#if message.ttftMs || message.tps}
-              <span class="text-xs text-exo-light-gray/80 font-mono ml-2">
-                {#if message.ttftMs}<span class="text-exo-light-gray/50"
+              <span class="text-xs text-xeo-light-gray/80 font-mono ml-2">
+                {#if message.ttftMs}<span class="text-xeo-light-gray/50"
                     >TTFT</span
                   >
                   {message.ttftMs.toFixed(
                     0,
                   )}ms{/if}{#if message.ttftMs && message.tps}<span
-                    class="text-exo-light-gray/30 mx-1">•</span
+                    class="text-xeo-light-gray/30 mx-1">•</span
                   >{/if}{#if message.tps}{message.tps.toFixed(1)}
-                  <span class="text-exo-light-gray/50">tok/s</span>{/if}
+                  <span class="text-xeo-light-gray/50">tok/s</span>{/if}
               </span>
             {/if}
           </div>
@@ -305,15 +305,15 @@
             class="flex items-center justify-end gap-1.5 sm:gap-2 mb-1.5 sm:mb-2"
           >
             <span
-              class="text-xs sm:text-sm text-exo-light-gray tracking-wider tabular-nums"
+              class="text-xs sm:text-sm text-xeo-light-gray tracking-wider tabular-nums"
               >{formatTimestamp(message.timestamp)}</span
             >
             <span
-              class="text-sm sm:text-xs text-exo-light-gray tracking-[0.1em] sm:tracking-[0.15em] uppercase"
+              class="text-sm sm:text-xs text-xeo-light-gray tracking-[0.1em] sm:tracking-[0.15em] uppercase"
               >QUERY</span
             >
             <div
-              class="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-exo-light-gray/50 rounded-full"
+              class="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-xeo-light-gray/50 rounded-full"
             ></div>
           </div>
         {/if}
@@ -331,7 +331,7 @@
             <div class="flex gap-2 justify-end">
               <button
                 onclick={handleCancelDelete}
-                class="px-3 py-1.5 text-sm font-mono tracking-wider uppercase bg-exo-medium-gray/20 text-exo-light-gray border border-exo-medium-gray/30 rounded hover:bg-exo-medium-gray/30 transition-colors cursor-pointer"
+                class="px-3 py-1.5 text-sm font-mono tracking-wider uppercase bg-xeo-medium-gray/20 text-xeo-light-gray border border-xeo-medium-gray/30 rounded hover:bg-xeo-medium-gray/30 transition-colors cursor-pointer"
               >
                 CANCEL
               </button>
@@ -351,20 +351,20 @@
               bind:value={editContent}
               onkeydown={handleEditKeydown}
               oninput={handleEditInput}
-              class="w-full bg-exo-black/60 border border-exo-yellow/30 rounded px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:border-exo-yellow/50 resize-none"
+              class="w-full bg-xeo-black/60 border border-xeo-green/30 rounded px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:border-xeo-green/50 resize-none"
               style="min-height: 60px; max-height: 200px;"
             ></textarea>
             <div class="flex gap-2 justify-end mt-2">
               <button
                 onclick={handleCancelEdit}
-                class="px-3 py-1.5 text-sm font-mono tracking-wider uppercase bg-exo-medium-gray/20 text-exo-light-gray border border-exo-medium-gray/30 rounded hover:bg-exo-medium-gray/30 transition-colors cursor-pointer"
+                class="px-3 py-1.5 text-sm font-mono tracking-wider uppercase bg-xeo-medium-gray/20 text-xeo-light-gray border border-xeo-medium-gray/30 rounded hover:bg-xeo-medium-gray/30 transition-colors cursor-pointer"
               >
                 CANCEL
               </button>
               <button
                 onclick={handleSaveEdit}
                 disabled={!editContent.trim()}
-                class="px-3 py-1.5 text-sm font-mono tracking-wider uppercase bg-transparent text-exo-yellow border border-exo-yellow/30 rounded hover:border-exo-yellow/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
+                class="px-3 py-1.5 text-sm font-mono tracking-wider uppercase bg-transparent text-xeo-green border border-xeo-green/30 rounded hover:border-xeo-green/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
               >
                 <svg
                   class="w-3 h-3"
@@ -387,7 +387,7 @@
           <div
             class={message.role === "user"
               ? "command-panel rounded-lg rounded-tr-sm inline-block"
-              : "command-panel rounded-lg rounded-tl-sm border-l-2 border-l-exo-yellow/50 block w-full"}
+              : "command-panel rounded-lg rounded-tl-sm border-l-2 border-l-xeo-green/50 block w-full"}
           >
             {#if message.role === "user"}
               <!-- User message styling -->
@@ -397,14 +397,14 @@
                   <div class="flex flex-wrap gap-2 mb-3">
                     {#each message.attachments as attachment}
                       <div
-                        class="flex items-center gap-2 bg-exo-dark-gray/60 border border-exo-yellow/20 rounded px-2 py-1 text-xs font-mono"
+                        class="flex items-center gap-2 bg-xeo-dark-gray/60 border border-xeo-green/20 rounded px-2 py-1 text-xs font-mono"
                       >
                         {#if attachment.type === "image" && attachment.preview}
                           <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
                           <img
                             src={attachment.preview}
                             alt={attachment.name}
-                            class="w-12 h-12 object-cover rounded border border-exo-yellow/20 cursor-pointer hover:border-exo-yellow/50 transition-colors"
+                            class="w-12 h-12 object-cover rounded border border-xeo-green/20 cursor-pointer hover:border-xeo-green/50 transition-colors"
                             onclick={() => {
                               if (attachment.preview)
                                 expandedImageSrc = attachment.preview;
@@ -413,7 +413,7 @@
                         {:else}
                           <span>{getAttachmentIcon(attachment)}</span>
                         {/if}
-                        <span class="text-exo-yellow" title={attachment.name}
+                        <span class="text-xeo-green" title={attachment.name}
                           >{truncateName(attachment.name)}</span
                         >
                       </div>
@@ -437,11 +437,11 @@
                 {/if}
                 {#if message.thinking && message.thinking.trim().length > 0}
                   <div
-                    class="mb-3 rounded border border-exo-yellow/20 bg-exo-black/40"
+                    class="mb-3 rounded border border-xeo-green/20 bg-xeo-black/40"
                   >
                     <button
                       type="button"
-                      class="w-full flex items-center justify-between px-3 py-2 text-xs font-mono uppercase tracking-[0.2em] text-exo-light-gray/80 hover:text-exo-yellow transition-colors cursor-pointer"
+                      class="w-full flex items-center justify-between px-3 py-2 text-xs font-mono uppercase tracking-[0.2em] text-xeo-light-gray/80 hover:text-xeo-green transition-colors cursor-pointer"
                       onclick={() => toggleThinkingVisibility(message.id)}
                       aria-expanded={isThinkingExpanded(message.id)}
                       aria-controls={`thinking-panel-${message.id}`}
@@ -464,7 +464,7 @@
                         <span>Thinking...</span>
                       </span>
                       <span
-                        class="text-[10px] tracking-[0.2em] text-exo-light-gray/60 ml-4"
+                        class="text-[10px] tracking-[0.2em] text-xeo-light-gray/60 ml-4"
                       >
                         {isThinkingExpanded(message.id) ? "HIDE" : "SHOW"}
                       </span>
@@ -472,7 +472,7 @@
                     {#if isThinkingExpanded(message.id)}
                       <div
                         id={`thinking-panel-${message.id}`}
-                        class="px-3 pb-3 text-xs text-exo-light-gray/90 font-mono whitespace-pre-wrap break-words leading-relaxed"
+                        class="px-3 pb-3 text-xs text-xeo-light-gray/90 font-mono whitespace-pre-wrap break-words leading-relaxed"
                       >
                         {message.thinking.trim()}
                       </div>
@@ -489,7 +489,7 @@
                         <img
                           src={attachment.preview}
                           alt=""
-                          class="max-w-full max-h-[512px] rounded-lg border border-exo-yellow/20 shadow-lg shadow-black/20 cursor-pointer"
+                          class="max-w-full max-h-[512px] rounded-lg border border-xeo-green/20 shadow-lg shadow-black/20 cursor-pointer"
                           onclick={() => {
                             if (attachment.preview)
                               expandedImageSrc = attachment.preview;
@@ -502,7 +502,7 @@
                           <!-- Expand button -->
                           <button
                             type="button"
-                            class="p-2 rounded-lg bg-exo-dark-gray/80 border border-exo-yellow/30 text-exo-yellow hover:bg-exo-dark-gray hover:border-exo-yellow/50 cursor-pointer"
+                            class="p-2 rounded-lg bg-xeo-dark-gray/80 border border-xeo-green/30 text-xeo-green hover:bg-xeo-dark-gray hover:border-xeo-green/50 cursor-pointer"
                             onclick={() => {
                               if (attachment.preview)
                                 expandedImageSrc = attachment.preview;
@@ -526,7 +526,7 @@
                           <!-- Edit button -->
                           <button
                             type="button"
-                            class="p-2 rounded-lg bg-exo-dark-gray/80 border border-exo-yellow/30 text-exo-yellow hover:bg-exo-dark-gray hover:border-exo-yellow/50 cursor-pointer"
+                            class="p-2 rounded-lg bg-xeo-dark-gray/80 border border-xeo-green/30 text-xeo-green hover:bg-xeo-dark-gray hover:border-xeo-green/50 cursor-pointer"
                             onclick={() => {
                               if (attachment.preview) {
                                 setEditingImage(attachment.preview, message);
@@ -551,7 +551,7 @@
                           <!-- Download button -->
                           <button
                             type="button"
-                            class="p-2 rounded-lg bg-exo-dark-gray/80 border border-exo-yellow/30 text-exo-yellow hover:bg-exo-dark-gray hover:border-exo-yellow/50 cursor-pointer"
+                            class="p-2 rounded-lg bg-xeo-dark-gray/80 border border-xeo-green/30 text-xeo-green hover:bg-xeo-dark-gray hover:border-xeo-green/50 cursor-pointer"
                             onclick={() => {
                               if (attachment.preview) {
                                 const link = document.createElement("a");
@@ -586,13 +586,13 @@
 
                 <div class="text-xs text-foreground">
                   {#if message.content === "Generating image..." || message.content === "Editing image..." || message.content?.startsWith("Generating...") || message.content?.startsWith("Editing...")}
-                    <div class="flex items-center gap-3 text-exo-yellow">
+                    <div class="flex items-center gap-3 text-xeo-green">
                       <div class="relative">
                         <div
-                          class="w-8 h-8 border-2 border-exo-yellow/30 border-t-exo-yellow rounded-full animate-spin"
+                          class="w-8 h-8 border-2 border-xeo-green/30 border-t-xeo-green rounded-full animate-spin"
                         ></div>
                         <svg
-                          class="absolute inset-0 w-8 h-8 p-1.5 text-exo-yellow/60"
+                          class="absolute inset-0 w-8 h-8 p-1.5 text-xeo-green/60"
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
@@ -629,7 +629,7 @@
                       />
                       {#if loading && !message.content}
                         <span
-                          class="inline-block w-2 h-4 bg-exo-yellow/70 ml-1 cursor-blink"
+                          class="inline-block w-2 h-4 bg-xeo-green/70 ml-1 cursor-blink"
                         ></span>
                       {/if}
                     {/if}
@@ -649,7 +649,7 @@
             <!-- Copy button -->
             <button
               onclick={() => handleCopy(message.content, message.id)}
-              class="p-1.5 text-exo-light-gray hover:text-exo-yellow transition-colors rounded cursor-pointer"
+              class="p-1.5 text-xeo-light-gray hover:text-xeo-green transition-colors rounded cursor-pointer"
               title="Copy message"
             >
               {#if copiedMessageId === message.id}
@@ -687,7 +687,7 @@
             {#if message.role === "user"}
               <button
                 onclick={() => handleStartEdit(message.id, message.content)}
-                class="p-1.5 text-exo-light-gray hover:text-exo-yellow transition-colors rounded cursor-pointer"
+                class="p-1.5 text-xeo-light-gray hover:text-xeo-green transition-colors rounded cursor-pointer"
                 title="Edit message"
               >
                 <svg
@@ -713,8 +713,8 @@
                 class="p-1.5 transition-colors rounded cursor-pointer {isHeatmapVisible(
                   message.id,
                 )
-                  ? 'text-exo-yellow'
-                  : 'text-exo-light-gray hover:text-exo-yellow'}"
+                  ? 'text-xeo-green'
+                  : 'text-xeo-light-gray hover:text-xeo-green'}"
                 title={isHeatmapVisible(message.id)
                   ? "Hide uncertainty heatmap"
                   : "Show uncertainty heatmap"}
@@ -739,7 +739,7 @@
             {#if message.role === "assistant" && isLastAssistantMessage(message.id) && !loading}
               <button
                 onclick={handleRegenerate}
-                class="p-1.5 text-exo-light-gray hover:text-exo-yellow transition-colors rounded cursor-pointer"
+                class="p-1.5 text-xeo-light-gray hover:text-xeo-green transition-colors rounded cursor-pointer"
                 title="Regenerate response"
               >
                 <svg
@@ -763,8 +763,8 @@
               onclick={() => handleDeleteClick(message.id)}
               disabled={loading}
               class="p-1.5 transition-colors rounded {loading
-                ? 'text-exo-light-gray/30 cursor-not-allowed'
-                : 'text-exo-light-gray hover:text-red-400 hover:bg-red-500/10 cursor-pointer'}"
+                ? 'text-xeo-light-gray/30 cursor-not-allowed'
+                : 'text-xeo-light-gray hover:text-red-400 hover:bg-red-500/10 cursor-pointer'}"
               title={loading
                 ? "Cannot delete while generating"
                 : "Delete message"}
@@ -794,18 +794,18 @@
       class="flex-1 flex flex-col items-center justify-center text-center pt-[20vh]"
     >
       <div
-        class="w-12 h-12 sm:w-16 sm:h-16 border border-exo-yellow/20 rounded-full flex items-center justify-center mb-3 sm:mb-4"
+        class="w-12 h-12 sm:w-16 sm:h-16 border border-xeo-green/20 rounded-full flex items-center justify-center mb-3 sm:mb-4"
       >
         <div
-          class="w-6 h-6 sm:w-8 sm:h-8 border border-exo-yellow/40 rounded-full flex items-center justify-center"
+          class="w-6 h-6 sm:w-8 sm:h-8 border border-xeo-green/40 rounded-full flex items-center justify-center"
         >
           <div
-            class="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-exo-yellow/60 rounded-full"
+            class="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-xeo-green/60 rounded-full"
           ></div>
         </div>
       </div>
       <p
-        class="text-xs sm:text-sm text-exo-light-gray tracking-[0.15em] sm:tracking-[0.2em] uppercase"
+        class="text-xs sm:text-sm text-xeo-light-gray tracking-[0.15em] sm:tracking-[0.2em] uppercase"
       >
         AWAITING INPUT
       </p>
@@ -823,7 +823,7 @@
     <button
       type="button"
       onclick={scrollToBottom}
-      class="sticky bottom-4 left-1/2 -translate-x-1/2 w-10 h-10 rounded-full bg-exo-dark-gray/90 border border-exo-medium-gray/50 flex items-center justify-center text-exo-light-gray hover:text-exo-yellow hover:border-exo-yellow/50 transition-all shadow-lg cursor-pointer z-10"
+      class="sticky bottom-4 left-1/2 -translate-x-1/2 w-10 h-10 rounded-full bg-xeo-dark-gray/90 border border-xeo-medium-gray/50 flex items-center justify-center text-xeo-light-gray hover:text-xeo-green hover:border-xeo-green/50 transition-all shadow-lg cursor-pointer z-10"
       title="Scroll to bottom"
       aria-label="Scroll to bottom of messages"
     >

@@ -28,6 +28,7 @@ import mlx.core as mx
 from mlx_lm.generate import GenerationBatch
 from mlx_lm.models.cache import make_prompt_cache, trim_prompt_cache
 
+from exo.shared.environment import get_compatible_environment_value
 from exo.worker.engines.mlx.types import Model
 from exo.worker.runner.bootstrap import logger
 
@@ -36,7 +37,9 @@ from exo.worker.runner.bootstrap import logger
 # (1 + 0.25*k) target passes rather than ~1. Measured on an M3 Ultra with
 # Qwen3-32B-8bit + Qwen3-0.6B-4bit (67% first-token acceptance): k=1 and k=2
 # give +23% decode TPS while k=4 is a 23% regression.
-DRAFT_TOKENS_PER_ROUND: int = int(os.environ.get("EXO_DRAFT_TOKENS", "2"))
+DRAFT_TOKENS_PER_ROUND: int = int(
+    get_compatible_environment_value(os.environ, "EXO_DRAFT_TOKENS", "2")
+)
 _DRAFT_CATCH_UP_CHUNK_SIZE = 512
 _ACCEPTANCE_LOG_INTERVAL_ROUNDS = 200
 

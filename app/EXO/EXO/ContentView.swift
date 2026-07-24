@@ -80,7 +80,7 @@ struct ContentView: View {
                     .fontWeight(.semibold)
             }
             Text(
-                "Device discovery won't work. To fix:\n1. Quit EXO\n2. Open System Settings → Privacy & Security → Local Network\n3. Toggle EXO off, then back on\n4. Relaunch EXO"
+                "Device discovery won't work. To fix:\n1. Quit XEO\n2. Open System Settings → Privacy & Security → Local Network\n3. Toggle XEO off, then back on\n4. Relaunch XEO"
             )
             .font(.caption2)
             .foregroundColor(.secondary)
@@ -127,7 +127,7 @@ struct ContentView: View {
     private var statusSection: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("EXO")
+                Text("XEO")
                     .font(.headline)
                 Text(controller.status.displayText)
                     .font(.caption)
@@ -179,7 +179,7 @@ struct ContentView: View {
                     }
                 }
             } else {
-                Text("Connecting to EXO…")
+                Text("Connecting to XEO…")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -565,13 +565,13 @@ struct ContentView: View {
 
     private func showUninstallConfirmationAlert() {
         let alert = NSAlert()
-        alert.messageText = "Uninstall EXO"
+        alert.messageText = "Uninstall XEO"
         alert.informativeText = """
-            This will remove EXO and all its system components:
+            This will remove XEO and all its system components:
 
             • Network configuration daemon
             • Launch at login registration
-            • EXO network location
+            • Legacy exo network location
 
             The app will be moved to Trash.
             """

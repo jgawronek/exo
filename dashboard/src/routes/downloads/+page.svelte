@@ -403,30 +403,30 @@
   </button>
 {/snippet}
 
-<div class="min-h-screen bg-exo-dark-gray text-white">
+<div class="min-h-screen bg-xeo-dark-gray text-white">
   <HeaderNav showHome={true} />
   <div class="max-w-7xl mx-auto px-4 lg:px-8 py-6 space-y-6">
     <div class="flex items-center justify-between gap-4 flex-wrap">
       <div>
         <h1
-          class="text-2xl font-mono tracking-[0.2em] uppercase text-exo-yellow"
+          class="text-2xl font-mono tracking-[0.2em] uppercase text-xeo-green"
         >
           Downloads
         </h1>
-        <p class="text-sm text-exo-light-gray">
+        <p class="text-sm text-xeo-light-gray">
           Overview of models on each node
         </p>
       </div>
       <div class="flex items-center gap-3">
         <button
           type="button"
-          class="text-xs font-mono text-exo-light-gray hover:text-exo-yellow transition-colors uppercase border border-exo-medium-gray/40 px-2 py-1 rounded"
+          class="text-xs font-mono text-xeo-light-gray hover:text-xeo-green transition-colors uppercase border border-xeo-medium-gray/40 px-2 py-1 rounded"
           onclick={() => refreshState()}
           title="Force refresh from /state"
         >
           Refresh
         </button>
-        <div class="text-[11px] font-mono text-exo-light-gray">
+        <div class="text-[11px] font-mono text-xeo-light-gray">
           Last update: {lastUpdateTs
             ? new Date(lastUpdateTs).toLocaleTimeString()
             : "n/a"}
@@ -436,12 +436,12 @@
 
     {#if !hasDownloads}
       <div
-        class="rounded border border-exo-medium-gray/30 bg-exo-black/30 p-6 text-center text-exo-light-gray space-y-2"
+        class="rounded border border-xeo-medium-gray/30 bg-xeo-black/30 p-6 text-center text-xeo-light-gray space-y-2"
       >
         <div class="text-sm">
           No downloads found. Start a model download to see progress here.
         </div>
-        <div class="text-[11px] text-exo-light-gray/70">
+        <div class="text-[11px] text-xeo-light-gray/70">
           Download keys detected: {downloadKeys.length === 0
             ? "none"
             : downloadKeys.join(", ")}
@@ -449,19 +449,19 @@
       </div>
     {:else}
       <div
-        class="rounded border border-exo-medium-gray/30 bg-exo-black/30 overflow-x-auto"
+        class="rounded border border-xeo-medium-gray/30 bg-xeo-black/30 overflow-x-auto"
       >
         <table class="w-full text-left font-mono text-xs">
           <thead>
-            <tr class="border-b border-exo-medium-gray/30">
+            <tr class="border-b border-xeo-medium-gray/30">
               <th
-                class="sticky left-0 z-10 bg-exo-black px-4 py-3 text-[11px] uppercase tracking-wider text-exo-yellow font-medium whitespace-nowrap border-r border-exo-medium-gray/20"
+                class="sticky left-0 z-10 bg-xeo-black px-4 py-3 text-[11px] uppercase tracking-wider text-xeo-green font-medium whitespace-nowrap border-r border-xeo-medium-gray/20"
               >
                 Model
               </th>
               {#each nodeColumns as col}
                 <th
-                  class="px-4 py-3 text-[11px] uppercase tracking-wider text-exo-light-gray font-medium text-center whitespace-nowrap min-w-[120px]"
+                  class="px-4 py-3 text-[11px] uppercase tracking-wider text-xeo-light-gray font-medium text-center whitespace-nowrap min-w-[120px]"
                 >
                   <div>{col.label}</div>
                   {#if col.diskAvailable != null}
@@ -478,10 +478,10 @@
           <tbody>
             {#each modelRows as row}
               <tr
-                class="group border-b border-exo-medium-gray/20 hover:bg-exo-medium-gray/10 transition-colors"
+                class="group border-b border-xeo-medium-gray/20 hover:bg-xeo-medium-gray/10 transition-colors"
               >
                 <td
-                  class="sticky left-0 z-10 bg-exo-dark-gray group-hover:bg-[oklch(0.18_0_0)] transition-colors px-4 py-3 whitespace-nowrap border-r border-exo-medium-gray/20"
+                  class="sticky left-0 z-10 bg-xeo-dark-gray group-hover:bg-[oklch(0.18_0_0)] transition-colors px-4 py-3 whitespace-nowrap border-r border-xeo-medium-gray/20"
                 >
                   <div class="flex items-center gap-2">
                     <div class="min-w-0">
@@ -551,14 +551,14 @@
                           cell.speed,
                         )} - ETA {formatEta(cell.etaMs)}"
                       >
-                        <span class="text-exo-yellow text-sm font-medium"
+                        <span class="text-xeo-green text-sm font-medium"
                           >{clampPercent(cell.percentage).toFixed(1)}%</span
                         >
                         <div
-                          class="w-16 h-2 bg-exo-black/60 rounded-sm overflow-hidden"
+                          class="w-16 h-2 bg-xeo-black/60 rounded-sm overflow-hidden"
                         >
                           <div
-                            class="h-full bg-gradient-to-r from-exo-yellow to-exo-yellow/70 transition-all duration-300"
+                            class="h-full bg-gradient-to-r from-xeo-green to-xeo-green/70 transition-all duration-300"
                             style="width: {clampPercent(
                               cell.percentage,
                             ).toFixed(1)}%"
@@ -570,7 +570,7 @@
                         <div class="flex gap-1 mt-0.5">
                           <button
                             type="button"
-                            class="text-white/50 hover:text-exo-yellow transition-colors cursor-pointer"
+                            class="text-white/50 hover:text-xeo-green transition-colors cursor-pointer"
                             onclick={() =>
                               cancelDownload(col.nodeId, row.modelId)}
                             title="Pause download"
@@ -597,7 +597,7 @@
                             class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden"
                           >
                             <div
-                              class="h-full bg-exo-light-gray/40 rounded-full"
+                              class="h-full bg-xeo-light-gray/40 rounded-full"
                               style="width: {(
                                 (cell.downloaded / cell.total) *
                                 100
@@ -608,7 +608,7 @@
                             {#if row.shardMetadata}
                               <button
                                 type="button"
-                                class="text-white/50 hover:text-exo-yellow transition-colors cursor-pointer"
+                                class="text-white/50 hover:text-xeo-green transition-colors cursor-pointer"
                                 onclick={() =>
                                   startDownload(col.nodeId, row.shardMetadata!)}
                                 title="Resume download on this node"
@@ -625,7 +625,7 @@
                         {:else if row.shardMetadata}
                           <button
                             type="button"
-                            class="text-white/50 hover:text-exo-yellow transition-colors cursor-pointer"
+                            class="text-white/50 hover:text-xeo-green transition-colors cursor-pointer"
                             onclick={() =>
                               startDownload(col.nodeId, row.shardMetadata!)}
                             title="Start download on this node"
@@ -656,7 +656,7 @@
                           {#if row.shardMetadata}
                             <button
                               type="button"
-                              class="text-white/50 hover:text-exo-yellow transition-colors cursor-pointer"
+                              class="text-white/50 hover:text-xeo-green transition-colors cursor-pointer"
                               onclick={() =>
                                 startDownload(col.nodeId, row.shardMetadata!)}
                               title="Retry download on this node"
@@ -672,13 +672,13 @@
                         class="flex flex-col items-center"
                         title="Not on this node"
                       >
-                        <span class="text-exo-medium-gray text-lg leading-none"
+                        <span class="text-xeo-medium-gray text-lg leading-none"
                           >--</span
                         >
                         {#if row.shardMetadata}
                           <button
                             type="button"
-                            class="text-white/50 hover:text-exo-yellow transition-colors mt-0.5 opacity-0 group-hover:opacity-100 cursor-pointer"
+                            class="text-white/50 hover:text-xeo-green transition-colors mt-0.5 opacity-0 group-hover:opacity-100 cursor-pointer"
                             onclick={() =>
                               startDownload(col.nodeId, row.shardMetadata!)}
                             title="Download to this node"
@@ -708,7 +708,7 @@
     role="presentation"
   ></div>
   <div
-    class="fixed z-[60] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(80vw,400px)] bg-exo-dark-gray border border-exo-yellow/10 rounded-lg shadow-2xl p-4"
+    class="fixed z-[60] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(80vw,400px)] bg-xeo-dark-gray border border-xeo-green/10 rounded-lg shadow-2xl p-4"
     transition:fly={{ y: 10, duration: 200, easing: cubicOut }}
     role="dialog"
     aria-modal="true"
@@ -787,7 +787,7 @@
 
       <!-- Per-node download status -->
       {#if nodeColumns.filter((col) => (infoRow?.cells[col.nodeId]?.kind ?? "not_present") !== "not_present").length > 0}
-        <div class="mt-3 pt-3 border-t border-exo-yellow/10">
+        <div class="mt-3 pt-3 border-t border-xeo-green/10">
           <div class="flex items-center gap-2 mb-1">
             <svg
               class="w-3.5 h-3.5"
@@ -816,7 +816,7 @@
                     'completed'
                       ? 'bg-green-500/10 text-green-400/80 border border-green-500/20'
                       : cellStatus.kind === 'downloading'
-                        ? 'bg-exo-yellow/10 text-exo-yellow/80 border border-exo-yellow/20'
+                        ? 'bg-xeo-green/10 text-xeo-green/80 border border-xeo-green/20'
                         : cellStatus.kind === 'failed'
                           ? 'bg-red-500/10 text-red-400/80 border border-red-500/20'
                           : 'bg-white/5 text-white/50 border border-white/10'}"

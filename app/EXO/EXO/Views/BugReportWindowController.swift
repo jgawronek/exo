@@ -211,7 +211,7 @@ private struct BugReportView: View {
         bodyParts.append("## Environment")
         bodyParts.append("")
         bodyParts.append("- macOS Version: \(ProcessInfo.processInfo.operatingSystemVersionString)")
-        bodyParts.append("- EXO Version: \(buildTag) (\(buildCommit))")
+        bodyParts.append("- XEO Version: \(buildTag) (\(buildCommit))")
         bodyParts.append("")
         bodyParts.append("## Additional context")
         bodyParts.append("")

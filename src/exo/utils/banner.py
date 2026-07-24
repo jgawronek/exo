@@ -4,6 +4,7 @@ import sys
 import webbrowser
 
 from exo.shared.constants import EXO_CONFIG_HOME
+from exo.shared.environment import get_compatible_environment_value
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +26,14 @@ def print_startup_banner(port: int) -> None:
     banner = f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
 ║                                                                       ║
-║   ███████╗██╗  ██╗ ██████╗                                            ║
-║   ██╔════╝╚██╗██╔╝██╔═══██╗                                           ║
-║   █████╗   ╚███╔╝ ██║   ██║                                           ║
-║   ██╔══╝   ██╔██╗ ██║   ██║                                           ║
-║   ███████╗██╔╝ ██╗╚██████╔╝                                           ║
-║   ╚══════╝╚═╝  ╚═╝ ╚═════╝                                            ║
+║   ██╗  ██╗███████╗ ██████╗                                            ║
+║   ╚██╗██╔╝██╔════╝██╔═══██╗                                           ║
+║    ╚███╔╝ █████╗  ██║   ██║                                           ║
+║    ██╔██╗ ██╔══╝  ██║   ██║                                           ║
+║   ██╔╝ ██╗███████╗╚██████╔╝                                           ║
+║   ╚═╝  ╚═╝╚══════╝ ╚═════╝                                            ║
 ║                                                                       ║
-║   Distributed AI Inference Cluster                                    ║
+║   XEO · Distributed AI Inference Cluster                              ║
 ║                                                                       ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
@@ -53,7 +54,7 @@ def print_startup_banner(port: int) -> None:
     if first_run:
         # Skip browser open when running inside the native macOS app —
         # FirstLaunchPopout.swift handles the auto-open with a countdown.
-        if not os.environ.get("EXO_RUNTIME_DIR"):
+        if not get_compatible_environment_value(os.environ, "EXO_RUNTIME_DIR"):
             try:
                 webbrowser.open(dashboard_url)
                 logger.info("First run detected — opening dashboard in browser")

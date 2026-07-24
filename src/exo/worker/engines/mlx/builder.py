@@ -9,11 +9,13 @@ from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx_lm.utils import load_model
 
 from exo.download.download_utils import build_model_path
+from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.common import ModelId
 from exo.shared.types.events import Event
 from exo.shared.types.tasks import TaskId
 from exo.shared.types.worker.instances import BoundInstance
 from exo.shared.types.worker.runner_response import ModelLoadingResponse
+from exo.shared.types.worker.shards import PipelineShardMetadata
 from exo.utils.channels import MpReceiver, MpSender
 from exo.worker.engines.base import Builder, Engine
 from exo.worker.runner.bootstrap import logger
@@ -40,7 +42,10 @@ def load_speculative_draft_model(group: mx.distributed.Group | None) -> Model | 
     speculative decoding rather than failing the runner, since the target
     model alone is sufficient to serve requests.
     """
-    draft_model_id = os.environ.get("EXO_DRAFT_MODEL")
+    draft_model_id = get_compatible_environment_value(
+        os.environ,
+        "EXO_DRAFT_MODEL",
+    )
     if not draft_model_id:
         return None
     if group is not None:
@@ -72,6 +77,7 @@ class MlxBuilder(Builder):
     group: mx.distributed.Group | None = None
     vision_processor: VisionProcessor | None = None
     draft_model: Model | None = None
+    pipeline_shard: PipelineShardMetadata | None = None
 
     def connect(self, bound_instance: BoundInstance) -> None:
         self.group = initialize_mlx(bound_instance)
@@ -83,6 +89,9 @@ class MlxBuilder(Builder):
             self.vision_processor,
         ) = yield from load_mlx_items(bound_instance, self.group)
         self.draft_model = load_speculative_draft_model(self.group)
+        bound_shard = bound_instance.bound_shard
+        if isinstance(bound_shard, PipelineShardMetadata) and self.group is not None:
+            self.pipeline_shard = bound_shard
 
     def close(self) -> None:
         with contextlib.suppress(NameError, AttributeError):
@@ -120,7 +129,7 @@ class MlxBuilder(Builder):
         kv_prefix_cache = KVPrefixCache(self.group)
 
         device_rank = 0 if self.group is None else self.group.rank()
-        if os.environ.get("EXO_NO_BATCH"):
+        if get_compatible_environment_value(os.environ, "EXO_NO_BATCH"):
             logger.info("using SequentialGenerator (batching disabled)")
             return SequentialGenerator(
                 model=self.inference_model,
@@ -148,4 +157,5 @@ class MlxBuilder(Builder):
                 event_sender=self.event_sender,
                 vision_processor=vision_processor,
                 draft_model=self.draft_model,
+                pipeline_shard=self.pipeline_shard,
             )

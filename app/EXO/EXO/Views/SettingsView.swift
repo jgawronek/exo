@@ -207,7 +207,7 @@ struct SettingsView: View {
                     showUninstallConfirmationAlert()
                 } label: {
                     HStack {
-                        Text("Uninstall EXO")
+                        Text("Uninstall XEO")
                         Spacer()
                         Image(systemName: "trash")
                             .imageScale(.small)
@@ -235,7 +235,7 @@ struct SettingsView: View {
                     .font(.system(.body, design: .monospaced))
                     .frame(width: 260)
                 }
-                Text("Sets EXO_DEFAULT_MODELS_DIR. Where models are downloaded.")
+                Text("Sets XEO_DEFAULT_MODELS_DIR. Where models are downloaded.")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
@@ -249,7 +249,7 @@ struct SettingsView: View {
                     .font(.system(.body, design: .monospaced))
                     .frame(width: 260)
                 }
-                Text("Sets EXO_MODELS_DIRS. Extra writable model directories.")
+                Text("Sets XEO_MODELS_DIRS. Extra writable model directories.")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
@@ -263,7 +263,7 @@ struct SettingsView: View {
                     .font(.system(.body, design: .monospaced))
                     .frame(width: 260)
                 }
-                Text("Sets EXO_MODELS_READ_ONLY_DIRS. Never written to.")
+                Text("Sets XEO_MODELS_READ_ONLY_DIRS. Never written to.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -504,14 +504,14 @@ struct SettingsView: View {
 
     private func showUninstallConfirmationAlert() {
         let alert = NSAlert()
-        alert.messageText = "Uninstall EXO"
+        alert.messageText = "Uninstall XEO"
         alert.informativeText = """
-            This will remove EXO and all its components:
+            This will remove XEO and all its components:
 
             • Network configuration daemon
             • Launch at login registration
-            • EXO network location
-            • EXO data directory (~/.exo)
+            • Legacy exo network location
+            • Legacy exo data directory (~/.exo)
 
             The app will be moved to Trash.
             """

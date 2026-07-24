@@ -12,7 +12,7 @@ from exo.shared.types.profiling import StageTiming
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.worker.downloads import DownloadProgress
 from exo.shared.types.worker.instances import Instance, InstanceId
-from exo.shared.types.worker.runners import RunnerId, RunnerStatus
+from exo.shared.types.worker.runners import RunnerId, RunnerStatus, ShardAssignments
 from exo.utils.info_gatherer.info_gatherer import GatheredInfo
 from exo.utils.pydantic_ext import FrozenModel, TaggedModel
 
@@ -69,6 +69,15 @@ class InstanceCreated(BaseEvent):
 
 class InstanceDeleted(BaseEvent):
     instance_id: InstanceId
+
+
+class InstanceShardAssignmentsUpdated(BaseEvent):
+    """A live layer-boundary shift committed new shard assignments for an
+    existing instance. Emitted by the master after every completed shift step
+    so observers (dashboard, placement) always see the current layout."""
+
+    instance_id: InstanceId
+    shard_assignments: ShardAssignments
 
 
 class RunnerStatusUpdated(BaseEvent):
@@ -164,6 +173,7 @@ Event = (
     | TaskAcknowledged
     | InstanceCreated
     | InstanceDeleted
+    | InstanceShardAssignmentsUpdated
     | RunnerStatusUpdated
     | StageTimingsUpdated
     | NodeTimedOut

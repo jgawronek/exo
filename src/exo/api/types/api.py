@@ -312,9 +312,11 @@ class RebalanceInstanceResponse(BaseModel):
     message: str
     instance_id: InstanceId
     node_layers: dict[NodeId, int]
-    # PlaceInstance command id when a relaunch was triggered; None when the
-    # measured allocation already matches the current one.
+    # ShiftInstanceLayers command id when a live migration was triggered;
+    # None when the measured allocation already matches the current one.
     command_id: CommandId | None = None
+    # Number of single-layer boundary shifts the migration will perform.
+    steps: int = 0
 
 
 class AwaitInstanceReadyMessage(BaseModel):

@@ -175,7 +175,7 @@
         provider: {
           exo: {
             npm: "@ai-sdk/openai-compatible",
-            name: "exo",
+            name: "XEO",
             options: {
               baseURL: `${apiUrl}/v1`,
               apiKey: "x",
@@ -190,7 +190,7 @@
     );
   });
 
-  const codexShellCommand = $derived(`EXO_API_KEY=x npx @openai/codex`);
+  const codexShellCommand = $derived(`XEO_API_KEY=x npx @openai/codex`);
 
   const codexConfig = $derived(
     [
@@ -198,9 +198,9 @@
       `model_provider = "exo"`,
       ``,
       `[model_providers.exo]`,
-      `name = "exo"`,
+      `name = "XEO"`,
       `base_url = "${apiUrl}/v1"`,
-      `env_key = "EXO_API_KEY"`,
+      `env_key = "XEO_API_KEY"`,
       ``,
       `[mcp_servers.filesystem]`,
       `command = "npx"`,
@@ -221,7 +221,7 @@
               models: [
                 {
                   id: openClawModel,
-                  name: "exo local",
+                  name: "XEO local",
                   input: (modelCapabilities[openClawModel] || []).includes(
                     "vision",
                   )
@@ -366,7 +366,7 @@
   });
 
   const selectClass =
-    "bg-black/30 border border-exo-light-gray/20 rounded px-2 py-1.5 text-white font-mono text-xs focus:border-exo-yellow/50 focus:outline-none appearance-none cursor-pointer";
+    "bg-black/30 border border-xeo-light-gray/20 rounded px-2 py-1.5 text-white font-mono text-xs focus:border-xeo-green/50 focus:outline-none appearance-none cursor-pointer";
 
   onMount(async () => {
     refreshState();
@@ -398,7 +398,7 @@
   });
 </script>
 
-<div class="min-h-screen bg-exo-dark-gray flex flex-col">
+<div class="min-h-screen bg-xeo-dark-gray flex flex-col">
   <HeaderNav showHome={true} />
 
   <main
@@ -411,28 +411,28 @@
       >
         Integrations
       </h1>
-      <p class="text-exo-light-gray/60 text-sm">
-        Connect external tools to your exo cluster.
+      <p class="text-xeo-light-gray/60 text-sm">
+        Connect external tools to your XEO cluster.
       </p>
     </div>
 
     <!-- Status -->
     <div class="mb-8">
-      <span class="text-exo-light-gray/70 text-xs uppercase tracking-wider"
+      <span class="text-xeo-light-gray/70 text-xs uppercase tracking-wider"
         >API Endpoint</span
       >
       <span class="text-white font-mono text-sm ml-2">{apiUrl}</span>
       {#if runningModels.length > 0}
-        <div class="text-exo-light-gray/50 text-xs mt-2">
+        <div class="text-xeo-light-gray/50 text-xs mt-2">
           Running model{runningModels.length > 1 ? "s" : ""}:
           <ul class="mt-1 space-y-0.5 list-none">
             {#each runningModels as model}
-              <li class="text-exo-yellow font-mono">{model}</li>
+              <li class="text-xeo-green font-mono">{model}</li>
             {/each}
           </ul>
         </div>
       {:else}
-        <p class="text-exo-light-gray/40 text-xs mt-2 italic">
+        <p class="text-xeo-light-gray/40 text-xs mt-2 italic">
           No models currently running
         </p>
       {/if}
@@ -441,28 +441,28 @@
     <!-- API Endpoints -->
     <div class="mb-8">
       <div
-        class="flex flex-col sm:flex-row gap-3 text-xs font-mono text-exo-light-gray/70"
+        class="flex flex-col sm:flex-row gap-3 text-xs font-mono text-xeo-light-gray/70"
       >
         <div
-          class="flex-1 bg-black/20 border border-exo-light-gray/10 rounded px-3 py-2"
+          class="flex-1 bg-black/20 border border-xeo-light-gray/10 rounded px-3 py-2"
         >
-          <span class="text-exo-light-gray/40 text-[10px] uppercase block mb-1"
+          <span class="text-xeo-light-gray/40 text-[10px] uppercase block mb-1"
             >OpenAI-compatible</span
           >
           <span class="text-white/80">{apiUrl}/v1</span>
         </div>
         <div
-          class="flex-1 bg-black/20 border border-exo-light-gray/10 rounded px-3 py-2"
+          class="flex-1 bg-black/20 border border-xeo-light-gray/10 rounded px-3 py-2"
         >
-          <span class="text-exo-light-gray/40 text-[10px] uppercase block mb-1"
+          <span class="text-xeo-light-gray/40 text-[10px] uppercase block mb-1"
             >Claude-compatible</span
           >
           <span class="text-white/80">{apiUrl}</span>
         </div>
         <div
-          class="flex-1 bg-black/20 border border-exo-light-gray/10 rounded px-3 py-2"
+          class="flex-1 bg-black/20 border border-xeo-light-gray/10 rounded px-3 py-2"
         >
-          <span class="text-exo-light-gray/40 text-[10px] uppercase block mb-1"
+          <span class="text-xeo-light-gray/40 text-[10px] uppercase block mb-1"
             >Ollama-compatible</span
           >
           <span class="text-white/80">{apiUrl}/ollama</span>
@@ -472,15 +472,15 @@
 
     <!-- Tabs -->
     <div
-      class="flex flex-wrap gap-2 mb-6 border-b border-exo-light-gray/10 pb-3"
+      class="flex flex-wrap gap-2 mb-6 border-b border-xeo-light-gray/10 pb-3"
     >
       {#each tabs as tab}
         <button
           onclick={() => (activeTab = tab)}
           class="px-3 py-1.5 text-xs rounded-md transition-all cursor-pointer
             {activeTab === tab
-            ? 'bg-exo-yellow/15 text-exo-yellow border border-exo-yellow/30'
-            : 'text-exo-light-gray/60 hover:text-white/80 border border-transparent hover:border-exo-light-gray/20'}"
+            ? 'bg-xeo-green/15 text-xeo-green border border-xeo-green/30'
+            : 'text-xeo-light-gray/60 hover:text-white/80 border border-transparent hover:border-xeo-light-gray/20'}"
         >
           {tab}
         </button>
@@ -495,7 +495,7 @@
             {#each [{ label: "Opus", bind: () => opusModel, set: (v: string) => (opusModel = v) }, { label: "Sonnet", bind: () => sonnetModel, set: (v: string) => (sonnetModel = v) }, { label: "Haiku", bind: () => haikuModel, set: (v: string) => (haikuModel = v) }] as tier}
               <div>
                 <span
-                  class="text-exo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
+                  class="text-xeo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
                   >{tier.label}</span
                 >
                 <select
@@ -515,7 +515,7 @@
         <IntegrationCard
           title="Shell Command"
           subtitle="Run in terminal"
-          description="Launch Claude Code with exo as the backend. Paste this into your terminal."
+          description="Launch Claude Code with XEO as the backend. Paste this into your terminal."
           config={claudeShellCommand}
           language="bash"
         />
@@ -537,7 +537,7 @@
           {#if runningModels.length > 1}
             <div>
               <span
-                class="text-exo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
+                class="text-xeo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
                 >Model</span
               >
               <select bind:value={codexModel} class={selectClass}>
@@ -549,13 +549,13 @@
           {/if}
           <div class="flex-1">
             <span
-              class="text-exo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
+              class="text-xeo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
               >MCP Filesystem Path</span
             >
             <input
               type="text"
               bind:value={codexMcpPath}
-              class="w-full bg-black/30 border border-exo-light-gray/20 rounded px-2 py-1.5 text-white font-mono text-xs focus:border-exo-yellow/50 focus:outline-none"
+              class="w-full bg-black/30 border border-xeo-light-gray/20 rounded px-2 py-1.5 text-white font-mono text-xs focus:border-xeo-green/50 focus:outline-none"
             />
           </div>
         </div>
@@ -568,7 +568,7 @@
         <IntegrationCard
           title="Shell Command"
           subtitle="Run in terminal"
-          description="Launch Codex with exo as the backend."
+          description="Launch Codex with XEO as the backend."
           config={codexShellCommand}
           language="bash"
         />
@@ -576,7 +576,7 @@
         {#if runningModels.length > 1}
           <div class="text-xs">
             <span
-              class="text-exo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
+              class="text-xeo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
               >Model</span
             >
             <select bind:value={openClawModel} class={selectClass}>
@@ -603,7 +603,7 @@
         {#if runningModels.length > 1}
           <div class="text-xs">
             <span
-              class="text-exo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
+              class="text-xeo-light-gray/50 text-[10px] uppercase tracking-wider block mb-1"
               >Model</span
             >
             <select bind:value={piModel} class={selectClass}>
@@ -616,13 +616,13 @@
         <IntegrationCard
           title="Models Config"
           subtitle="~/.pi/agent/models.json"
-          description="Register exo as a custom provider in pi. Create or edit this file, then run pi and pick an exo model via /model. Install pi with: npm install -g @mariozechner/pi-coding-agent"
+          description="Register XEO as a custom provider in pi. Create or edit this file, then run pi and pick an XEO model via /model. Install pi with: npm install -g @mariozechner/pi-coding-agent"
           config={piModelsJson}
         />
         <IntegrationCard
           title="Shell Command"
           subtitle="Run in terminal"
-          description="Launch pi directly with the exo provider and model selected."
+          description="Launch pi directly with the XEO provider and model selected."
           config={piShellCommand}
           language="bash"
         />
@@ -666,20 +666,20 @@
         <IntegrationCard
           title="3. Add OpenAI Credential"
           subtitle="n8n UI → Credentials"
-          description="Create an OpenAI credential pointing at your exo cluster."
+          description="Create an OpenAI credential pointing at your XEO cluster."
           config={n8nCredentialSteps}
         />
         <IntegrationCard
           title="4. Build a Workflow"
           subtitle="n8n UI → Workflows"
-          description="Create a workflow that uses your exo-powered model."
+          description="Create a workflow that uses your XEO-powered model."
           config={n8nWorkflowSteps}
         />
       {:else if activeTab === "Firefox"}
         <IntegrationCard
           title="Firefox AI Chatbot"
           subtitle="about:config"
-          description="Use the exo dashboard as Firefox's built-in AI chatbot. Requires Firefox 130+."
+          description="Use the XEO dashboard as Firefox's built-in AI chatbot. Requires Firefox 130+."
           config={firefoxConfig}
         />
       {/if}

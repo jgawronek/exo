@@ -292,6 +292,96 @@ def allocate_layers_by_measured_speed(
     return dict(zip(node_ids, allocations, strict=True))
 
 
+def plan_pipeline_layer_shift_steps(
+    current_shards: Mapping[RunnerId, PipelineShardMetadata],
+    target_layer_counts: Mapping[RunnerId, int],
+) -> list[dict[RunnerId, PipelineShardMetadata]]:
+    """Decompose a pipeline re-allocation into single-layer boundary shifts.
+
+    Each returned step is a full runner-to-shard map that differs from its
+    predecessor by exactly one layer moved between two adjacent ranks, and
+    every rank keeps at least one layer at every intermediate step, so a
+    running instance can apply the steps one at a time without ever emptying
+    a pipeline stage. Returns an empty list when the target equals the
+    current allocation.
+
+    Raises ValueError on malformed input (mismatched runner sets, counts not
+    summing to the model's layer count, or a rank left without layers);
+    handled by the master's ShiftInstanceLayers command handler.
+    """
+    if set(current_shards) != set(target_layer_counts):
+        raise ValueError(
+            "Target layer counts must cover exactly the instance's runners"
+        )
+    if any(count < 1 for count in target_layer_counts.values()):
+        raise ValueError("Every pipeline rank must keep at least one layer")
+
+    ranked_runners = sorted(
+        current_shards, key=lambda runner_id: current_shards[runner_id].device_rank
+    )
+    reference_shard = current_shards[ranked_runners[0]]
+    total_layers = reference_shard.n_layers
+    if sum(target_layer_counts.values()) != total_layers:
+        raise ValueError(
+            f"Target layer counts sum to {sum(target_layer_counts.values())}, "
+            f"expected {total_layers}"
+        )
+
+    # Boundaries as cumulative layer counts, with fixed sentinels 0 and
+    # total_layers; boundaries[i] is the split between rank i-1 and rank i.
+    def cumulative_boundaries(counts: list[int]) -> list[int]:
+        boundaries = [0]
+        for count in counts:
+            boundaries.append(boundaries[-1] + count)
+        return boundaries
+
+    current_boundaries = cumulative_boundaries(
+        [
+            current_shards[runner_id].end_layer - current_shards[runner_id].start_layer
+            for runner_id in ranked_runners
+        ]
+    )
+    target_boundaries = cumulative_boundaries(
+        [target_layer_counts[runner_id] for runner_id in ranked_runners]
+    )
+
+    def snapshot(boundaries: list[int]) -> dict[RunnerId, PipelineShardMetadata]:
+        return {
+            runner_id: current_shards[runner_id].model_copy(
+                update={
+                    "start_layer": boundaries[rank],
+                    "end_layer": boundaries[rank + 1],
+                }
+            )
+            for rank, runner_id in enumerate(ranked_runners)
+        }
+
+    steps: list[dict[RunnerId, PipelineShardMetadata]] = []
+    total_moves = sum(
+        abs(current - target)
+        for current, target in zip(current_boundaries, target_boundaries, strict=True)
+    )
+    for _ in range(total_moves):
+        moved = False
+        for i in range(1, len(current_boundaries) - 1):
+            if current_boundaries[i] < target_boundaries[i] and (
+                current_boundaries[i] + 1 < current_boundaries[i + 1]
+            ):
+                current_boundaries[i] += 1
+            elif current_boundaries[i] > target_boundaries[i] and (
+                current_boundaries[i] - 1 > current_boundaries[i - 1]
+            ):
+                current_boundaries[i] -= 1
+            else:
+                continue
+            steps.append(snapshot(current_boundaries))
+            moved = True
+            break
+        assert moved, "Layer shift planning stalled; boundaries are inconsistent"
+    assert current_boundaries == target_boundaries
+    return steps
+
+
 def _validate_cycle(cycle: Cycle) -> None:
     if not cycle.node_ids:
         raise ValueError("Cannot create shard assignments for empty node cycle")

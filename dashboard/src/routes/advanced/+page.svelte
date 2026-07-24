@@ -31,16 +31,16 @@
   });
 </script>
 
-<div class="min-h-screen bg-exo-dark-gray flex flex-col">
+<div class="min-h-screen bg-xeo-dark-gray flex flex-col">
   <HeaderNav />
 
   <main class="flex-1 max-w-[1100px] mx-auto w-full px-4 md:px-6 py-8">
     {#if !flagsLoaded}
-      <div class="text-exo-light-gray/60 text-sm">Loading…</div>
+      <div class="text-xeo-light-gray/60 text-sm">Loading…</div>
     {:else if !enabled}
-      <div class="text-exo-light-gray/60 text-sm">
+      <div class="text-xeo-light-gray/60 text-sm">
         No advanced features enabled. Set <code
-          class="text-exo-yellow font-mono">ENABLE_DISAGGREGATION=true</code
+          class="text-xeo-green font-mono">ENABLE_DISAGGREGATION=true</code
         > on the cluster to access prefill/decode disaggregation.
       </div>
     {:else}
@@ -50,21 +50,21 @@
         >
           Advanced
         </h1>
-        <p class="text-exo-light-gray/60 text-sm">
+        <p class="text-xeo-light-gray/60 text-sm">
           Cluster-level configuration. Most users don't need anything here.
         </p>
       </div>
 
       <div
-        class="flex flex-wrap gap-2 mb-6 border-b border-exo-light-gray/10 pb-3"
+        class="flex flex-wrap gap-2 mb-6 border-b border-xeo-light-gray/10 pb-3"
       >
         {#each tabs as tab (tab.id)}
           <button
             onclick={() => (activeTab = tab.id)}
             class="px-3 py-1.5 text-xs rounded-md transition-all cursor-pointer
               {activeTab === tab.id
-              ? 'bg-exo-yellow/15 text-exo-yellow border border-exo-yellow/30'
-              : 'text-exo-light-gray/60 hover:text-white/80 border border-transparent hover:border-exo-light-gray/20'}"
+              ? 'bg-xeo-green/15 text-xeo-green border border-xeo-green/30'
+              : 'text-xeo-light-gray/60 hover:text-white/80 border border-transparent hover:border-xeo-light-gray/20'}"
           >
             {tab.label}
           </button>

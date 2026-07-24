@@ -156,30 +156,30 @@
   const nodeCount = $derived(sortedRanks.length || 1);
 </script>
 
-<div class="min-h-screen bg-exo-dark-gray text-white">
+<div class="min-h-screen bg-xeo-dark-gray text-white">
   <HeaderNav showHome={true} />
   <div class="max-w-7xl mx-auto px-4 lg:px-8 py-6 space-y-6">
     <div class="flex items-center justify-between gap-4 flex-wrap">
       <div>
         <h1
-          class="text-2xl font-mono tracking-[0.2em] uppercase text-exo-yellow"
+          class="text-2xl font-mono tracking-[0.2em] uppercase text-xeo-green"
         >
           Trace
         </h1>
-        <p class="text-sm text-exo-light-gray font-mono truncate max-w-lg">
+        <p class="text-sm text-xeo-light-gray font-mono truncate max-w-lg">
           {taskId}
         </p>
       </div>
       <div class="flex items-center gap-3">
         <a
           href="#/traces"
-          class="text-xs font-mono text-exo-light-gray hover:text-exo-yellow transition-colors uppercase border border-exo-medium-gray/40 px-3 py-1.5 rounded"
+          class="text-xs font-mono text-xeo-light-gray hover:text-xeo-green transition-colors uppercase border border-xeo-medium-gray/40 px-3 py-1.5 rounded"
         >
           All Traces
         </a>
         <button
           type="button"
-          class="text-xs font-mono text-exo-light-gray hover:text-exo-yellow transition-colors uppercase border border-exo-medium-gray/40 px-3 py-1.5 rounded"
+          class="text-xs font-mono text-xeo-light-gray hover:text-xeo-green transition-colors uppercase border border-xeo-medium-gray/40 px-3 py-1.5 rounded"
           onclick={downloadTrace}
           disabled={loading || !!error}
         >
@@ -187,7 +187,7 @@
         </button>
         <button
           type="button"
-          class="text-xs font-mono text-exo-dark-gray bg-exo-yellow hover:bg-exo-yellow/90 transition-colors uppercase px-3 py-1.5 rounded font-semibold"
+          class="text-xs font-mono text-xeo-dark-gray bg-xeo-green hover:bg-xeo-green/90 transition-colors uppercase px-3 py-1.5 rounded font-semibold"
           onclick={openInPerfetto}
           disabled={loading || !!error}
         >
@@ -198,7 +198,7 @@
 
     {#if loading}
       <div
-        class="rounded border border-exo-medium-gray/30 bg-exo-black/30 p-6 text-center text-exo-light-gray"
+        class="rounded border border-xeo-medium-gray/30 bg-xeo-black/30 p-6 text-center text-xeo-light-gray"
       >
         <div class="text-sm">Loading trace data...</div>
       </div>
@@ -211,28 +211,28 @@
     {:else if stats}
       <!-- Wall Time Summary -->
       <div
-        class="rounded border border-exo-medium-gray/30 bg-exo-black/30 p-4 space-y-2"
+        class="rounded border border-xeo-medium-gray/30 bg-xeo-black/30 p-4 space-y-2"
       >
         <h2
-          class="text-sm font-mono uppercase tracking-wider text-exo-light-gray"
+          class="text-sm font-mono uppercase tracking-wider text-xeo-light-gray"
         >
           Summary
         </h2>
-        <div class="text-3xl font-mono text-exo-yellow">
+        <div class="text-3xl font-mono text-xeo-green">
           {formatDuration(stats.totalWallTimeUs)}
         </div>
-        <div class="text-xs text-exo-light-gray">Total wall time</div>
+        <div class="text-xs text-xeo-light-gray">Total wall time</div>
       </div>
 
       <!-- By Phase -->
       {#if phases.length > 0}
         <div
-          class="rounded border border-exo-medium-gray/30 bg-exo-black/30 p-4 space-y-4"
+          class="rounded border border-xeo-medium-gray/30 bg-xeo-black/30 p-4 space-y-4"
         >
           <h2
-            class="text-sm font-mono uppercase tracking-wider text-exo-light-gray"
+            class="text-sm font-mono uppercase tracking-wider text-xeo-light-gray"
           >
-            By Phase <span class="text-exo-light-gray/50">(avg per node)</span>
+            By Phase <span class="text-xeo-light-gray/50">(avg per node)</span>
           </h2>
           <div class="space-y-4">
             {#each phases as phase}
@@ -242,10 +242,10 @@
                 <div class="flex items-center justify-between">
                   <span class="text-sm font-mono text-white">{phase.name}</span>
                   <span class="text-sm font-mono">
-                    <span class="text-exo-yellow"
+                    <span class="text-xeo-green"
                       >{formatDuration(normalizedTotal)}</span
                     >
-                    <span class="text-exo-light-gray ml-2">
+                    <span class="text-xeo-light-gray ml-2">
                       ({normalizedStepCount} steps, {formatDuration(
                         normalizedTotal / normalizedStepCount,
                       )}/step)
@@ -265,21 +265,21 @@
                       <div
                         class="flex items-center justify-between text-xs font-mono"
                       >
-                        <span class="text-exo-light-gray">{subcat.name}</span>
+                        <span class="text-xeo-light-gray">{subcat.name}</span>
                         <span class="text-white">
                           {formatDuration(normalizedSubcat)}
-                          <span class="text-exo-light-gray ml-2">({pct})</span>
-                          <span class="text-exo-light-gray/60 ml-2"
+                          <span class="text-xeo-light-gray ml-2">({pct})</span>
+                          <span class="text-xeo-light-gray/60 ml-2"
                             >{formatDuration(perStep)}/step</span
                           >
                         </span>
                       </div>
                       <!-- Progress bar -->
                       <div
-                        class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                        class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                       >
                         <div
-                          class="absolute inset-y-0 left-0 bg-gradient-to-r from-exo-yellow to-exo-yellow/70 transition-all duration-300"
+                          class="absolute inset-y-0 left-0 bg-gradient-to-r from-xeo-green to-xeo-green/70 transition-all duration-300"
                           style="width: {pct}"
                         ></div>
                       </div>
@@ -295,10 +295,10 @@
       <!-- By Rank -->
       {#if sortedRanks.length > 0}
         <div
-          class="rounded border border-exo-medium-gray/30 bg-exo-black/30 p-4 space-y-4"
+          class="rounded border border-xeo-medium-gray/30 bg-xeo-black/30 p-4 space-y-4"
         >
           <h2
-            class="text-sm font-mono uppercase tracking-wider text-exo-light-gray"
+            class="text-sm font-mono uppercase tracking-wider text-xeo-light-gray"
           >
             By Rank
           </h2>
@@ -307,21 +307,21 @@
               {@const rankStats = stats.byRank[rank]}
               {@const rankPhases = parsePhases(rankStats.byCategory)}
               <div
-                class="rounded border border-exo-medium-gray/20 bg-exo-dark-gray/60 p-3 space-y-3"
+                class="rounded border border-xeo-medium-gray/20 bg-xeo-dark-gray/60 p-3 space-y-3"
               >
-                <div class="text-sm font-mono text-exo-yellow">
+                <div class="text-sm font-mono text-xeo-green">
                   Rank {rank}
                 </div>
                 <div class="space-y-2">
                   {#each rankPhases as phase}
                     <div class="space-y-1">
                       <div class="flex items-center justify-between text-xs">
-                        <span class="font-mono text-exo-light-gray"
+                        <span class="font-mono text-xeo-light-gray"
                           >{phase.name}</span
                         >
                         <span class="font-mono text-white">
                           {formatDuration(phase.totalUs)}
-                          <span class="text-exo-light-gray/50 ml-1">
+                          <span class="text-xeo-light-gray/50 ml-1">
                             ({phase.stepCount}x)
                           </span>
                         </span>
@@ -338,15 +338,15 @@
                             <div
                               class="flex items-center justify-between text-[10px] font-mono"
                             >
-                              <span class="text-exo-light-gray/70"
+                              <span class="text-xeo-light-gray/70"
                                 >{subcat.name}</span
                               >
-                              <span class="text-exo-light-gray">
+                              <span class="text-xeo-light-gray">
                                 {formatDuration(subcat.stats.totalUs)}
-                                <span class="text-exo-light-gray/50"
+                                <span class="text-xeo-light-gray/50"
                                   >({pct})</span
                                 >
-                                <span class="text-exo-light-gray/30 ml-1"
+                                <span class="text-xeo-light-gray/30 ml-1"
                                   >{formatDuration(perStep)}/step</span
                                 >
                               </span>

@@ -16,6 +16,7 @@ from exo.shared.types.profiling import DecodeTimingSample
 from exo.shared.types.tasks import (
     CANCEL_ALL_TASKS,
     GenerationTask,
+    ShiftLayers,
     TaskId,
     TextGeneration,
 )
@@ -26,9 +27,11 @@ from exo.shared.types.worker.runner_response import (
     GenerationResponse,
 )
 from exo.utils.channels import MpReceiver, MpSender
+from exo.download.download_utils import build_model_path
+from exo.shared.types.worker.shards import PipelineShardMetadata
 from exo.worker.disaggregated.server import PrefillRequest
 from exo.worker.engines.base import Engine
-from exo.worker.engines.mlx.auto_parallel import decode_timings
+from exo.worker.engines.mlx.auto_parallel import decode_timings, shift_pipeline_layers
 from exo.worker.engines.mlx.cache import KVPrefixCache
 from exo.worker.engines.mlx.disaggregated.adapter import write_cache_to_wire
 from exo.worker.engines.mlx.disaggregated.serve import run_prefill_for_request
@@ -349,12 +352,17 @@ class BatchGenerator(Engine):
     check_for_cancel_every: int = 50
     vision_processor: VisionProcessor | None = None
     draft_model: Model | None = None
+    pipeline_shard: PipelineShardMetadata | None = None
 
     _cancelled_tasks: set[TaskId] = field(default_factory=set, init=False)
-    _maybe_queue: list[TextGeneration] = field(default_factory=list, init=False)
+    _maybe_queue: list[TextGeneration | ShiftLayers] = field(
+        default_factory=list, init=False
+    )
     _maybe_cancel: list[TextGeneration] = field(default_factory=list, init=False)
     _all_tasks: dict[TaskId, TextGeneration] = field(default_factory=dict, init=False)
     _queue: deque[TextGeneration] = field(default_factory=deque, init=False)
+    _shift_queue: deque[ShiftLayers] = field(default_factory=deque, init=False)
+    _pending_shift: ShiftLayers | None = field(default=None, init=False)
     _gen: ExoBatchGenerator = field(init=False)
     _steps_until_task_agreement: int = field(default=0, init=False)
     _active_tasks: dict[
@@ -393,12 +401,55 @@ class BatchGenerator(Engine):
         self._all_tasks[task.task_id] = task
         self._maybe_queue.append(task)
 
+    def submit_shard_update(self, task: ShiftLayers) -> bool:
+        if self.group is None or self.pipeline_shard is None:
+            return False
+        self._maybe_queue.append(task)
+        return True
+
+    def _apply_shard_update(self, task: ShiftLayers) -> None:
+        """Apply an agreed boundary shift now that the batch is idle.
+
+        Runs on every rank at the same logical step (the shift came out of
+        the rank-agreed queue and batch drain is lockstep across ranks), so
+        no rank can be mid-forward while layers move.
+        """
+        assert self.group is not None and self.pipeline_shard is not None
+        new_shard = next(
+            shard
+            for shard in task.new_shards.values()
+            if shard.device_rank == self.device_rank
+        )
+        boundaries_changed = (new_shard.start_layer, new_shard.end_layer) != (
+            self.pipeline_shard.start_layer,
+            self.pipeline_shard.end_layer,
+        )
+        if boundaries_changed:
+            shift_pipeline_layers(
+                self.model,
+                self.group,
+                old_shard=self.pipeline_shard,
+                new_shard=new_shard,
+                model_path=build_model_path(self.model_id),
+            )
+        self.pipeline_shard = new_shard
+        # Stored prefixes hold KV for the previous layer range; clear on every
+        # rank (even no-op ones) so restore-length agreement stays trivial.
+        if self.kv_prefix_cache is not None:
+            self.kv_prefix_cache.clear()
+        # Discard timing accumulated under the old layer layout.
+        decode_timings.drain_sample()
+
     def agree_on_tasks(self) -> None:
         """Agree between all ranks about the task ordering (some may have received in different order or not at all)."""
         agreed, different = mx_all_gather_tasks(self._maybe_queue, self.group)
         # Extend from `agreed` (sorted by task_id on all ranks) to guarantee every
         # rank enqueues tasks in the same order, preventing TP collective deadlocks.
-        self._queue.extend(agreed)
+        for agreed_task in agreed:
+            if isinstance(agreed_task, ShiftLayers):
+                self._shift_queue.append(agreed_task)
+            else:
+                self._queue.append(agreed_task)
         self._maybe_queue = list(different)
 
     def agree_on_cancellations(self) -> None:
@@ -434,8 +485,27 @@ class BatchGenerator(Engine):
                 self.agree_on_tasks()
                 self._steps_until_task_agreement = TASK_AGREEMENT_INTERVAL_STEPS
 
-        # Submit any queued tasks to the engine
-        while self._queue and len(self._active_tasks) < EXO_MAX_CONCURRENT_REQUESTS:
+        if self._pending_shift is None and self._shift_queue:
+            self._pending_shift = self._shift_queue.popleft()
+
+        if (
+            self._pending_shift is not None
+            and not self._active_tasks
+            and not self._gen.has_work
+        ):
+            shift = self._pending_shift
+            self._pending_shift = None
+            self._apply_shard_update(shift)
+            return iter([(shift.task_id, FinishedResponse())])
+
+        # Submit any queued tasks to the engine. Submission pauses while a
+        # shard update waits for the batch to drain, so the update cannot be
+        # starved under sustained load; paused tasks resume right after it.
+        while (
+            self._queue
+            and self._pending_shift is None
+            and len(self._active_tasks) < EXO_MAX_CONCURRENT_REQUESTS
+        ):
             task = self._queue.popleft()
             try:
                 uid = self._start_task(task)

@@ -1,9 +1,9 @@
 /**
- * AppStore - Central state management for the EXO dashboard
+ * AppStore - Central state management for the XEO dashboard
  *
  * Manages:
  * - Chat state (whether a conversation has started)
- * - Topology data from the EXO server
+ * - Topology data from the XEO server
  * - UI state for the topology/chat transition
  */
 
@@ -328,6 +328,17 @@ export interface Conversation {
 
 const STORAGE_KEY = "exo-conversations";
 const IMAGE_PARAMS_STORAGE_KEY = "exo-image-generation-params";
+const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = "exo-right-sidebar-width";
+const DEFAULT_RIGHT_SIDEBAR_WIDTH = 320;
+const MIN_RIGHT_SIDEBAR_WIDTH = 240;
+const MAX_RIGHT_SIDEBAR_WIDTH = 560;
+
+function clampRightSidebarWidth(width: number): number {
+  return Math.min(
+    MAX_RIGHT_SIDEBAR_WIDTH,
+    Math.max(MIN_RIGHT_SIDEBAR_WIDTH, Math.round(width)),
+  );
+}
 
 // Image generation params interface matching backend API
 export interface ImageGenerationParams {
@@ -601,6 +612,7 @@ class AppStore {
   debugMode = $state(false);
   topologyOnlyMode = $state(false);
   chatSidebarVisible = $state(true); // Shown by default
+  rightSidebarWidth = $state(DEFAULT_RIGHT_SIDEBAR_WIDTH);
   mobileChatSidebarOpen = $state(false); // Mobile drawer state
   mobileRightSidebarOpen = $state(false); // Mobile right drawer state
 
@@ -630,6 +642,7 @@ class AppStore {
       this.loadDebugModeFromStorage();
       this.loadTopologyOnlyModeFromStorage();
       this.loadChatSidebarVisibleFromStorage();
+      this.loadRightSidebarWidthFromStorage();
       this.loadImageGenerationParamsFromStorage();
     }
   }
@@ -741,6 +754,31 @@ class AppStore {
       );
     } catch (error) {
       console.error("Failed to save chat sidebar visibility:", error);
+    }
+  }
+
+  private loadRightSidebarWidthFromStorage() {
+    try {
+      const stored = localStorage.getItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY);
+      if (stored !== null) {
+        const parsed = Number.parseInt(stored, 10);
+        if (Number.isFinite(parsed)) {
+          this.rightSidebarWidth = clampRightSidebarWidth(parsed);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load right sidebar width:", error);
+    }
+  }
+
+  private saveRightSidebarWidthToStorage() {
+    try {
+      localStorage.setItem(
+        RIGHT_SIDEBAR_WIDTH_STORAGE_KEY,
+        String(this.rightSidebarWidth),
+      );
+    } catch (error) {
+      console.error("Failed to save right sidebar width:", error);
     }
   }
 
@@ -1266,6 +1304,15 @@ class AppStore {
   toggleChatSidebarVisible() {
     this.chatSidebarVisible = !this.chatSidebarVisible;
     this.saveChatSidebarVisibleToStorage();
+  }
+
+  getRightSidebarWidth(): number {
+    return this.rightSidebarWidth;
+  }
+
+  setRightSidebarWidth(width: number) {
+    this.rightSidebarWidth = clampRightSidebarWidth(width);
+    this.saveRightSidebarWidthToStorage();
   }
 
   getMobileChatSidebarOpen(): boolean {
@@ -3528,6 +3575,7 @@ export const thinkingEnabled = () => appStore.thinkingEnabled;
 export const debugMode = () => appStore.getDebugMode();
 export const topologyOnlyMode = () => appStore.getTopologyOnlyMode();
 export const chatSidebarVisible = () => appStore.getChatSidebarVisible();
+export const rightSidebarWidth = () => appStore.getRightSidebarWidth();
 
 // Actions
 export const stopGeneration = () => appStore.stopGeneration();
@@ -3602,6 +3650,8 @@ export const toggleChatSidebarVisible = () =>
   appStore.toggleChatSidebarVisible();
 export const setChatSidebarVisible = (visible: boolean) =>
   appStore.setChatSidebarVisible(visible);
+export const setRightSidebarWidth = (width: number) =>
+  appStore.setRightSidebarWidth(width);
 
 // Mobile sidebar state
 export const mobileChatSidebarOpen = () => appStore.mobileChatSidebarOpen;

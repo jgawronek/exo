@@ -50,6 +50,18 @@ class DeleteInstance(BaseCommand):
     instance_id: InstanceId
 
 
+class ShiftInstanceLayers(BaseCommand):
+    """Live-rebalance a pipeline instance by moving one layer at a time.
+
+    The master decomposes the move into single-layer boundary shifts between
+    adjacent ranks and executes them sequentially while the instance keeps
+    serving requests.
+    """
+
+    instance_id: InstanceId
+    node_layers: dict[NodeId, int]
+
+
 class TaskCancelled(BaseCommand):
     cancelled_command_id: CommandId
 
@@ -113,6 +125,7 @@ Command = (
     | PlaceInstance
     | CreateInstance
     | DeleteInstance
+    | ShiftInstanceLayers
     | TaskCancelled
     | TaskFinished
     | SendInputChunk

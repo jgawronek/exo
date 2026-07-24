@@ -136,7 +136,7 @@ private struct WelcomeCalloutView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
-                Text("EXO is running")
+                Text("XEO is running")
                     .font(.system(.headline, design: .rounded))
                     .fontWeight(.semibold)
                     .foregroundColor(.primary)

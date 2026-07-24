@@ -97,7 +97,7 @@ struct BugReportService {
         }
 
         return BugReportOutcome(
-            success: true, message: "Bug Report sent. Thank you for helping to improve EXO 1.0.")
+            success: true, message: "Bug Report sent. Thank you for helping to improve XEO.")
     }
 
     private static func dayPrefixString(_ date: Date) -> String {

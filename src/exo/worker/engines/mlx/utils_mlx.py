@@ -44,7 +44,7 @@ from pydantic import RootModel
 from exo.download.download_utils import build_model_path
 from exo.shared.types.common import Host
 from exo.shared.types.memory import Memory
-from exo.shared.types.tasks import TaskId, TextGeneration
+from exo.shared.types.tasks import BaseTask, TaskId
 from exo.shared.types.text_generation import ChatTemplateValue, TextGenerationTaskParams
 from exo.shared.types.worker.instances import (
     BoundInstance,
@@ -974,10 +974,10 @@ def _parse_kimi_tool_calls(text: str):
         return [_parse_single_tool(text)]
 
 
-def mx_all_gather_tasks(
-    tasks: list[TextGeneration],
+def mx_all_gather_tasks[QueuedTask: BaseTask](
+    tasks: list[QueuedTask],
     group: mx.distributed.Group | None,
-) -> tuple[list[TextGeneration], list[TextGeneration]]:
+) -> tuple[list[QueuedTask], list[QueuedTask]]:
     def encode_task_id(task_id: TaskId) -> list[int]:
         utf8_task_id = task_id.encode()
         return [

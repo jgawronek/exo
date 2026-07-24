@@ -14,6 +14,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from exo.shared.constants import EXO_CONFIG_FILE, EXO_DEFAULT_MODELS_DIR
+from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.backends import Backend
 from exo.shared.types.memory import Memory
 from exo.shared.types.profiling import (
@@ -34,6 +35,7 @@ from exo.utils.pydantic_ext import TaggedModel
 from exo.utils.task_group import TaskGroup
 
 from .macmon import MacmonMetrics
+from .nvml_metrics import NvmlMetrics
 from .system_info import (
     get_friendly_name,
     get_model_and_chip,
@@ -388,6 +390,7 @@ class NodeBackends(TaggedModel):
 
 GatheredInfo = (
     MacmonMetrics
+    | NvmlMetrics
     | MemoryUsage
     | NodeNetworkInterfaces
     | MacThunderboltIdentifiers
@@ -494,6 +497,7 @@ class InfoGatherer:
                 tg.start_soon(self._monitor_rdma_ctl_status, 10)
             if not IS_DARWIN:
                 tg.start_soon(self._monitor_memory_usage, 1)
+                tg.start_soon(self._monitor_nvml_metrics, 1)
             tg.start_soon(self._watch_system_info, 10)
             tg.start_soon(self._monitor_misc, 60)
             tg.start_soon(self._monitor_static_info, 60)
@@ -647,9 +651,24 @@ class InfoGatherer:
                 logger.opt(exception=e).warning("Error gathering disk usage")
             await anyio.sleep(disk_poll_interval)
 
+    async def _monitor_nvml_metrics(self, poll_interval: float):
+        """Poll NVIDIA GPU load/temp via NVML for the topology performance bar."""
+        while True:
+            try:
+                metrics = await to_thread.run_sync(NvmlMetrics.gather)
+                if metrics is not None:
+                    await self.info_sender.send(metrics)
+            except Exception as e:
+                logger.opt(exception=e).warning("Error gathering NVML metrics")
+            await anyio.sleep(poll_interval)
+
     async def _monitor_macmon(self, macmon_interval: float):
         if (
-            macmon_path := os.getenv("EXO_MACMON_PATH") or shutil.which("macmon")
+            macmon_path := get_compatible_environment_value(
+                os.environ,
+                "EXO_MACMON_PATH",
+            )
+            or shutil.which("macmon")
         ) is None:
             logger.warning(
                 "macmon not found, falling back to psutil for memory monitoring"

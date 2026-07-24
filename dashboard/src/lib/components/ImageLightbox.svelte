@@ -52,7 +52,7 @@
     <div class="absolute top-4 right-4 flex gap-2 z-10">
       <button
         type="button"
-        class="p-2 rounded-lg bg-exo-dark-gray/80 border border-exo-yellow/30 text-exo-yellow hover:bg-exo-dark-gray hover:border-exo-yellow/50 cursor-pointer transition-colors"
+        class="p-2 rounded-lg bg-xeo-dark-gray/80 border border-xeo-green/30 text-xeo-green hover:bg-xeo-dark-gray hover:border-xeo-green/50 cursor-pointer transition-colors"
         onclick={handleDownload}
         title="Download image"
       >
@@ -72,7 +72,7 @@
       </button>
       <button
         type="button"
-        class="p-2 rounded-lg bg-exo-dark-gray/80 border border-exo-yellow/30 text-exo-yellow hover:bg-exo-dark-gray hover:border-exo-yellow/50 cursor-pointer transition-colors"
+        class="p-2 rounded-lg bg-xeo-dark-gray/80 border border-xeo-green/30 text-xeo-green hover:bg-xeo-dark-gray hover:border-xeo-green/50 cursor-pointer transition-colors"
         onclick={handleClose}
         title="Close"
       >

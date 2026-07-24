@@ -63,6 +63,22 @@ def take_ready_topk(batch: GenerationBatch) -> BatchTopKLogprobs:
     return _get_buffer(batch).ready
 
 
+def make_non_last_relay_outputs(
+    logits: mx.array, batch_size: int, needs_topk: bool
+) -> tuple[mx.array, mx.array]:
+    """Return constant-size placeholders for a non-last pipeline rank.
+
+    Raises:
+        ValueError: Propagates to the runner if token relay is incorrectly
+            enabled for a request that needs rank-local log probabilities.
+    """
+    if needs_topk:
+        raise ValueError("token relay does not support rank-local logprobs")
+    logprobs = mx.zeros((batch_size, 1), dtype=logits.dtype)
+    sampled = mx.zeros((batch_size,), dtype=mx.int32)
+    return logprobs, sampled
+
+
 def _patched_step(self: GenerationBatch) -> tuple[list[int], list[mx.array]]:
     speculative = get_speculative_state(self)
     if speculative is not None:
@@ -83,27 +99,32 @@ def _patched_step(self: GenerationBatch) -> tuple[list[int], list[mx.array]]:
     logits = self.model(inputs[:, None], cache=self.prompt_cache)
     logits = logits[:, -1, :]
 
-    if self.logits_processors is not None and any(self.logits_processors):
-        processed_logits: list[mx.array] = []
-        for e in range(len(self.uids)):
-            sample_logits = logits[e : e + 1]
-            for processor in self.logits_processors[e]:
-                sample_logits = processor(mx.array(self.tokens[e]), sample_logits)
-            processed_logits.append(sample_logits)
-        logits = mx.concatenate(processed_logits, axis=0)
-
-    logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-
-    if self.samplers is not None and any(self.samplers):
-        all_samples: list[mx.array] = []
-        for e in range(len(self.uids)):
-            sample_sampler = self.samplers[e] or self.fallback_sampler
-            all_samples.append(sample_sampler(logprobs[e : e + 1]))
-        sampled = mx.concatenate(all_samples, axis=0)
-    else:
-        sampled = self.fallback_sampler(logprobs)
-
     relay_context = get_active_relay_context(self.model)
+    if relay_context is not None and not relay_context.is_last_rank:
+        logprobs, sampled = make_non_last_relay_outputs(
+            logits, len(self.uids), buf.needs_topk
+        )
+    else:
+        if self.logits_processors is not None and any(self.logits_processors):
+            processed_logits: list[mx.array] = []
+            for e in range(len(self.uids)):
+                sample_logits = logits[e : e + 1]
+                for processor in self.logits_processors[e]:
+                    sample_logits = processor(mx.array(self.tokens[e]), sample_logits)
+                processed_logits.append(sample_logits)
+            logits = mx.concatenate(processed_logits, axis=0)
+
+        logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+
+        if self.samplers is not None and any(self.samplers):
+            all_samples: list[mx.array] = []
+            for e in range(len(self.uids)):
+                sample_sampler = self.samplers[e] or self.fallback_sampler
+                all_samples.append(sample_sampler(logprobs[e : e + 1]))
+            sampled = mx.concatenate(all_samples, axis=0)
+        else:
+            sampled = self.fallback_sampler(logprobs)
+
     if relay_context is not None:
         # Token-relay decode: only the last pipeline rank sampled from real
         # logits; circulate its token ids so every rank stays in lockstep.

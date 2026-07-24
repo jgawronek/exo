@@ -81,9 +81,9 @@ enum NetworkSetupHelper {
             // Show alert on main thread
             let shouldInstall = await MainActor.run {
                 let alert = NSAlert()
-                alert.messageText = "EXO Network Configuration"
+                alert.messageText = "XEO Network Configuration"
                 alert.informativeText =
-                    "EXO needs to install a system service to configure local networking. This will disable Thunderbolt Bridge (preventing packet storms) and install a Network Location.\n\nYou will be prompted for your password."
+                    "XEO needs to install a system service to configure local networking. This will disable Thunderbolt Bridge (preventing packet storms) and install a Network Location.\n\nYou will be prompted for your password."
                 alert.alertStyle = .informational
                 alert.addButton(withTitle: "Install")
                 alert.addButton(withTitle: "Not Now")
@@ -106,16 +106,16 @@ enum NetworkSetupHelper {
         }
     }
 
-    /// Removes all EXO network setup components from the system.
+    /// Removes all XEO network setup components from the system.
     /// This includes the LaunchDaemon, scripts, logs, and network location.
     /// Requires admin privileges.
     static func uninstall() throws {
         let uninstallScript = makeUninstallScript()
         try runShellAsAdmin(uninstallScript)
-        logger.info("EXO network setup components removed successfully")
+        logger.info("XEO network setup components removed successfully")
     }
 
-    /// Checks if there are any EXO network components installed that need cleanup
+    /// Checks if there are any XEO network components installed that need cleanup
     static func hasInstalledComponents() -> Bool {
         let manager = FileManager.default
         let scriptExists = manager.fileExists(atPath: scriptDestination)
@@ -284,7 +284,7 @@ enum NetworkSetupHelper {
         }
         find_and_enable_thunderbolt_bridge || true
 
-        echo "EXO network components removed successfully"
+        echo "XEO network components removed successfully"
         """
     }
 

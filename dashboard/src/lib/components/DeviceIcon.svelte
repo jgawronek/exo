@@ -147,7 +147,7 @@
       y={studioY + studioTopH + (studioMemTotalH - studioMemH)}
       width={studioW}
       height={studioMemH}
-      fill="rgba(255,215,0,0.75)"
+      fill="oklch(0.78 0.17 145 / 0.75)"
       clip-path="url(#{studioClipId})"
     />
   {/if}
@@ -232,7 +232,7 @@
       y={mbY + mbBezel + (mbMemTotalH - mbMemH)}
       width={mbScreenW - mbBezel * 2}
       height={mbMemH}
-      fill="rgba(255,215,0,0.85)"
+      fill="oklch(0.78 0.17 145 / 0.85)"
       clip-path="url(#{screenClipId})"
     />
   {/if}

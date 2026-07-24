@@ -35,7 +35,7 @@ final class SettingsWindowController: ObservableObject {
             backing: .buffered,
             defer: false
         )
-        newWindow.title = "EXO Settings"
+        newWindow.title = "XEO Settings"
         newWindow.contentView = hostingView
         newWindow.center()
         newWindow.isReleasedWhenClosed = false

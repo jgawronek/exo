@@ -94,7 +94,7 @@ struct EXOApp: App {
             iconImage = baseImage ?? NSImage(named: "menubar-icon") ?? NSImage()
         }
         return Image(nsImage: iconImage)
-            .accessibilityLabel("EXO")
+            .accessibilityLabel("XEO")
     }
 
     private func resizedMenuBarIcon(named: String, size: CGFloat) -> NSImage? {
@@ -148,25 +148,25 @@ struct EXOApp: App {
             try SMAppService.mainApp.register()
         } catch {
             Logger().error(
-                "Failed to register EXO for launch at login: \(error.localizedDescription)")
+                "Failed to register XEO for launch at login: \(error.localizedDescription)")
         }
     }
 
 }
 
-/// Helper for managing EXO's launch-at-login registration
+/// Helper for managing XEO's launch-at-login registration
 enum LaunchAtLoginHelper {
     private static let logger = Logger(subsystem: "io.exo.EXO", category: "LaunchAtLogin")
 
-    /// Unregisters EXO from launching at login
+    /// Unregisters XEO from launching at login
     static func disable() {
         guard SMAppService.mainApp.status == .enabled else { return }
         do {
             try SMAppService.mainApp.unregister()
-            logger.info("Unregistered EXO from launch at login")
+            logger.info("Unregistered XEO from launch at login")
         } catch {
             logger.error(
-                "Failed to unregister EXO from launch at login: \(error.localizedDescription, privacy: .public)"
+                "Failed to unregister XEO from launch at login: \(error.localizedDescription, privacy: .public)"
             )
         }
     }
@@ -229,7 +229,7 @@ private final class ExoUpdaterDelegate: NSObject, SPUUpdaterDelegate {
     nonisolated func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         showNotification(
             title: "Update available",
-            body: "EXO \(item.displayVersionString) is ready to install."
+            body: "XEO \(item.displayVersionString) is ready to install."
         )
     }
 

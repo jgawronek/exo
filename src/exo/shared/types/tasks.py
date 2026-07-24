@@ -10,7 +10,7 @@ from exo.shared.types.common import CommandId, Id
 from exo.shared.types.text_generation import TextGenerationTaskParams
 from exo.shared.types.worker.instances import BoundInstance, InstanceId
 from exo.shared.types.worker.runners import RunnerId
-from exo.shared.types.worker.shards import ShardMetadata
+from exo.shared.types.worker.shards import PipelineShardMetadata, ShardMetadata
 from exo.utils.pydantic_ext import TaggedModel
 
 
@@ -89,6 +89,18 @@ class Shutdown(BaseTask):  # emitted by Worker
     runner_id: RunnerId
 
 
+class ShiftLayers(BaseTask):  # emitted by Master
+    """Move pipeline layer boundaries of a running instance by one step.
+
+    Every rank of the instance receives this task and applies its own entry
+    from ``new_shards`` in lockstep (the engine's task-agreement collective
+    guarantees identical ordering across ranks). Ranks whose boundaries are
+    unchanged apply a no-op but still participate in the agreement.
+    """
+
+    new_shards: dict[RunnerId, PipelineShardMetadata]
+
+
 Task = (
     CreateRunner
     | DownloadModel
@@ -100,6 +112,7 @@ Task = (
     | ImageGeneration
     | ImageEdits
     | Shutdown
+    | ShiftLayers
 )
 TextTask = TextGeneration
 ImageTask = ImageGeneration | ImageEdits

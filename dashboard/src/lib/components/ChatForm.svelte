@@ -280,20 +280,20 @@
 >
   <div
     class="relative command-panel rounded overflow-hidden transition-all duration-200 {isDragOver
-      ? 'ring-2 ring-exo-yellow ring-opacity-50'
+      ? 'ring-2 ring-xeo-green ring-opacity-50'
       : ''}"
   >
     <!-- Top accent line -->
     <div
-      class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-exo-yellow/50 to-transparent"
+      class="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-xeo-green/50 to-transparent"
     ></div>
 
     <!-- Drag overlay -->
     {#if isDragOver}
       <div
-        class="absolute inset-0 bg-exo-dark-gray/80 z-10 flex items-center justify-center"
+        class="absolute inset-0 bg-xeo-dark-gray/80 z-10 flex items-center justify-center"
       >
-        <div class="text-exo-yellow text-sm font-mono tracking-wider uppercase">
+        <div class="text-xeo-green text-sm font-mono tracking-wider uppercase">
           DROP FILES HERE
         </div>
       </div>
@@ -302,23 +302,23 @@
     <!-- Edit mode banner -->
     {#if isEditMode && currentEditingImage}
       <div
-        class="flex items-center gap-3 px-3 py-2 bg-exo-yellow/10 border-b border-exo-yellow/30"
+        class="flex items-center gap-3 px-3 py-2 bg-xeo-green/10 border-b border-xeo-green/30"
       >
         <img
           src={currentEditingImage.imageDataUrl}
           alt="Source for editing"
-          class="w-10 h-10 object-cover rounded border border-exo-yellow/30"
+          class="w-10 h-10 object-cover rounded border border-xeo-green/30"
         />
         <div class="flex-1">
           <span
-            class="text-xs font-mono tracking-wider uppercase text-exo-yellow"
+            class="text-xs font-mono tracking-wider uppercase text-xeo-green"
             >EDITING IMAGE</span
           >
         </div>
         <button
           type="button"
           onclick={() => clearEditingImage()}
-          class="px-2 py-1 text-xs font-mono tracking-wider uppercase bg-exo-medium-gray/30 text-exo-light-gray border border-exo-medium-gray/50 rounded hover:bg-exo-medium-gray/50 hover:text-exo-yellow transition-colors cursor-pointer"
+          class="px-2 py-1 text-xs font-mono tracking-wider uppercase bg-xeo-medium-gray/30 text-xeo-light-gray border border-xeo-medium-gray/50 rounded hover:bg-xeo-medium-gray/50 hover:text-xeo-green transition-colors cursor-pointer"
         >
           CANCEL
         </button>
@@ -328,11 +328,11 @@
     <!-- Model selector (when enabled) -->
     {#if showModelSelector}
       <div
-        class="flex items-center justify-between gap-2 px-3 py-2 border-b border-exo-medium-gray/30"
+        class="flex items-center justify-between gap-2 px-3 py-2 border-b border-xeo-medium-gray/30"
       >
         <div class="flex items-center gap-2 flex-1">
           <span
-            class="text-xs text-exo-light-gray uppercase tracking-wider flex-shrink-0"
+            class="text-xs text-xeo-light-gray uppercase tracking-wider flex-shrink-0"
             >MODEL:</span
           >
           <!-- Model button — opens the full model picker -->
@@ -340,20 +340,20 @@
             <button
               type="button"
               onclick={() => onOpenModelPicker?.()}
-              class="w-full bg-exo-medium-gray/50 border border-exo-yellow/30 rounded pl-3 pr-8 py-1.5 text-xs font-mono text-left tracking-wide cursor-pointer transition-all duration-200 hover:border-exo-yellow/50 focus:outline-none focus:border-exo-yellow/70"
+              class="w-full bg-xeo-medium-gray/50 border border-xeo-green/30 rounded pl-3 pr-8 py-1.5 text-xs font-mono text-left tracking-wide cursor-pointer transition-all duration-200 hover:border-xeo-green/50 focus:outline-none focus:border-xeo-green/70"
             >
               {#if currentModelLabel}
-                <span class="text-exo-yellow truncate">{currentModelLabel}</span
+                <span class="text-xeo-green truncate">{currentModelLabel}</span
                 >
               {:else}
-                <span class="text-exo-light-gray/50">— SELECT MODEL —</span>
+                <span class="text-xeo-light-gray/50">— SELECT MODEL —</span>
               {/if}
             </button>
             <div
               class="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
             >
               <svg
-                class="w-3 h-3 text-exo-yellow/60"
+                class="w-3 h-3 text-xeo-green/60"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -374,8 +374,8 @@
             type="button"
             onclick={() => setConversationThinking(!thinkingEnabled)}
             class="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-mono tracking-wide transition-all duration-200 flex-shrink-0 cursor-pointer border {thinkingEnabled
-              ? 'bg-exo-yellow/15 border-exo-yellow/40 text-exo-yellow'
-              : 'bg-exo-medium-gray/30 border-exo-medium-gray/50 text-exo-light-gray/60 hover:text-exo-light-gray'}"
+              ? 'bg-xeo-green/15 border-xeo-green/40 text-xeo-green'
+              : 'bg-xeo-medium-gray/30 border-xeo-medium-gray/50 text-xeo-light-gray/60 hover:text-xeo-light-gray'}"
             title={thinkingEnabled
               ? "Thinking enabled — click to disable"
               : "Thinking disabled — click to enable"}
@@ -401,15 +401,15 @@
         {#if currentTtft !== null || currentTps !== null}
           <div class="flex items-center gap-4 text-xs font-mono flex-shrink-0">
             {#if currentTtft !== null}
-              <span class="text-exo-light-gray">
+              <span class="text-xeo-light-gray">
                 <span class="text-white/70">TTFT</span>
-                <span class="text-exo-yellow">{currentTtft.toFixed(1)}ms</span>
+                <span class="text-xeo-green">{currentTtft.toFixed(1)}ms</span>
               </span>
             {/if}
             {#if currentTps !== null}
-              <span class="text-exo-light-gray">
+              <span class="text-xeo-light-gray">
                 <span class="text-white/70">TPS</span>
-                <span class="text-exo-yellow">{currentTps.toFixed(1)}</span>
+                <span class="text-xeo-green">{currentTps.toFixed(1)}</span>
                 <span class="text-white/60">tok/s</span>
                 <span class="text-white/50"
                   >({(1000 / currentTps).toFixed(1)} ms/tok)</span
@@ -440,7 +440,7 @@
         type="button"
         onclick={openFilePicker}
         disabled={loading}
-        class="flex items-center justify-center w-7 h-7 rounded text-exo-light-gray hover:text-exo-yellow transition-all disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 cursor-pointer"
+        class="flex items-center justify-center w-7 h-7 rounded text-xeo-light-gray hover:text-xeo-green transition-all disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 cursor-pointer"
         title="Attach file"
       >
         <svg
@@ -459,7 +459,7 @@
       </button>
 
       <!-- Terminal prompt -->
-      <span class="text-exo-yellow text-sm font-bold flex-shrink-0 leading-7"
+      <span class="text-xeo-green text-sm font-bold flex-shrink-0 leading-7"
         >▶</span
       >
 
@@ -477,7 +477,7 @@
               ? "Describe the image you want to generate..."
               : placeholder}
         rows={1}
-        class="flex-1 resize-none bg-transparent text-foreground placeholder:text-exo-light-gray/60 placeholder:text-sm placeholder:tracking-[0.15em] placeholder:leading-7 focus:outline-none focus:ring-0 focus:border-none text-sm leading-7 font-mono"
+        class="flex-1 resize-none bg-transparent text-foreground placeholder:text-xeo-light-gray/60 placeholder:text-sm placeholder:tracking-[0.15em] placeholder:leading-7 focus:outline-none focus:ring-0 focus:border-none text-sm leading-7 font-mono"
         style="min-height: 28px; max-height: 150px;"
       ></textarea>
 
@@ -485,7 +485,7 @@
         <button
           type="button"
           onclick={() => stopGeneration()}
-          class="px-2.5 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-xs tracking-[0.1em] sm:tracking-[0.15em] font-medium transition-all duration-200 whitespace-nowrap bg-exo-medium-gray/70 text-exo-light-gray hover:bg-exo-medium-gray hover:text-white"
+          class="px-2.5 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-xs tracking-[0.1em] sm:tracking-[0.15em] font-medium transition-all duration-200 whitespace-nowrap bg-xeo-medium-gray/70 text-xeo-light-gray hover:bg-xeo-medium-gray hover:text-white"
           aria-label="Stop generation"
         >
           <span class="inline-flex items-center gap-1 sm:gap-2">
@@ -505,8 +505,8 @@
           disabled={!canSend || isEditOnlyWithoutImage}
           class="px-2.5 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-xs tracking-[0.1em] sm:tracking-[0.15em] uppercase font-medium transition-all duration-200 whitespace-nowrap
 					{!canSend || isEditOnlyWithoutImage
-            ? 'bg-exo-medium-gray/50 text-exo-light-gray cursor-not-allowed'
-            : 'bg-exo-yellow text-exo-black hover:bg-exo-yellow-darker hover:shadow-[0_0_20px_rgba(255,215,0,0.3)]'}"
+            ? 'bg-xeo-medium-gray/50 text-xeo-light-gray cursor-not-allowed'
+            : 'bg-xeo-green text-xeo-black hover:bg-xeo-green-darker hover:shadow-[0_0_20px_oklch(0.78_0.17_145/0.3)]'}"
           aria-label={shouldShowEditMode
             ? "Edit image"
             : isImageModel()
@@ -571,27 +571,27 @@
 
     <!-- Bottom accent line -->
     <div
-      class="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-exo-yellow/30 to-transparent"
+      class="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-xeo-green/30 to-transparent"
     ></div>
   </div>
 
   {#if showHelperText}
     <p
-      class="mt-2 sm:mt-3 text-center text-xs sm:text-xs text-exo-light-gray tracking-[0.1em] sm:tracking-[0.15em] uppercase"
+      class="mt-2 sm:mt-3 text-center text-xs sm:text-xs text-xeo-light-gray tracking-[0.1em] sm:tracking-[0.15em] uppercase"
     >
       <kbd
-        class="px-1 sm:px-1.5 py-0.5 rounded bg-exo-medium-gray/30 text-exo-light-gray border border-exo-medium-gray/50"
+        class="px-1 sm:px-1.5 py-0.5 rounded bg-xeo-medium-gray/30 text-xeo-light-gray border border-xeo-medium-gray/50"
         >ENTER</kbd
       >
       <span class="mx-0.5 sm:mx-1">TO SEND</span>
-      <span class="text-exo-medium-gray mx-1 sm:mx-2">|</span>
+      <span class="text-xeo-medium-gray mx-1 sm:mx-2">|</span>
       <kbd
-        class="px-1 sm:px-1.5 py-0.5 rounded bg-exo-medium-gray/30 text-exo-light-gray border border-exo-medium-gray/50"
+        class="px-1 sm:px-1.5 py-0.5 rounded bg-xeo-medium-gray/30 text-xeo-light-gray border border-xeo-medium-gray/50"
         >SHIFT+ENTER</kbd
       >
       <span class="mx-0.5 sm:mx-1">NEW LINE</span>
-      <span class="text-exo-medium-gray mx-1 sm:mx-2">|</span>
-      <span class="text-exo-light-gray">DRAG & DROP OR PASTE FILES</span>
+      <span class="text-xeo-medium-gray mx-1 sm:mx-2">|</span>
+      <span class="text-xeo-light-gray">DRAG & DROP OR PASTE FILES</span>
     </p>
   {/if}
 </form>

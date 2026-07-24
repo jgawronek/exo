@@ -1,4 +1,5 @@
 import os
+from collections import deque
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 
@@ -12,13 +13,17 @@ from exo.master.placement import (
     get_transition_events,
     place_instance,
 )
-from exo.master.placement_utils import find_ip_prioritised
+from exo.master.placement_utils import (
+    find_ip_prioritised,
+    plan_pipeline_layer_shift_steps,
+)
 from exo.routing.event_router import (
     EventRouterBrokenResourceError,
     EventRouterClosedResourceError,
 )
 from exo.shared.apply import apply
 from exo.shared.constants import EXO_EVENT_LOG_DIR, EXO_TRACING_ENABLED
+from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.chunks import ErrorChunk
 from exo.shared.types.commands import (
     AddCustomModelCard,
@@ -34,6 +39,7 @@ from exo.shared.types.commands import (
     RequestEventLog,
     SendInputChunk,
     SetInstanceLink,
+    ShiftInstanceLayers,
     TaskCancelled,
     TaskFinished,
     TestCommand,
@@ -51,6 +57,7 @@ from exo.shared.types.events import (
     InstanceDeleted,
     InstanceLinkCreated,
     InstanceLinkDeleted,
+    InstanceShardAssignmentsUpdated,
     LocalForwarderEvent,
     NodeGatheredInfo,
     NodeTimedOut,
@@ -70,6 +77,9 @@ from exo.shared.types.tasks import (
     ImageGeneration as ImageGenerationTask,
 )
 from exo.shared.types.tasks import (
+    ShiftLayers as ShiftLayersTask,
+)
+from exo.shared.types.tasks import (
     Task,
     TaskId,
     TaskStatus,
@@ -78,6 +88,8 @@ from exo.shared.types.tasks import (
     TextGeneration as TextGenerationTask,
 )
 from exo.shared.types.worker.instances import InstanceId
+from exo.shared.types.worker.runners import RunnerId
+from exo.shared.types.worker.shards import PipelineShardMetadata
 from exo.utils.channels import Receiver, Sender
 from exo.utils.disk_event_log import DiskEventLog
 from exo.utils.event_buffer import MultiSourceBuffer
@@ -91,7 +103,13 @@ from exo.utils.task_group import TaskGroup
 # task, notifies the client, and tears the instance down so it can be
 # relaunched cleanly.
 GENERATION_STALL_TIMEOUT = timedelta(
-    seconds=float(os.environ.get("EXO_STALL_TIMEOUT_SECONDS", "120"))
+    seconds=float(
+        get_compatible_environment_value(
+            os.environ,
+            "EXO_STALL_TIMEOUT_SECONDS",
+            "120",
+        )
+    )
 )
 
 
@@ -189,6 +207,13 @@ class Master:
         # Watchdog bookkeeping: last time each generation task showed progress
         # (any chunk reaching the master), seeded when the task is first seen.
         self._task_last_progress: dict[TaskId, datetime] = {}
+        # Live layer rebalancing: remaining single-layer boundary shifts per
+        # instance, executed one task at a time; the head of each deque is the
+        # step currently in flight.
+        self._layer_shift_plans: dict[
+            InstanceId, deque[dict[RunnerId, PipelineShardMetadata]]
+        ] = {}
+        self._shift_task_instance: dict[TaskId, InstanceId] = {}
 
     async def run(self):
         logger.info("Starting Master")
@@ -397,6 +422,8 @@ class Master:
                                         for shard in selected_instance.shard_assignments.runner_to_shard.values()
                                     )
                                     self._expected_ranks[task_id] = ranks
+                        case ShiftInstanceLayers():
+                            generated_events.extend(self._begin_layer_shift(command))
                         case DeleteInstance():
                             placement = delete_instance(command, self.state.instances)
                             transition_events = get_transition_events(
@@ -511,6 +538,109 @@ class Master:
                 except Exception as e:
                     logger.opt(exception=e).warning("Error in command processor")
 
+    def _begin_layer_shift(self, command: ShiftInstanceLayers) -> list[Event]:
+        """Plan a live rebalance and emit the task for its first step.
+
+        Raises ValueError on invalid targets; handled by the command
+        processor's catch-all, which logs it (the API validates the same
+        preconditions before sending the command).
+        """
+        instance = self.state.instances.get(command.instance_id)
+        if instance is None:
+            raise ValueError(f"Instance {command.instance_id} not found")
+        if command.instance_id in self._layer_shift_plans:
+            raise ValueError(
+                f"Instance {command.instance_id} already has a layer shift in progress"
+            )
+        assignments = instance.shard_assignments
+        current_shards: dict[RunnerId, PipelineShardMetadata] = {}
+        for runner_id, shard in assignments.runner_to_shard.items():
+            if not isinstance(shard, PipelineShardMetadata):
+                raise ValueError("Live layer shifts require pipeline sharding")
+            current_shards[runner_id] = shard
+        target_layer_counts: dict[RunnerId, int] = {}
+        for node_id, layer_count in command.node_layers.items():
+            runner_id = assignments.node_to_runner.get(node_id)
+            if runner_id is None:
+                raise ValueError(
+                    f"Node {node_id} is not part of instance {command.instance_id}"
+                )
+            target_layer_counts[runner_id] = layer_count
+
+        steps = plan_pipeline_layer_shift_steps(current_shards, target_layer_counts)
+        if not steps:
+            logger.info(
+                f"Instance {command.instance_id} already matches the requested layout"
+            )
+            return []
+        logger.info(
+            f"Beginning live layer shift for instance {command.instance_id}: "
+            f"{len(steps)} single-layer steps"
+        )
+        self._layer_shift_plans[command.instance_id] = deque(steps)
+        return [self._create_shift_task(command.instance_id, steps[0])]
+
+    def _create_shift_task(
+        self,
+        instance_id: InstanceId,
+        new_shards: dict[RunnerId, PipelineShardMetadata],
+    ) -> TaskCreated:
+        task_id = TaskId()
+        self._shift_task_instance[task_id] = instance_id
+        return TaskCreated(
+            task_id=task_id,
+            task=ShiftLayersTask(
+                task_id=task_id,
+                instance_id=instance_id,
+                task_status=TaskStatus.Pending,
+                new_shards=new_shards,
+            ),
+        )
+
+    async def _advance_layer_shift(self, event: TaskStatusUpdated) -> None:
+        """Commit a finished shift step and launch the next one.
+
+        Every rank reports completion independently; only the first report
+        advances the plan (the task id is untracked afterwards). Any failure
+        aborts the remaining steps — the instance keeps serving with the
+        boundaries committed so far.
+        """
+        instance_id = self._shift_task_instance.get(event.task_id)
+        if instance_id is None:
+            return
+        if event.task_status in (TaskStatus.Pending, TaskStatus.Running):
+            return
+        del self._shift_task_instance[event.task_id]
+
+        follow_up_events: list[Event] = [TaskDeleted(task_id=event.task_id)]
+        plan = self._layer_shift_plans.get(instance_id)
+        instance = self.state.instances.get(instance_id)
+        if event.task_status == TaskStatus.Complete and plan and instance is not None:
+            committed_shards = plan.popleft()
+            new_assignments = instance.shard_assignments.model_copy(
+                update={"runner_to_shard": committed_shards}
+            )
+            follow_up_events.append(
+                InstanceShardAssignmentsUpdated(
+                    instance_id=instance_id, shard_assignments=new_assignments
+                )
+            )
+            if plan:
+                follow_up_events.append(
+                    self._create_shift_task(instance_id, plan[0])
+                )
+            else:
+                del self._layer_shift_plans[instance_id]
+                logger.info(f"Live layer shift for instance {instance_id} complete")
+        else:
+            self._layer_shift_plans.pop(instance_id, None)
+            logger.warning(
+                f"Live layer shift step for instance {instance_id} ended with "
+                f"{event.task_status}; aborting the remaining plan"
+            )
+        for follow_up in follow_up_events:
+            await self.event_sender.send(follow_up)
+
     # These plan loops are the cracks showing in our event sourcing architecture - more things could be commands
     async def _plan(self) -> None:
         while True:
@@ -624,6 +754,16 @@ class Master:
 
                     self._event_log.append(event)
                     await self._send_indexed_event(indexed)
+
+                    if isinstance(event, TaskStatusUpdated):
+                        await self._advance_layer_shift(event)
+                    elif isinstance(event, InstanceDeleted):
+                        self._layer_shift_plans.pop(event.instance_id, None)
+                        self._shift_task_instance = {
+                            task_id: instance_id
+                            for task_id, instance_id in self._shift_task_instance.items()
+                            if instance_id != event.instance_id
+                        }
 
     # This function is re-entrant, take care!
     async def _send_indexed_event(self, event: IndexedEvent):

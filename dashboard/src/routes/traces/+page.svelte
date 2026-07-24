@@ -143,13 +143,13 @@
   });
 </script>
 
-<div class="min-h-screen bg-exo-dark-gray text-white">
+<div class="min-h-screen bg-xeo-dark-gray text-white">
   <HeaderNav showHome={true} />
   <div class="max-w-7xl mx-auto px-4 lg:px-8 py-6 space-y-6">
     <div class="flex items-center justify-between gap-4 flex-wrap">
       <div>
         <h1
-          class="text-2xl font-mono tracking-[0.2em] uppercase text-exo-yellow"
+          class="text-2xl font-mono tracking-[0.2em] uppercase text-xeo-green"
         >
           Traces
         </h1>
@@ -167,7 +167,7 @@
         {/if}
         <button
           type="button"
-          class="text-xs font-mono text-exo-light-gray hover:text-exo-yellow transition-colors uppercase border border-exo-medium-gray/40 px-2 py-1 rounded"
+          class="text-xs font-mono text-xeo-light-gray hover:text-xeo-green transition-colors uppercase border border-xeo-medium-gray/40 px-2 py-1 rounded"
           onclick={refresh}
           disabled={loading}
         >
@@ -178,7 +178,7 @@
 
     {#if loading}
       <div
-        class="rounded border border-exo-medium-gray/30 bg-exo-black/30 p-6 text-center text-exo-light-gray"
+        class="rounded border border-xeo-medium-gray/30 bg-xeo-black/30 p-6 text-center text-xeo-light-gray"
       >
         <div class="text-sm">Loading traces...</div>
       </div>
@@ -190,11 +190,14 @@
       </div>
     {:else if traces.length === 0}
       <div
-        class="rounded border border-exo-medium-gray/30 bg-exo-black/30 p-6 text-center text-exo-light-gray space-y-2"
+        class="rounded border border-xeo-medium-gray/30 bg-xeo-black/30 p-6 text-center text-xeo-light-gray space-y-2"
       >
         <div class="text-sm">No traces found.</div>
-        <div class="text-xs text-exo-light-gray/70">
-          Run exo with EXO_TRACING_ENABLED=1 to collect traces.
+        <div class="text-xs text-xeo-light-gray/70">
+          Run <code class="font-mono text-xeo-green"
+            >XEO_TRACING_ENABLED=1 xeo</code
+          >
+          to collect traces.
         </div>
       </div>
     {:else}
@@ -203,8 +206,8 @@
           <button
             type="button"
             class="text-xs font-mono uppercase transition-colors {allSelected
-              ? 'text-exo-yellow'
-              : 'text-exo-light-gray hover:text-exo-yellow'}"
+              ? 'text-xeo-green'
+              : 'text-xeo-light-gray hover:text-xeo-green'}"
             onclick={toggleSelectAll}
           >
             {allSelected ? "Deselect all" : "Select all"}
@@ -217,8 +220,8 @@
             role="button"
             tabindex="0"
             class="w-full text-left rounded border-l-2 border-r border-t border-b transition-all p-4 flex items-center justify-between gap-4 cursor-pointer {isSelected
-              ? 'bg-exo-yellow/10 border-l-exo-yellow border-r-exo-medium-gray/30 border-t-exo-medium-gray/30 border-b-exo-medium-gray/30'
-              : 'bg-exo-black/30 border-l-transparent border-r-exo-medium-gray/30 border-t-exo-medium-gray/30 border-b-exo-medium-gray/30 hover:bg-white/[0.03]'}"
+              ? 'bg-xeo-green/10 border-l-xeo-green border-r-xeo-medium-gray/30 border-t-xeo-medium-gray/30 border-b-xeo-medium-gray/30'
+              : 'bg-xeo-black/30 border-l-transparent border-r-xeo-medium-gray/30 border-t-xeo-medium-gray/30 border-b-xeo-medium-gray/30 hover:bg-white/[0.03]'}"
             onclick={() => toggleSelect(trace.taskId)}
             onkeydown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
@@ -231,13 +234,13 @@
               <a
                 href="#/traces/{trace.taskId}"
                 class="text-sm font-mono transition-colors truncate block {isSelected
-                  ? 'text-exo-yellow'
-                  : 'text-white hover:text-exo-yellow'}"
+                  ? 'text-xeo-green'
+                  : 'text-white hover:text-xeo-green'}"
                 onclick={(e) => e.stopPropagation()}
               >
                 {trace.taskId}
               </a>
-              <div class="text-xs text-exo-light-gray font-mono mt-1">
+              <div class="text-xs text-xeo-light-gray font-mono mt-1">
                 {formatDate(trace.createdAt)} &bull; {formatBytes(
                   trace.fileSize,
                 )}
@@ -250,20 +253,20 @@
             >
               <a
                 href="#/traces/{trace.taskId}"
-                class="text-xs font-mono text-exo-light-gray hover:text-exo-yellow transition-colors uppercase border border-exo-medium-gray/40 px-2 py-1 rounded"
+                class="text-xs font-mono text-xeo-light-gray hover:text-xeo-green transition-colors uppercase border border-xeo-medium-gray/40 px-2 py-1 rounded"
               >
                 View Stats
               </a>
               <button
                 type="button"
-                class="text-xs font-mono text-exo-light-gray hover:text-exo-yellow transition-colors uppercase border border-exo-medium-gray/40 px-2 py-1 rounded"
+                class="text-xs font-mono text-xeo-light-gray hover:text-xeo-green transition-colors uppercase border border-xeo-medium-gray/40 px-2 py-1 rounded"
                 onclick={() => downloadTrace(trace.taskId)}
               >
                 Download
               </button>
               <button
                 type="button"
-                class="text-xs font-mono text-exo-dark-gray bg-exo-yellow hover:bg-exo-yellow/90 transition-colors uppercase px-2 py-1 rounded font-semibold"
+                class="text-xs font-mono text-xeo-dark-gray bg-xeo-green hover:bg-xeo-green/90 transition-colors uppercase px-2 py-1 rounded font-semibold"
                 onclick={() => openInPerfetto(trace.taskId)}
               >
                 View Trace

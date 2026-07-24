@@ -251,7 +251,7 @@
 <div class="flex flex-col items-center justify-center gap-6 {className}">
   <!-- Header -->
   <div class="text-center">
-    <p class="text-xs text-exo-light-gray uppercase tracking-[0.2em] mb-1">
+    <p class="text-xs text-xeo-light-gray uppercase tracking-[0.2em] mb-1">
       Recommended for your
     </p>
     <p class="text-sm text-white font-mono tracking-wide">{clusterLabel}</p>
@@ -264,12 +264,12 @@
         <button
           type="button"
           onclick={() => rec.model && onSelect(rec.model.id, rec.category)}
-          class="group relative flex flex-col items-start gap-2 p-4 rounded-lg border border-exo-medium-gray/50 bg-exo-dark-gray/50 hover:border-exo-yellow/40 hover:bg-exo-dark-gray transition-all duration-200 cursor-pointer text-left"
+          class="group relative flex flex-col items-start gap-2 p-4 rounded-lg border border-xeo-medium-gray/50 bg-xeo-dark-gray/50 hover:border-xeo-green/40 hover:bg-xeo-dark-gray transition-all duration-200 cursor-pointer text-left"
         >
           <!-- Category icon + label -->
           <div class="flex items-center gap-2 w-full">
             <svg
-              class="w-4 h-4 text-exo-yellow/70 group-hover:text-exo-yellow transition-colors flex-shrink-0"
+              class="w-4 h-4 text-xeo-green/70 group-hover:text-xeo-green transition-colors flex-shrink-0"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -282,7 +282,7 @@
               />
             </svg>
             <span
-              class="text-xs font-mono uppercase tracking-wider text-exo-light-gray group-hover:text-white transition-colors"
+              class="text-xs font-mono uppercase tracking-wider text-xeo-light-gray group-hover:text-white transition-colors"
             >
               {rec.label}
             </span>
@@ -291,7 +291,7 @@
               <span
                 role="button"
                 tabindex="-1"
-                class="text-exo-light-gray/40 hover:text-exo-light-gray transition-colors cursor-help inline-flex"
+                class="text-xeo-light-gray/40 hover:text-xeo-light-gray transition-colors cursor-help inline-flex"
                 onmouseenter={(e: MouseEvent) => showTooltip(rec.category, e)}
                 onmouseleave={() => hideTooltip()}
                 onclick={(e: MouseEvent) => {
@@ -322,10 +322,10 @@
             <p class="text-sm text-white font-mono truncate">
               {rec.model.base_model}
             </p>
-            <p class="text-xs text-exo-light-gray/60 font-mono mt-0.5">
+            <p class="text-xs text-xeo-light-gray/60 font-mono mt-0.5">
               {formatSize(rec.model.storage_size_megabytes)}
               {#if rec.model.quantization}
-                <span class="text-exo-light-gray/40"
+                <span class="text-xeo-light-gray/40"
                   >&middot; {rec.model.quantization}</span
                 >
               {/if}
@@ -335,11 +335,11 @@
       {:else}
         <!-- No model fits for this category -->
         <div
-          class="flex flex-col items-start gap-2 p-4 rounded-lg border border-exo-medium-gray/30 bg-exo-dark-gray/30 opacity-50"
+          class="flex flex-col items-start gap-2 p-4 rounded-lg border border-xeo-medium-gray/30 bg-xeo-dark-gray/30 opacity-50"
         >
           <div class="flex items-center gap-2">
             <svg
-              class="w-4 h-4 text-exo-light-gray/40 flex-shrink-0"
+              class="w-4 h-4 text-xeo-light-gray/40 flex-shrink-0"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -352,11 +352,11 @@
               />
             </svg>
             <span
-              class="text-xs font-mono uppercase tracking-wider text-exo-light-gray/50"
+              class="text-xs font-mono uppercase tracking-wider text-xeo-light-gray/50"
               >{rec.label}</span
             >
           </div>
-          <p class="text-xs text-exo-light-gray/40 font-mono">No model fits</p>
+          <p class="text-xs text-xeo-light-gray/40 font-mono">No model fits</p>
         </div>
       {/if}
     {/each}
@@ -366,7 +366,7 @@
   <button
     type="button"
     onclick={onAddModel}
-    class="flex items-center gap-2 px-4 py-2 text-xs font-mono uppercase tracking-wider text-exo-light-gray hover:text-exo-yellow border border-exo-medium-gray/30 hover:border-exo-yellow/30 rounded-lg transition-all duration-200 cursor-pointer"
+    class="flex items-center gap-2 px-4 py-2 text-xs font-mono uppercase tracking-wider text-xeo-light-gray hover:text-xeo-green border border-xeo-medium-gray/30 hover:border-xeo-green/30 rounded-lg transition-all duration-200 cursor-pointer"
   >
     <svg
       class="w-3.5 h-3.5"
@@ -381,7 +381,7 @@
   </button>
 
   <!-- Auto hint -->
-  <p class="text-xs text-exo-light-gray/40 font-mono tracking-wide text-center">
+  <p class="text-xs text-xeo-light-gray/40 font-mono tracking-wide text-center">
     Or just start typing &mdash; we'll pick the best model automatically
   </p>
 </div>
@@ -391,7 +391,7 @@
   {@const rec = recommendations.find((r) => r.category === hoveredTooltip)}
   {#if rec}
     <div
-      class="fixed z-[9999] px-3 py-2 bg-exo-black border border-exo-medium-gray/50 rounded text-xs text-exo-light-gray whitespace-nowrap shadow-lg pointer-events-none"
+      class="fixed z-[9999] px-3 py-2 bg-xeo-black border border-xeo-medium-gray/50 rounded text-xs text-xeo-light-gray whitespace-nowrap shadow-lg pointer-events-none"
       style="left: {tooltipAnchor.x}px; top: {tooltipAnchor.y -
         8}px; transform: translate(-50%, -100%);"
     >

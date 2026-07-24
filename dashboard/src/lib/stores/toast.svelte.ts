@@ -1,5 +1,5 @@
 /**
- * Toast notification store - Global notification system for the EXO dashboard.
+ * Toast notification store - Global notification system for the XEO dashboard.
  *
  * Usage:
  *   import { addToast, dismissToast, toasts } from "$lib/stores/toast.svelte";

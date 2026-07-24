@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# EXO Uninstaller Script
+# XEO Uninstaller Script
 #
-# This script removes all EXO system components that persist after deleting the app.
+# This script removes all XEO system components that persist after deleting the app.
 # Run with: sudo ./uninstall-exo.sh [--keep-models]
 #
 # Options:
-#   --keep-models   Preserve ~/.exo/models when removing the EXO data directory.
+#   --keep-models   Preserve ~/.exo/models when removing the XEO data directory.
 #
 # Components removed:
 # - LaunchDaemon: /Library/LaunchDaemons/io.exo.networksetup.plist
@@ -27,7 +27,7 @@ for arg in "$@"; do
     ;;
   -h | --help)
     echo "Usage: sudo ./uninstall-exo.sh [--keep-models]"
-    echo "  --keep-models   Preserve ~/.exo/models when removing the EXO data directory."
+    echo "  --keep-models   Preserve ~/.exo/models when removing the XEO data directory."
     exit 0
     ;;
   *)
@@ -78,7 +78,7 @@ fi
 
 echo ""
 echo "========================================"
-echo "        EXO Uninstaller"
+echo "        XEO Uninstaller"
 echo "========================================"
 echo ""
 
@@ -171,24 +171,28 @@ fi
 # SMAppService-based login items cannot be removed from a shell script.
 # They can only be unregistered from within the app itself or manually via System Settings.
 echo_warn "Launch at login must be removed manually:"
-echo_warn "  System Settings → General → Login Items → Remove EXO"
+echo_warn "  System Settings → General → Login Items → Remove XEO"
 
-# Check if EXO.app exists in common locations
+# Check for current and legacy app bundle names.
 APP_FOUND=false
-for app_path in "/Applications/EXO.app" "$HOME/Applications/EXO.app"; do
+for app_path in \
+  "/Applications/XEO.app" \
+  "$HOME/Applications/XEO.app" \
+  "/Applications/EXO.app" \
+  "$HOME/Applications/EXO.app"; do
   if [[ -d $app_path ]]; then
     if [[ $APP_FOUND == false ]]; then
       echo ""
       APP_FOUND=true
     fi
-    echo_warn "EXO.app found at: $app_path"
+    echo_warn "XEO app found at: $app_path"
     echo_warn "You may want to move it to Trash manually."
   fi
 done
 
 echo ""
 echo "========================================"
-echo_info "EXO uninstall complete!"
+echo_info "XEO uninstall complete!"
 echo "========================================"
 echo ""
 echo "The following have been removed:"
@@ -197,13 +201,13 @@ echo "  • Network configuration script"
 echo "  • Log files"
 echo "  • 'exo' network location"
 case "$EXO_DIR_REMOVED" in
-full) echo "  • EXO data directory (~/.exo)" ;;
-kept_models) echo "  • EXO data directory (~/.exo, models preserved)" ;;
+full) echo "  • XEO data directory (~/.exo compatibility path)" ;;
+kept_models) echo "  • XEO data directory (~/.exo, models preserved)" ;;
 esac
 echo ""
 echo "Your network has been restored to use the 'Automatic' location."
 echo "Thunderbolt Bridge has been re-enabled (if present)."
 echo ""
 echo "Manual step required:"
-echo "  Remove EXO from Login Items in System Settings → General → Login Items"
+echo "  Remove XEO from Login Items in System Settings → General → Login Items"
 echo ""

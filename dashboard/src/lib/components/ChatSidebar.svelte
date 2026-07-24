@@ -267,7 +267,7 @@
   <div class="p-4">
     <button
       onclick={handleNewChat}
-      class="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-transparent border border-exo-yellow/30 text-exo-yellow text-xs font-mono tracking-wider uppercase hover:border-exo-yellow/50 transition-all cursor-pointer"
+      class="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-transparent border border-xeo-green/30 text-xeo-green text-xs font-mono tracking-wider uppercase hover:border-xeo-green/50 transition-all cursor-pointer"
     >
       <svg
         class="w-4 h-4"
@@ -306,7 +306,7 @@
         type="text"
         bind:value={searchQuery}
         placeholder="Search conversations..."
-        class="w-full bg-exo-black/40 border border-exo-medium-gray/30 rounded px-3 py-2 pl-9 text-xs text-white/90 placeholder:text-white/40 focus:outline-none focus:border-exo-yellow/30"
+        class="w-full bg-xeo-black/40 border border-xeo-medium-gray/30 rounded px-3 py-2 pl-9 text-xs text-white/90 placeholder:text-white/40 focus:outline-none focus:border-xeo-green/30"
       />
     </div>
   </div>
@@ -317,7 +317,7 @@
       <div class="py-2">
         <div class="px-4 py-2">
           <span
-            class="text-xs text-exo-light-gray font-mono tracking-wider uppercase"
+            class="text-xs text-xeo-light-gray font-mono tracking-wider uppercase"
           >
             {searchQuery ? "SEARCH RESULTS" : "CONVERSATIONS"}
           </span>
@@ -329,25 +329,25 @@
             {#if editingId === conversation.id}
               <!-- Edit mode -->
               <div
-                class="p-2 bg-transparent border border-exo-yellow/20 rounded mb-1"
+                class="p-2 bg-transparent border border-xeo-green/20 rounded mb-1"
               >
                 <input
                   type="text"
                   bind:value={editingName}
                   onkeydown={handleEditKeydown}
-                  class="w-full bg-exo-black/60 border border-exo-yellow/30 rounded px-2 py-1.5 text-xs text-exo-light-gray focus:outline-none focus:border-exo-yellow/50 mb-2"
+                  class="w-full bg-xeo-black/60 border border-xeo-green/30 rounded px-2 py-1.5 text-xs text-xeo-light-gray focus:outline-none focus:border-xeo-green/50 mb-2"
                   autofocus
                 />
                 <div class="flex gap-2">
                   <button
                     onclick={handleSaveEdit}
-                    class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-transparent text-exo-yellow border border-exo-yellow/30 rounded hover:border-exo-yellow/50 cursor-pointer"
+                    class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-transparent text-xeo-green border border-xeo-green/30 rounded hover:border-xeo-green/50 cursor-pointer"
                   >
                     SAVE
                   </button>
                   <button
                     onclick={handleCancelEdit}
-                    class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-exo-medium-gray/20 text-exo-light-gray border border-exo-medium-gray/30 rounded hover:bg-exo-medium-gray/30 cursor-pointer"
+                    class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-xeo-medium-gray/20 text-xeo-light-gray border border-xeo-medium-gray/30 rounded hover:bg-xeo-medium-gray/30 cursor-pointer"
                   >
                     CANCEL
                   </button>
@@ -370,7 +370,7 @@
                   </button>
                   <button
                     onclick={handleCancelDelete}
-                    class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-exo-medium-gray/20 text-exo-light-gray border border-exo-medium-gray/30 rounded hover:bg-exo-medium-gray/30 cursor-pointer"
+                    class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-xeo-medium-gray/20 text-xeo-light-gray border border-xeo-medium-gray/30 rounded hover:bg-xeo-medium-gray/30 cursor-pointer"
                   >
                     CANCEL
                   </button>
@@ -388,14 +388,14 @@
                   handleSelectConversation(conversation.id)}
                 class="group w-full flex items-center justify-between p-2.5 rounded-lg mb-1 transition-all text-left cursor-pointer
 									{activeId === conversation.id
-                  ? 'bg-exo-yellow/5 border border-exo-yellow/30'
+                  ? 'bg-xeo-green/5 border border-xeo-green/30'
                   : 'hover:bg-white/[0.03] hover:border-white/10 border border-transparent'}"
               >
                 <div class="flex-1 min-w-0 pr-2">
                   <div
                     class="text-sm font-medium truncate {activeId ===
                     conversation.id
-                      ? 'text-exo-yellow'
+                      ? 'text-xeo-green'
                       : 'text-white'}"
                   >
                     {conversation.name}
@@ -403,17 +403,17 @@
                   <div class="text-xs text-white/60 mt-0.5">
                     {formatDate(conversation.updatedAt)}
                   </div>
-                  <div class="text-xs text-exo-light-gray truncate">
+                  <div class="text-xs text-xeo-light-gray truncate">
                     {info.modelLabel}
                   </div>
                   {#if stats}
                     <div class="text-xs text-white/70 font-mono mt-1">
                       {#if stats.ttftMs}<span class="text-white/50">TTFT</span>
-                        <span class="text-exo-yellow/80"
+                        <span class="text-xeo-green/80"
                           >{stats.ttftMs.toFixed(0)}ms</span
                         >{/if}{#if stats.ttftMs && stats.tps}<span
                           class="text-white/30 mx-1.5">·</span
-                        >{/if}{#if stats.tps}<span class="text-exo-yellow/80"
+                        >{/if}{#if stats.tps}<span class="text-xeo-green/80"
                           >{stats.tps.toFixed(1)}</span
                         >
                         <span class="text-white/50">tok/s</span>{/if}
@@ -428,7 +428,7 @@
                     type="button"
                     onclick={(e) =>
                       handleStartEdit(conversation.id, conversation.name, e)}
-                    class="p-1 text-exo-light-gray hover:text-exo-yellow transition-colors cursor-pointer"
+                    class="p-1 text-xeo-light-gray hover:text-xeo-green transition-colors cursor-pointer"
                     title="Rename"
                   >
                     <svg
@@ -448,7 +448,7 @@
                   <button
                     type="button"
                     onclick={(e) => handleDeleteClick(conversation.id, e)}
-                    class="p-1 text-exo-light-gray hover:text-red-400 transition-colors cursor-pointer"
+                    class="p-1 text-xeo-light-gray hover:text-red-400 transition-colors cursor-pointer"
                     title="Delete"
                   >
                     <svg
@@ -476,10 +476,10 @@
         class="flex flex-col items-center justify-center h-full p-4 text-center"
       >
         <div
-          class="w-12 h-12 border border-exo-yellow/20 rounded-full flex items-center justify-center mb-3"
+          class="w-12 h-12 border border-xeo-green/20 rounded-full flex items-center justify-center mb-3"
         >
           <svg
-            class="w-6 h-6 text-exo-yellow/40"
+            class="w-6 h-6 text-xeo-green/40"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -505,7 +505,7 @@
   </div>
 
   <!-- Footer -->
-  <div class="p-3 border-t border-exo-yellow/10">
+  <div class="p-3 border-t border-xeo-green/10">
     {#if showDeleteAllConfirm}
       <div class="bg-red-500/10 border border-red-500/30 rounded p-2 mb-2">
         <p class="text-xs text-red-400 text-center mb-2">
@@ -520,7 +520,7 @@
           </button>
           <button
             onclick={handleCancelDeleteAll}
-            class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-exo-medium-gray/20 text-exo-light-gray border border-exo-medium-gray/30 rounded hover:bg-exo-medium-gray/30 transition-colors cursor-pointer"
+            class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-xeo-medium-gray/20 text-xeo-light-gray border border-xeo-medium-gray/30 rounded hover:bg-xeo-medium-gray/30 transition-colors cursor-pointer"
           >
             CANCEL
           </button>
@@ -556,13 +556,13 @@
       <button
         type="button"
         onclick={toggleDebugMode}
-        class="p-1.5 rounded border border-exo-medium-gray/40 hover:border-exo-yellow/50 transition-colors cursor-pointer"
+        class="p-1.5 rounded border border-xeo-medium-gray/40 hover:border-xeo-green/50 transition-colors cursor-pointer"
         title="Toggle debug mode"
       >
         <svg
           class="w-4 h-4 {debugEnabled
-            ? 'text-exo-yellow'
-            : 'text-exo-medium-gray'}"
+            ? 'text-xeo-green'
+            : 'text-xeo-medium-gray'}"
           fill="currentColor"
           viewBox="0 0 24 24"
         >
@@ -579,13 +579,13 @@
       <button
         type="button"
         onclick={toggleTopologyOnlyMode}
-        class="p-1.5 rounded border border-exo-medium-gray/40 hover:border-exo-yellow/50 transition-colors cursor-pointer"
+        class="p-1.5 rounded border border-xeo-medium-gray/40 hover:border-xeo-green/50 transition-colors cursor-pointer"
         title="Toggle topology only mode"
       >
         <svg
           class="w-4 h-4 {topologyOnlyEnabled
-            ? 'text-exo-yellow'
-            : 'text-exo-medium-gray'}"
+            ? 'text-xeo-green'
+            : 'text-xeo-medium-gray'}"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -613,7 +613,7 @@
     ></button>
     <!-- Drawer panel -->
     <aside
-      class="fixed left-0 top-0 bottom-0 w-72 bg-exo-dark-gray border-r border-exo-yellow/10 z-50 flex flex-col md:hidden"
+      class="fixed left-0 top-0 bottom-0 w-72 bg-xeo-dark-gray border-r border-xeo-green/10 z-50 flex flex-col md:hidden"
     >
       {@render sidebarContent()}
     </aside>
@@ -621,7 +621,7 @@
 {:else}
   <!-- Desktop sidebar -->
   <aside
-    class="flex flex-col h-full bg-exo-dark-gray border-r border-exo-yellow/10 {className}"
+    class="flex flex-col h-full bg-xeo-dark-gray border-r border-xeo-green/10 {className}"
   >
     {@render sidebarContent()}
   </aside>

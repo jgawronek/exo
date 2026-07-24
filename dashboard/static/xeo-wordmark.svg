@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 96" role="img" aria-labelledby="title description">
+  <title id="title">XEO</title>
+  <desc id="description">XEO geometric wordmark</desc>
+  <g fill="none" stroke="oklch(0.78 0.17 145)" stroke-linecap="square" stroke-linejoin="miter" stroke-width="12">
+    <path d="M18 18 78 78M78 18 18 78"/>
+    <path d="M112 18v60M112 18h58M112 48h46M112 78h58"/>
+    <path d="M210 18h42l24 24v12l-24 24h-42l-24-24V42z"/>
+  </g>
+</svg>

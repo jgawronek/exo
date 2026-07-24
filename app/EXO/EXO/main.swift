@@ -32,14 +32,14 @@ func parseArguments() -> CLICommand {
 
 /// Print usage information
 func printUsage() {
-    let programName = (CommandLine.arguments.first as NSString?)?.lastPathComponent ?? "EXO"
+    let programName = (CommandLine.arguments.first as NSString?)?.lastPathComponent ?? "XEO"
     print(
         """
         Usage: \(programName) [OPTIONS]
 
         Options:
-          --install     Install EXO network configuration (requires root)
-          --uninstall   Uninstall EXO network configuration (requires root)
+          --install     Install XEO network configuration (requires root)
+          --uninstall   Uninstall XEO network configuration (requires root)
           --help, -h    Show this help message
 
         When run without options, starts the normal GUI application.

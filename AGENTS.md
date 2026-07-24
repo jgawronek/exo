@@ -4,19 +4,19 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project Overview
 
-exo is a distributed AI inference system that connects multiple devices into a cluster. It enables running large language models across multiple machines using MLX as the inference backend and zenoh for peer-to-peer networking.
+XEO is a distributed AI inference system that connects multiple devices into a cluster. It enables running large language models across multiple machines using MLX as the inference backend and zenoh for peer-to-peer networking.
 
 ## Build & Run Commands
 
 ```bash
-# Build the dashboard (required before running exo)
+# Build the dashboard (required before running XEO)
 cd dashboard && npm install && npm run build && cd ..
 
-# Run exo (starts both master and worker with API at http://localhost:52415)
-uv run exo
+# Run XEO (starts both master and worker with API at http://localhost:52415)
+uv run xeo
 
 # Run with verbose logging
-uv run exo -v   # or -vv for more verbose
+uv run xeo -v   # or -vv for more verbose
 
 # Run tests (excludes slow tests by default)
 uv run pytest
@@ -39,6 +39,11 @@ uv run ruff check
 # Format code (using nix)
 nix fmt
 ```
+
+Use `xeo` and supported `XEO_*` environment variables in new user-facing
+examples. The legacy `exo` command, corresponding `EXO_*` fallbacks, Python
+package paths, imports, and established data paths remain compatibility
+identifiers and must not be renamed casually.
 
 ## Pre-Commit Checks (REQUIRED)
 
@@ -68,7 +73,7 @@ If `nix fmt` changes any files, stage them before committing. The CI runs `nix f
 ## Architecture
 
 ### Node Composition
-A single exo `Node` (src/exo/main.py) runs multiple components:
+A single XEO `Node` (`src/exo/main.py`) runs multiple components:
 - **Router**: zenoh-based pub/sub messaging via Rust bindings (exo_rs)
 - **Worker**: Handles inference tasks, downloads models, manages runner processes
 - **Master**: Coordinates cluster state, places model instances across nodes
@@ -124,11 +129,11 @@ Tests use pytest-asyncio with `asyncio_mode = "auto"`. Tests are in `tests/` sub
 
 ### Building and Running the Dashboard
 ```bash
-# Build the dashboard (must be done before running exo)
+# Build the dashboard (must be done before running XEO)
 cd dashboard && npm install && npm run build && cd ..
 
-# Start exo (serves the dashboard at http://localhost:52415)
-uv run exo &
+# Start XEO (serves the dashboard at http://localhost:52415)
+uv run xeo &
 sleep 8  # Wait for server to start
 ```
 

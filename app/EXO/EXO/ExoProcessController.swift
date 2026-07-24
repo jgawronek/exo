@@ -13,6 +13,30 @@ private let defaultModelsDirKey = "EXODefaultModelsDir"
 private let additionalModelsDirsKey = "EXOAdditionalModelsDirs"
 private let readOnlyModelsDirsKey = "EXOReadOnlyModelsDirs"
 private let customEnvironmentVariablesKey = "EXOCustomEnvironmentVariables"
+private let compatibleEnvironmentSuffixes: Set<String> = [
+    "HOME",
+    "DEFAULT_MODELS_DIR",
+    "MODELS_DIRS",
+    "MODELS_READ_ONLY_DIRS",
+    "RESOURCES_DIR",
+    "DASHBOARD_DIR",
+    "ENABLE_IMAGE_MODELS",
+    "OFFLINE",
+    "TRACING_ENABLED",
+    "MAX_CONCURRENT_REQUESTS",
+    "MACMON_PATH",
+    "DRAFT_MODEL",
+    "NO_BATCH",
+    "MEMORY_THRESHOLD",
+    "PREFILL_MEMORY_THRESHOLD",
+    "STALL_TIMEOUT_SECONDS",
+    "DRAFT_TOKENS",
+    "LIBP2P_NAMESPACE",
+    "ZENOH_NAMESPACE",
+    "BOOTSTRAP_PEERS",
+    "FAST_SYNCH",
+    "RUNTIME_DIR",
+]
 
 /// A user-defined environment variable that is injected into the exo child
 /// process at launch. Used as an escape hatch for env vars that don't have
@@ -326,7 +350,10 @@ final class ExoProcessController: ObservableObject {
     private func resolveRuntimeDirectory() throws -> URL {
         let fileManager = FileManager.default
 
-        if let override = ProcessInfo.processInfo.environment["EXO_RUNTIME_DIR"] {
+        let processEnvironment = ProcessInfo.processInfo.environment
+        if let override =
+            processEnvironment["XEO_RUNTIME_DIR"] ?? processEnvironment["EXO_RUNTIME_DIR"]
+        {
             let url = URL(fileURLWithPath: override).standardizedFileURL
             if fileManager.fileExists(atPath: url.path) {
                 return url
@@ -346,26 +373,36 @@ final class ExoProcessController: ObservableObject {
             return repoCandidate
         }
 
-        throw RuntimeError("Unable to locate the packaged EXO runtime.")
+        throw RuntimeError("Unable to locate the packaged XEO runtime.")
     }
 
     private func makeEnvironment(for runtimeURL: URL) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
-        environment["EXO_RUNTIME_DIR"] = runtimeURL.path
-        environment["EXO_ZENOH_NAMESPACE"] = computeNamespace()
+        setCompatibleEnvironmentValue(
+            runtimeURL.path, suffix: "RUNTIME_DIR", environment: &environment)
+        setCompatibleEnvironmentValue(
+            computeNamespace(), suffix: "ZENOH_NAMESPACE", environment: &environment)
         if !hfToken.isEmpty {
             environment["HF_TOKEN"] = hfToken
         }
         if !hfEndpoint.isEmpty {
             environment["HF_ENDPOINT"] = hfEndpoint
         }
-        if enableImageModels {
-            environment["EXO_ENABLE_IMAGE_MODELS"] = "true"
-        }
-        if offlineMode {
-            environment["EXO_OFFLINE"] = "true"
-        }
-        environment["EXO_FAST_SYNCH"] = fastSynchEnabled ? "true" : "false"
+        setCompatibleEnvironmentValue(
+            enableImageModels ? "true" : "false",
+            suffix: "ENABLE_IMAGE_MODELS",
+            environment: &environment
+        )
+        setCompatibleEnvironmentValue(
+            offlineMode ? "true" : "false",
+            suffix: "OFFLINE",
+            environment: &environment
+        )
+        setCompatibleEnvironmentValue(
+            fastSynchEnabled ? "true" : "false",
+            suffix: "FAST_SYNCH",
+            environment: &environment
+        )
 
         var paths: [String] = []
         if let existing = environment["PATH"], !existing.isEmpty {
@@ -393,27 +430,69 @@ final class ExoProcessController: ObservableObject {
 
         let trimmedDefaultModelsDir = defaultModelsDir.trimmingCharacters(in: .whitespaces)
         if !trimmedDefaultModelsDir.isEmpty {
-            environment["EXO_DEFAULT_MODELS_DIR"] = trimmedDefaultModelsDir
+            setCompatibleEnvironmentValue(
+                trimmedDefaultModelsDir,
+                suffix: "DEFAULT_MODELS_DIR",
+                environment: &environment
+            )
         }
         let trimmedAdditionalModelsDirs = additionalModelsDirs.trimmingCharacters(in: .whitespaces)
         if !trimmedAdditionalModelsDirs.isEmpty {
-            environment["EXO_MODELS_DIRS"] = trimmedAdditionalModelsDirs
+            setCompatibleEnvironmentValue(
+                trimmedAdditionalModelsDirs,
+                suffix: "MODELS_DIRS",
+                environment: &environment
+            )
         }
         let trimmedReadOnlyModelsDirs = readOnlyModelsDirs.trimmingCharacters(in: .whitespaces)
         if !trimmedReadOnlyModelsDirs.isEmpty {
-            environment["EXO_MODELS_READ_ONLY_DIRS"] = trimmedReadOnlyModelsDirs
+            setCompatibleEnvironmentValue(
+                trimmedReadOnlyModelsDirs,
+                suffix: "MODELS_READ_ONLY_DIRS",
+                environment: &environment
+            )
         }
 
         // Apply user-defined arbitrary environment variables last so that
         // power users can override any of the typed fields above when
         // necessary. Empty keys are ignored.
-        for variable in customEnvironmentVariables {
-            let trimmedKey = variable.key.trimmingCharacters(in: .whitespaces)
-            guard !trimmedKey.isEmpty else { continue }
-            environment[trimmedKey] = variable.value
+        for variable in customEnvironmentVariables
+        where !variable.key.trimmingCharacters(in: .whitespaces).hasPrefix("XEO_") {
+            applyCustomEnvironmentVariable(variable, environment: &environment)
+        }
+        for variable in customEnvironmentVariables
+        where variable.key.trimmingCharacters(in: .whitespaces).hasPrefix("XEO_") {
+            applyCustomEnvironmentVariable(variable, environment: &environment)
         }
 
         return environment
+    }
+
+    private func setCompatibleEnvironmentValue(
+        _ value: String,
+        suffix: String,
+        environment: inout [String: String]
+    ) {
+        environment["XEO_\(suffix)"] = value
+        environment["EXO_\(suffix)"] = value
+    }
+
+    private func applyCustomEnvironmentVariable(
+        _ variable: CustomEnvironmentVariable,
+        environment: inout [String: String]
+    ) {
+        let key = variable.key.trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty else { return }
+        environment[key] = variable.value
+
+        let suffix: String
+        if key.hasPrefix("XEO_") || key.hasPrefix("EXO_") {
+            suffix = String(key.dropFirst(4))
+        } else {
+            return
+        }
+        guard compatibleEnvironmentSuffixes.contains(suffix) else { return }
+        setCompatibleEnvironmentValue(variable.value, suffix: suffix, environment: &environment)
     }
 
     private func buildTag() -> String {

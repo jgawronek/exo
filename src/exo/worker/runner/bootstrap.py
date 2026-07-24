@@ -6,6 +6,7 @@ from typing import Self, cast
 
 import loguru
 
+from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.events import Event
 from exo.shared.types.tasks import Task, TaskId
 from exo.shared.types.worker.instances import BoundInstance
@@ -50,7 +51,10 @@ def entrypoint(
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (min(max(soft, 2048), hard), hard))
 
-    fast_synch_override = os.environ.get("EXO_FAST_SYNCH")
+    fast_synch_override = get_compatible_environment_value(
+        os.environ,
+        "EXO_FAST_SYNCH",
+    )
     if fast_synch_override == "false":
         os.environ["MLX_METAL_FAST_SYNCH"] = "0"
     else:

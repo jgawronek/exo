@@ -1,8 +1,8 @@
 # Exo-Bench — Methodology
 
-exo bench measures inference throughput and resource consumption of an exo cluster under controlled conditions. It sends prompts to the `/bench/chat/completions` endpoint, collects server-reported timing statistics, and records system-level metrics (power, GPU utilisation, temperature) throughout each run.
+XEO bench measures inference throughput and resource consumption of an XEO cluster under controlled conditions. It sends prompts to the `/bench/chat/completions` endpoint, collects server-reported timing statistics, and records system-level metrics (power, GPU utilisation, temperature) throughout each run.
 
-The goal is to have accurate, transparent and reproducible numbers to compare speed and scaling across different models and different setups, and to be able to track these results as optimizations and features are added to EXO.
+The goal is to have accurate, transparent and reproducible numbers to compare speed and scaling across different models and different setups, and to be able to track these results as optimizations and features are added to XEO.
 
 Below is a technical summary of how Exo-Bench works. While the methodology and benchmark may change over time, this document will be kept up to date whenever this happens. If you find an issue with the methodology, or would like a  feature to be added, please open a GitHub issue!
 

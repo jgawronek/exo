@@ -5,6 +5,15 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+from pytest import MonkeyPatch, fixture
+
+
+@fixture(autouse=True)
+def clear_xeo_environment(monkeypatch: MonkeyPatch) -> None:
+    for variable_name in tuple(os.environ):
+        if variable_name.startswith("XEO_"):
+            monkeypatch.delenv(variable_name)
+
 
 def test_xdg_paths_on_linux():
     """Test that XDG paths are used on Linux when XDG env vars are set."""

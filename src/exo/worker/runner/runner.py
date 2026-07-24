@@ -25,6 +25,7 @@ from exo.shared.types.tasks import (
     ImageEdits,
     ImageGeneration,
     LoadModel,
+    ShiftLayers,
     Shutdown,
     StartWarmup,
     Task,
@@ -120,7 +121,7 @@ class Runner:
         self.seen: set[TaskId] = set()
         self.active_tasks: dict[
             TaskId,
-            GenerationTask,
+            GenerationTask | ShiftLayers,
         ] = {}
 
         self._prefill_server: PrefillServer | None = None
@@ -301,7 +302,7 @@ class Runner:
                 )
                 logger.info("runner ready")
 
-            case TextGeneration() | ImageEdits() | ImageGeneration() if isinstance(
+            case TextGeneration() | ImageEdits() | ImageGeneration() | ShiftLayers() if isinstance(
                 self.current_status, RunnerReady
             ):
                 return_code = self.handle_generation_tasks(starting_task=task)
@@ -328,12 +329,21 @@ class Runner:
         self.send_task_status(task.task_id, TaskStatus.Complete)
         self.update_status(RunnerShutdown())
 
-    def submit_generation(self, task: GenerationTask):
+    def submit_generation(self, task: GenerationTask | ShiftLayers):
         assert isinstance(self.generator, Engine)
+        if isinstance(task, ShiftLayers):
+            if not self.generator.submit_shard_update(task):
+                logger.warning(
+                    "engine does not support live layer shifts; failing task"
+                )
+                self.send_task_status(task.task_id, TaskStatus.Failed)
+                return
+            self.active_tasks[task.task_id] = task
+            return
         self.active_tasks[task.task_id] = task
         self.generator.submit(task)
 
-    def handle_generation_tasks(self, starting_task: GenerationTask):
+    def handle_generation_tasks(self, starting_task: GenerationTask | ShiftLayers):
         assert isinstance(self.current_status, RunnerReady)
         assert isinstance(self.generator, Engine)
 
@@ -354,10 +364,14 @@ class Runner:
                     case CancelledResponse():
                         finished.append(task_id)
                     case FinishedResponse():
-                        self.send_task_status(task_id, TaskStatus.Complete)
+                        self._finalize_task(task_id)
                         finished.append(task_id)
                     case other:
-                        self.send_chunk(other, self.active_tasks[task_id].command_id)
+                        active_task = self.active_tasks[task_id]
+                        assert not isinstance(active_task, ShiftLayers), (
+                            "shard updates produce no generation chunks"
+                        )
+                        self.send_chunk(other, active_task.command_id)
 
             for task_id in finished:
                 self.active_tasks.pop(task_id, None)
@@ -384,7 +398,7 @@ class Runner:
                 continue
             self.seen.add(item.task_id)
             match item:
-                case TextGeneration() | ImageGeneration() | ImageEdits():
+                case TextGeneration() | ImageGeneration() | ImageEdits() | ShiftLayers():
                     self.acknowledge_task(item)
                     self.submit_generation(item)
                 case Shutdown():
@@ -399,6 +413,19 @@ class Runner:
         logger.info("runner ready")
 
         return ExitCode.AllTasksComplete
+
+    def _finalize_task(self, task_id: TaskId) -> None:
+        """Report completion and absorb side-effects of special tasks.
+
+        A completed layer shift changes which layers this runner holds, so the
+        published stage timings must be attributed to the new range.
+        """
+        finished_task = self.active_tasks.get(task_id)
+        if isinstance(finished_task, ShiftLayers):
+            new_shard = finished_task.new_shards.get(self.runner_id)
+            if new_shard is not None:
+                self.shard_metadata = new_shard
+        self.send_task_status(task_id, TaskStatus.Complete)
 
     def send_chunk(
         self,

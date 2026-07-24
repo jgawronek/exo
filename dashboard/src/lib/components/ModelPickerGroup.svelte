@@ -164,7 +164,7 @@
     anyVariantHasInstance
       ? 'hover:bg-white/5 cursor-pointer'
       : 'cursor-not-allowed'} {isMainSelected
-      ? 'bg-exo-yellow/10 border-l-2 border-exo-yellow'
+      ? 'bg-xeo-green/10 border-l-2 border-xeo-green'
       : 'border-l-2 border-transparent'}"
     onclick={() => {
       if (group.hasMultipleVariants) {
@@ -420,7 +420,7 @@
     <!-- Check mark if selected (single-variant) -->
     {#if isMainSelected}
       <svg
-        class="w-4 h-4 text-exo-yellow flex-shrink-0"
+        class="w-4 h-4 text-xeo-green flex-shrink-0"
         viewBox="0 0 24 24"
         fill="currentColor"
       >
@@ -498,7 +498,7 @@
           !variantHasInstance
             ? 'opacity-50 cursor-not-allowed'
             : 'cursor-pointer'} {isSelected
-            ? 'bg-exo-yellow/10 border-l-2 border-exo-yellow'
+            ? 'bg-xeo-green/10 border-l-2 border-xeo-green'
             : 'border-l-2 border-transparent'}"
           role="button"
           tabindex="0"
@@ -604,7 +604,7 @@
           <!-- Check mark if selected -->
           {#if isSelected}
             <svg
-              class="w-4 h-4 text-exo-yellow"
+              class="w-4 h-4 text-xeo-green"
               viewBox="0 0 24 24"
               fill="currentColor"
             >

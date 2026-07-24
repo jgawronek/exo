@@ -10,8 +10,15 @@
     nodeIdentities,
     instances,
     instanceStageTimings,
+    placementPreviews,
+    selectedPreviewModelId,
     type NodeInfo,
   } from "$lib/stores/app.svelte";
+  import {
+    getRingRouteHops,
+    orderNodeIdsByRing,
+    resolvePipelineRingNodeIds,
+  } from "$lib/utils/ringRoute";
 
   interface Props {
     class?: string;
@@ -38,6 +45,18 @@
   const rdmaCtlData = $derived(nodeRdmaCtl());
   const identitiesData = $derived(nodeIdentities());
   const instancesData = $derived(instances());
+  const previewsData = $derived(placementPreviews());
+  const selectedModelId = $derived(selectedPreviewModelId());
+
+  /** Placement-chosen MLX ring node order (deviceRank), when available. */
+  const ringNodeIds = $derived(
+    resolvePipelineRingNodeIds(
+      instancesData,
+      previewsData,
+      selectedModelId,
+    ),
+  );
+  const ringRouteHops = $derived(getRingRouteHops(ringNodeIds));
 
   function unwrapTagged(wrapped: unknown): unknown {
     if (!wrapped || typeof wrapped !== "object") return null;
@@ -261,7 +280,11 @@
 
     const nodes = data.nodes || {};
     const edges = data.edges || [];
-    const nodeIds = Object.keys(nodes);
+    const nodeIds = orderNodeIdsByRing(Object.keys(nodes), ringNodeIds);
+    const hasRingRoute = ringRouteHops.length > 0;
+    const routeHopKeys = new Set(
+      ringRouteHops.map((hop) => `${hop.source}|${hop.target}`),
+    );
 
     const rect = svgContainer.getBoundingClientRect();
     const width = rect.width;
@@ -290,25 +313,29 @@
     glowMerge.append("feMergeNode").attr("in", "coloredBlur");
     glowMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
-    // Arrowhead marker for directional edges
-    const marker = defs
-      .append("marker")
-      .attr("id", "arrowhead")
-      .attr("viewBox", "0 0 10 10")
-      .attr("refX", "10")
-      .attr("refY", "5")
-      .attr("markerWidth", "11")
-      .attr("markerHeight", "11")
-      .attr("orient", "auto-start-reverse");
-    marker
-      .append("path")
-      .attr("d", "M 0 0 L 10 5 L 0 10")
-      .attr("fill", "none")
-      .attr("stroke", "var(--xeo-light-gray, #B3B3B3)")
-      .attr("stroke-width", "1.6")
-      .attr("stroke-linecap", "round")
-      .attr("stroke-linejoin", "round")
-      .style("animation", "none");
+    // Arrowhead markers for directional edges
+    function appendArrowMarker(id: string, stroke: string) {
+      const marker = defs
+        .append("marker")
+        .attr("id", id)
+        .attr("viewBox", "0 0 10 10")
+        .attr("refX", "10")
+        .attr("refY", "5")
+        .attr("markerWidth", "11")
+        .attr("markerHeight", "11")
+        .attr("orient", "auto-start-reverse");
+      marker
+        .append("path")
+        .attr("d", "M 0 0 L 10 5 L 0 10")
+        .attr("fill", "none")
+        .attr("stroke", stroke)
+        .attr("stroke-width", "1.6")
+        .attr("stroke-linecap", "round")
+        .attr("stroke-linejoin", "round")
+        .style("animation", "none");
+    }
+    appendArrowMarker("arrowhead", "var(--xeo-light-gray, #B3B3B3)");
+    appendArrowMarker("arrowhead-route", "var(--xeo-green, oklch(0.78 0.17 145))");
 
     if (nodeIds.length === 0) {
       svg
@@ -458,68 +485,68 @@
       pairMap.set(key, entry);
     });
 
+    /** Draw a mid-edge arrow pointing toward the destination. */
+    function drawDirectedArrow(
+      from: { x: number; y: number },
+      to: { x: number; y: number },
+      markerId: string,
+    ) {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      const mx = (from.x + to.x) / 2;
+      const my = (from.y + to.y) / 2;
+      const tipOffset = 16;
+      const carrier = 2;
+      // Tip on destination side of midpoint; carrier oriented toward destination
+      const tipX = mx + ux * tipOffset;
+      const tipY = my + uy * tipOffset;
+      arrowsGroup
+        .append("line")
+        .attr("x1", tipX - ux * carrier)
+        .attr("y1", tipY - uy * carrier)
+        .attr("x2", tipX)
+        .attr("y2", tipY)
+        .attr("stroke", "none")
+        .attr("fill", "none")
+        .attr("marker-end", `url(#${markerId})`);
+    }
+
     pairMap.forEach((entry) => {
       const posA = positionById[entry.a];
       const posB = positionById[entry.b];
       if (!posA || !posB) return;
 
-      // Base dashed line
-      linksGroup
-        .append("line")
-        .attr("x1", posA.x)
-        .attr("y1", posA.y)
-        .attr("x2", posB.x)
-        .attr("y2", posB.y)
-        .attr("class", "graph-link");
+      const onRoute =
+        routeHopKeys.has(`${entry.a}|${entry.b}`) ||
+        routeHopKeys.has(`${entry.b}|${entry.a}`);
 
-      // Calculate midpoint and direction for arrows
-      const dx = posB.x - posA.x;
-      const dy = posB.y - posA.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len;
-      const uy = dy / len;
-      const mx = (posA.x + posB.x) / 2;
-      const my = (posA.y + posB.y) / 2;
-      const tipOffset = 16; // Distance from center for arrow tips
-      const carrier = 2; // Short segment length for arrow orientation
-
-      // Arrow A -> B (if connection exists in that direction)
-      if (entry.aToB) {
-        const tipX = mx - ux * tipOffset;
-        const tipY = my - uy * tipOffset;
-        arrowsGroup
+      // Physical mesh: dim non-route edges when a ring route is shown
+      if (!(hasRingRoute && onRoute)) {
+        linksGroup
           .append("line")
-          .attr("x1", tipX - ux * carrier)
-          .attr("y1", tipY - uy * carrier)
-          .attr("x2", tipX)
-          .attr("y2", tipY)
-          .attr("stroke", "none")
-          .attr("fill", "none")
-          .attr("marker-end", "url(#arrowhead)");
+          .attr("x1", posA.x)
+          .attr("y1", posA.y)
+          .attr("x2", posB.x)
+          .attr("y2", posB.y)
+          .attr("class", hasRingRoute ? "graph-link-mesh-dim" : "graph-link");
       }
 
-      // Arrow B -> A (if connection exists in that direction)
-      if (entry.bToA) {
-        const tipX = mx + ux * tipOffset;
-        const tipY = my + uy * tipOffset;
-        arrowsGroup
-          .append("line")
-          .attr("x1", tipX + ux * carrier)
-          .attr("y1", tipY + uy * carrier)
-          .attr("x2", tipX)
-          .attr("y2", tipY)
-          .attr("stroke", "none")
-          .attr("fill", "none")
-          .attr("marker-end", "url(#arrowhead)");
+      // Mesh arrows only when no placement route (route layer draws its own)
+      if (!hasRingRoute) {
+        if (entry.aToB) drawDirectedArrow(posA, posB, "arrowhead");
+        if (entry.bToA) drawDirectedArrow(posB, posA, "arrowhead");
       }
 
       // Collect debug labels for later positioning at edges
       if (debugEnabled && entry.connections.length > 0) {
-        // Determine which side of viewport based on edge midpoint
+        const mx = (posA.x + posB.x) / 2;
+        const my = (posA.y + posB.y) / 2;
         const isLeft = mx < centerX;
         const isTop = my < safeCenterY;
 
-        // Store for batch rendering after all edges processed
         debugEdgeLabels.push({
           connections: entry.connections,
           isLeft,
@@ -529,6 +556,25 @@
         });
       }
     });
+
+    // Placement-chosen ring route: accent directed hops
+    if (hasRingRoute) {
+      for (const hop of ringRouteHops) {
+        const from = positionById[hop.source];
+        const to = positionById[hop.target];
+        if (!from || !to) continue;
+
+        linksGroup
+          .append("line")
+          .attr("x1", from.x)
+          .attr("y1", from.y)
+          .attr("x2", to.x)
+          .attr("y2", to.y)
+          .attr("class", "graph-link-route");
+
+        drawDirectedArrow(from, to, "arrowhead-route");
+      }
+    }
 
     // Render debug labels at viewport edges/corners
     if (debugEdgeLabels && debugEdgeLabels.length > 0) {
@@ -625,7 +671,6 @@
       let ramTotal = 0;
       let ramUsed = 0;
       let gpuUsagePercent = 0;
-      let sysPower: number | null = null;
 
       if (macmon) {
         if (macmon.memory && macmon.memory.ram_total > 0) {
@@ -635,13 +680,10 @@
           ramUsed = macmon.memory.ram_usage;
         }
         if (macmon.temp && typeof macmon.temp.gpu_temp_avg === "number") {
-          gpuTemp = Math.max(30, macmon.temp.gpu_temp_avg);
+          gpuTemp = macmon.temp.gpu_temp_avg;
         }
         if (macmon.gpu_usage) {
           gpuUsagePercent = macmon.gpu_usage[1] * 100;
-        }
-        if (macmon.sys_power) {
-          sysPower = macmon.sys_power;
         }
       }
 
@@ -1053,8 +1095,7 @@
         }
       }
 
-      // --- Vertical GPU Bar (right side of icon) ---
-      // Show in both full mode and minimized mode (scaled appropriately)
+      // --- Vertical GPU Bar (right side of icon): load % + temp ---
       if (showFullLabels || isMinimized) {
         const gpuBarWidth = isMinimized
           ? Math.max(16, nodeRadius * 0.32)
@@ -1063,6 +1104,7 @@
         const barXOffset = iconBaseWidth / 2 + (isMinimized ? 5 : 10);
         const gpuBarX = nodeInfo.x + barXOffset;
         const gpuBarY = nodeInfo.y - gpuBarHeight / 2;
+        const hasGpuMetrics = macmon?.gpu_usage != null || !isNaN(gpuTemp);
 
         // GPU Bar Background (grey, no border)
         nodeG
@@ -1075,9 +1117,15 @@
           .attr("rx", 2);
 
         // GPU Bar Fill (from bottom up, colored by temperature)
-        if (gpuUsagePercent > 0) {
-          const fillHeight = (gpuUsagePercent / 100) * gpuBarHeight;
-          const gpuFillColor = getTemperatureColor(gpuTemp);
+        const clampedLoad = Math.max(0, Math.min(100, gpuUsagePercent));
+        if (clampedLoad > 0) {
+          const fillHeight = Math.max(
+            2,
+            (clampedLoad / 100) * gpuBarHeight,
+          );
+          const gpuFillColor = getTemperatureColor(
+            !isNaN(gpuTemp) ? Math.max(30, gpuTemp) : 45,
+          );
           nodeG
             .append("rect")
             .attr("x", gpuBarX)
@@ -1089,23 +1137,23 @@
             .attr("rx", 2);
         }
 
-        // GPU Stats Text (centered on bar, multiline, bigger and bold)
+        // Load % + temp centered on the bar
         const gpuTextX = gpuBarX + gpuBarWidth / 2;
         const gpuTextY = gpuBarY + gpuBarHeight / 2;
         const gpuTextFontSize = isMinimized
-          ? Math.max(10, gpuBarWidth * 0.6)
-          : Math.min(16, Math.max(12, gpuBarWidth * 0.55));
-        const lineSpacing = gpuTextFontSize * 1.25;
+          ? Math.max(10, gpuBarWidth * 0.55)
+          : Math.min(15, Math.max(11, gpuBarWidth * 0.5));
+        const lineSpacing = gpuTextFontSize * 1.35;
 
-        const gpuUsageText = `${gpuUsagePercent.toFixed(0)}%`;
-        const tempText = !isNaN(gpuTemp) ? `${gpuTemp.toFixed(0)}°C` : "-";
-        const powerText = sysPower !== null ? `${sysPower.toFixed(0)}W` : "-";
+        const gpuUsageText = hasGpuMetrics
+          ? `${clampedLoad.toFixed(0)}%`
+          : "-";
+        const tempText = !isNaN(gpuTemp) ? `${gpuTemp.toFixed(0)}°` : "-";
 
-        // GPU Usage %
         nodeG
           .append("text")
           .attr("x", gpuTextX)
-          .attr("y", gpuTextY - lineSpacing)
+          .attr("y", gpuTextY - lineSpacing * 0.45)
           .attr("text-anchor", "middle")
           .attr("dominant-baseline", "middle")
           .attr("fill", "#FFFFFF")
@@ -1114,11 +1162,10 @@
           .attr("font-family", "SF Mono, Monaco, monospace")
           .text(gpuUsageText);
 
-        // Temperature
         nodeG
           .append("text")
           .attr("x", gpuTextX)
-          .attr("y", gpuTextY)
+          .attr("y", gpuTextY + lineSpacing * 0.55)
           .attr("text-anchor", "middle")
           .attr("dominant-baseline", "middle")
           .attr("fill", "#FFFFFF")
@@ -1126,19 +1173,6 @@
           .attr("font-weight", "700")
           .attr("font-family", "SF Mono, Monaco, monospace")
           .text(tempText);
-
-        // Power (Watts)
-        nodeG
-          .append("text")
-          .attr("x", gpuTextX)
-          .attr("y", gpuTextY + lineSpacing)
-          .attr("text-anchor", "middle")
-          .attr("dominant-baseline", "middle")
-          .attr("fill", "#FFFFFF")
-          .attr("font-size", gpuTextFontSize)
-          .attr("font-weight", "700")
-          .attr("font-family", "SF Mono, Monaco, monospace")
-          .text(powerText);
       }
 
       // Labels - adapt based on mode
@@ -1412,7 +1446,11 @@
     const _highlightedNodes = highlightedNodes;
     const _nodeLayerLabels = nodeLayerLabels;
     const _nodeEfficiencyLabels = nodeEfficiencyLabels;
+    const _ringRouteHops = ringRouteHops;
+    const _ringNodeIds = ringNodeIds;
     if (_data) {
+      void _ringRouteHops;
+      void _ringNodeIds;
       renderGraph();
     }
   });
@@ -1443,6 +1481,19 @@
     stroke-width: 1px;
     stroke-dasharray: 4, 4;
     opacity: 0.8;
+    animation: flowAnimation 0.75s linear infinite;
+  }
+  :global(.graph-link-mesh-dim) {
+    stroke: var(--xeo-light-gray, #b3b3b3);
+    stroke-width: 1px;
+    stroke-dasharray: 4, 4;
+    opacity: 0.2;
+  }
+  :global(.graph-link-route) {
+    stroke: var(--xeo-green, oklch(0.78 0.17 145));
+    stroke-width: 2px;
+    stroke-dasharray: 6, 4;
+    opacity: 0.95;
     animation: flowAnimation 0.75s linear infinite;
   }
   @keyframes flowAnimation {

@@ -21,6 +21,7 @@ from mlx_lm.models.deepseek_v4 import (
 )
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
+from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.memory import Memory
 from exo.worker.engines.mlx.constants import CACHE_GROUP_SIZE, KV_CACHE_BITS
 from exo.worker.engines.mlx.types import KVCacheType, Model
@@ -43,16 +44,25 @@ def _default_memory_threshold() -> float:
     return 0.70
 
 
+_MEMORY_THRESHOLD_ENVIRONMENT_VALUE = get_compatible_environment_value(
+    os.environ,
+    "EXO_MEMORY_THRESHOLD",
+)
 _MEMORY_THRESHOLD = float(
-    os.environ.get("EXO_MEMORY_THRESHOLD", _default_memory_threshold())
+    _default_memory_threshold()
+    if _MEMORY_THRESHOLD_ENVIRONMENT_VALUE is None
+    else _MEMORY_THRESHOLD_ENVIRONMENT_VALUE
 )
 # Prefill needs temporary activation memory in addition to the persistent KV cache.
 # Keep a configurable reserve before starting it instead of waiting for an OOM.
+_PREFILL_MEMORY_THRESHOLD_ENVIRONMENT_VALUE = get_compatible_environment_value(
+    os.environ,
+    "EXO_PREFILL_MEMORY_THRESHOLD",
+)
 _PREFILL_MEMORY_THRESHOLD = float(
-    os.environ.get(
-        "EXO_PREFILL_MEMORY_THRESHOLD",
-        max(0.0, _MEMORY_THRESHOLD - 0.10),
-    )
+    max(0.0, _MEMORY_THRESHOLD - 0.10)
+    if _PREFILL_MEMORY_THRESHOLD_ENVIRONMENT_VALUE is None
+    else _PREFILL_MEMORY_THRESHOLD_ENVIRONMENT_VALUE
 )
 
 if not 0.0 <= _PREFILL_MEMORY_THRESHOLD <= _MEMORY_THRESHOLD:

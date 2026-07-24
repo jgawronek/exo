@@ -464,43 +464,43 @@
   <!-- Corner accents -->
   <div
     class="absolute -top-px -left-px w-2 h-2 border-l border-t {canFit
-      ? 'border-exo-yellow/30 group-hover:border-exo-yellow/60'
+      ? 'border-xeo-green/30 group-hover:border-xeo-green/60'
       : 'border-red-500/30'} transition-colors"
   ></div>
   <div
     class="absolute -top-px -right-px w-2 h-2 border-r border-t {canFit
-      ? 'border-exo-yellow/30 group-hover:border-exo-yellow/60'
+      ? 'border-xeo-green/30 group-hover:border-xeo-green/60'
       : 'border-red-500/30'} transition-colors"
   ></div>
   <div
     class="absolute -bottom-px -left-px w-2 h-2 border-l border-b {canFit
-      ? 'border-exo-yellow/30 group-hover:border-exo-yellow/60'
+      ? 'border-xeo-green/30 group-hover:border-xeo-green/60'
       : 'border-red-500/30'} transition-colors"
   ></div>
   <div
     class="absolute -bottom-px -right-px w-2 h-2 border-r border-b {canFit
-      ? 'border-exo-yellow/30 group-hover:border-exo-yellow/60'
+      ? 'border-xeo-green/30 group-hover:border-xeo-green/60'
       : 'border-red-500/30'} transition-colors"
   ></div>
 
   <div
-    class="bg-exo-dark-gray/60 border {canFit
-      ? 'border-exo-yellow/20 group-hover:border-exo-yellow/40'
-      : 'border-red-500/20'} p-3 transition-all duration-200 group-hover:shadow-[0_0_15px_rgba(255,215,0,0.1)]"
+    class="bg-xeo-dark-gray/60 border {canFit
+      ? 'border-xeo-green/20 group-hover:border-xeo-green/40'
+      : 'border-red-500/20'} p-3 transition-all duration-200 group-hover:shadow-[0_0_15px_oklch(0.78_0.17_145/0.1)]"
   >
     <!-- Model Name & Memory Required -->
     <div class="flex items-start justify-between gap-2 mb-2">
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2">
           <div
-            class="text-exo-yellow text-xs font-mono tracking-wide truncate"
+            class="text-xeo-green text-xs font-mono tracking-wide truncate"
             title={model.name || model.id}
           >
             {model.name || model.id}
           </div>
           {#if huggingFaceModelId}
             <a
-              class="shrink-0 text-white/60 hover:text-exo-yellow transition-colors"
+              class="shrink-0 text-white/60 hover:text-xeo-green transition-colors"
               href={`https://huggingface.co/${huggingFaceModelId}`}
               target="_blank"
               rel="noreferrer noopener"
@@ -540,7 +540,7 @@
         </div>
         {#if model.name && model.name !== model.id}
           <div
-            class="text-xs text-exo-light-gray font-mono truncate mt-0.5"
+            class="text-xs text-xeo-light-gray font-mono truncate mt-0.5"
             title={model.id}
           >
             {model.id}
@@ -550,7 +550,7 @@
       <div class="flex-shrink-0 text-right">
         <div
           class="text-xs font-mono {canFit
-            ? 'text-exo-yellow'
+            ? 'text-xeo-green'
             : 'text-red-400'}"
         >
           {estimatedMemory}GB
@@ -561,7 +561,7 @@
     <!-- Configuration Badge -->
     <div class="flex items-center gap-1.5 mb-2">
       <span
-        class="px-1.5 py-0.5 text-xs font-mono tracking-wider uppercase bg-exo-medium-gray/30 text-exo-light-gray border border-exo-medium-gray/40"
+        class="px-1.5 py-0.5 text-xs font-mono tracking-wider uppercase bg-xeo-medium-gray/30 text-xeo-light-gray border border-xeo-medium-gray/40"
         title={sharding === "Pipeline"
           ? "Pipeline: splits model into sequential stages across devices. Lower network overhead."
           : "Tensor: splits each layer across devices. Best with high-bandwidth connections (Thunderbolt)."}
@@ -569,7 +569,7 @@
         {sharding}
       </span>
       <span
-        class="px-1.5 py-0.5 text-xs font-mono tracking-wider uppercase bg-exo-medium-gray/30 text-exo-light-gray border border-exo-medium-gray/40"
+        class="px-1.5 py-0.5 text-xs font-mono tracking-wider uppercase bg-xeo-medium-gray/30 text-xeo-light-gray border border-xeo-medium-gray/40"
         title={runtime === "MlxRing"
           ? "Ring: standard networking. Works over any connection (Wi-Fi, Ethernet, Thunderbolt)."
           : "RDMA: direct memory access over Thunderbolt. Significantly faster for multi-device inference."}
@@ -596,21 +596,21 @@
               >{node.nodeName}</span
             >
             <div
-              class="flex-1 h-1 bg-exo-medium-gray/30 rounded overflow-hidden"
+              class="flex-1 h-1 bg-xeo-medium-gray/30 rounded overflow-hidden"
             >
               <div
                 class="h-full transition-all duration-300 {node.status ===
                 'downloading'
                   ? 'bg-blue-500/70'
                   : node.status === 'completed'
-                    ? 'bg-exo-yellow/40'
+                    ? 'bg-xeo-green/40'
                     : 'bg-white/20'}"
                 style="width: {node.percentage}%"
               ></div>
             </div>
             <span
               class="text-right {node.status === 'completed'
-                ? 'text-exo-yellow/60'
+                ? 'text-xeo-green/60'
                 : node.status === 'downloading'
                   ? 'text-blue-400/60'
                   : 'text-white/30'}"
@@ -632,11 +632,11 @@
     {#if placementPreview().nodes.length > 0}
       {@const preview = placementPreview()}
       <div
-        class="mb-3 bg-exo-black/60 rounded border border-exo-medium-gray/20 p-2 relative overflow-hidden"
+        class="mb-3 bg-xeo-black/60 rounded border border-xeo-medium-gray/20 p-2 relative overflow-hidden"
       >
         <!-- Scanline effect -->
         <div
-          class="absolute inset-0 bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,rgba(255,215,0,0.02)_2px,rgba(255,215,0,0.02)_4px)] pointer-events-none"
+          class="absolute inset-0 bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,oklch(0.78_0.17_145/0.02)_2px,oklch(0.78_0.17_145/0.02)_4px)] pointer-events-none"
         ></div>
 
         <svg
@@ -703,7 +703,7 @@
                   y1={node.y}
                   x2={node2.x}
                   y2={node2.y}
-                  stroke={node.isUsed && node2.isUsed ? "#FFD700" : "#374151"}
+                  stroke={node.isUsed && node2.isUsed ? "oklch(0.78 0.17 145)" : "#374151"}
                   stroke-width="1"
                   stroke-dasharray={node.isUsed && node2.isUsed ? "4,2" : "2,4"}
                   opacity={node.isUsed && node2.isUsed ? 0.4 : 0.15}
@@ -834,7 +834,7 @@
                     height={node.iconSize * 0.65}
                     rx="2"
                     fill="none"
-                    stroke={node.isUsed ? "#FFD700" : "#4B5563"}
+                    stroke={node.isUsed ? "oklch(0.78 0.17 145)" : "#4B5563"}
                     stroke-width="1.5"
                   />
                   <!-- Screen area (memory fill container) -->
@@ -852,7 +852,7 @@
                       y={2 + node.screenHeight * (1 - node.newPercent / 100)}
                       width={node.iconSize - 8}
                       height={node.screenHeight * (node.newPercent / 100)}
-                      fill="rgba(255,215,0,0.75)"
+                      fill="oklch(0.78 0.17 145 / 0.75)"
                     />
                   {/if}
                   <!-- Base/keyboard -->
@@ -862,7 +862,7 @@
                       0.68} L {node.iconSize - 2} {node.iconSize *
                       0.78} L 2 {node.iconSize * 0.78} Z"
                     fill="none"
-                    stroke={node.isUsed ? "#FFD700" : "#4B5563"}
+                    stroke={node.isUsed ? "oklch(0.78 0.17 145)" : "#4B5563"}
                     stroke-width="1.5"
                   />
                 </g>
@@ -879,7 +879,7 @@
                     height={node.iconSize - 4}
                     rx="4"
                     fill="none"
-                    stroke={node.isUsed ? "#FFD700" : "#4B5563"}
+                    stroke={node.isUsed ? "oklch(0.78 0.17 145)" : "#4B5563"}
                     stroke-width="1.5"
                   />
                   <!-- Memory fill background -->
@@ -897,7 +897,7 @@
                       y={4 + (node.iconSize - 8) * (1 - node.newPercent / 100)}
                       width={node.iconSize - 8}
                       height={(node.iconSize - 8) * (node.newPercent / 100)}
-                      fill="rgba(255,215,0,0.75)"
+                      fill="oklch(0.78 0.17 145 / 0.75)"
                     />
                   {/if}
                 </g>
@@ -914,7 +914,7 @@
                     height={node.iconSize * 0.4}
                     rx="3"
                     fill="none"
-                    stroke={node.isUsed ? "#FFD700" : "#4B5563"}
+                    stroke={node.isUsed ? "oklch(0.78 0.17 145)" : "#4B5563"}
                     stroke-width="1.5"
                   />
                   <!-- Memory fill background -->
@@ -933,7 +933,7 @@
                         node.iconSize * 0.36 * (1 - node.newPercent / 100)}
                       width={node.iconSize - 8}
                       height={node.iconSize * 0.36 * (node.newPercent / 100)}
-                      fill="rgba(255,215,0,0.75)"
+                      fill="oklch(0.78 0.17 145 / 0.75)"
                     />
                   {/if}
                 </g>
@@ -963,14 +963,14 @@
                         y={node.iconSize * (1 - node.newPercent / 100)}
                         width={node.iconSize}
                         height={node.iconSize * (node.newPercent / 100)}
-                        fill="rgba(255,215,0,0.75)"
+                        fill="oklch(0.78 0.17 145 / 0.75)"
                       />
                     {/if}
                   </g>
                   <polygon
                     points={hexPoints}
-                    fill={node.isUsed ? "rgba(255,215,0,0.1)" : "none"}
-                    stroke={node.isUsed ? "#FFD700" : "#4B5563"}
+                    fill={node.isUsed ? "oklch(0.78 0.17 145 / 0.1)" : "none"}
+                    stroke={node.isUsed ? "oklch(0.78 0.17 145)" : "#4B5563"}
                     stroke-width="1.5"
                   />
                 </g>
@@ -985,7 +985,7 @@
                 fill={node.isUsed
                   ? node.newPercent > 90
                     ? "#f87171"
-                    : "#FFD700"
+                    : "oklch(0.78 0.17 145)"
                   : "#4B5563"}
               >
                 {node.newPercent.toFixed(0)}%
@@ -1002,15 +1002,15 @@
       disabled={isLaunching || !canFit}
       class="w-full py-2 text-sm font-mono tracking-wider uppercase border transition-all duration-200
 				{isLaunching
-        ? 'bg-transparent text-exo-yellow border-exo-yellow/50 cursor-wait'
+        ? 'bg-transparent text-xeo-green border-xeo-green/50 cursor-wait'
         : !canFit
           ? 'bg-red-500/10 text-red-400/70 border-red-500/30 cursor-not-allowed'
-          : 'bg-transparent text-exo-light-gray border-exo-light-gray/40 hover:text-exo-yellow hover:border-exo-yellow/50 cursor-pointer'}"
+          : 'bg-transparent text-xeo-light-gray border-xeo-light-gray/40 hover:text-xeo-green hover:border-xeo-green/50 cursor-pointer'}"
     >
       {#if isLaunching}
         <span class="flex items-center justify-center gap-1.5">
           <span
-            class="w-2 h-2 border border-exo-yellow border-t-transparent rounded-full animate-spin"
+            class="w-2 h-2 border border-xeo-green border-t-transparent rounded-full animate-spin"
           ></span>
           LAUNCHING...
         </span>

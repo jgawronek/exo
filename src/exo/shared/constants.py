@@ -1,33 +1,61 @@
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
+from exo.shared.environment import get_compatible_environment_value
 from exo.utils.dashboard_path import find_dashboard, find_resources
 
-_EXO_HOME_ENV = os.environ.get("EXO_HOME", None)
 
+def _get_xdg_dir(
+    environment: Mapping[str, str],
+    platform: str,
+    home: Path,
+    xdg_variable_name: str,
+    fallback: str,
+) -> Path:
+    """Get an XDG directory while preserving the established exo path layout."""
 
-def _get_xdg_dir(env_var: str, fallback: str) -> Path:
-    """Get XDG directory, prioritising EXO_HOME environment variable if its set. On non-Linux platforms, default to ~/.exo."""
+    exo_home = get_compatible_environment_value(environment, "EXO_HOME")
+    if exo_home is not None:
+        return home / exo_home
 
-    if _EXO_HOME_ENV is not None:
-        return Path.home() / _EXO_HOME_ENV
+    if platform != "linux":
+        return home / ".exo"
 
-    if sys.platform != "linux":
-        return Path.home() / ".exo"
-
-    xdg_value = os.environ.get(env_var, None)
+    xdg_value = environment.get(xdg_variable_name)
     if xdg_value is not None:
         return Path(xdg_value) / "exo"
-    return Path.home() / fallback / "exo"
+    return home / fallback / "exo"
 
 
-EXO_CONFIG_HOME = _get_xdg_dir("XDG_CONFIG_HOME", ".config")
-EXO_DATA_HOME = _get_xdg_dir("XDG_DATA_HOME", ".local/share")
-EXO_CACHE_HOME = _get_xdg_dir("XDG_CACHE_HOME", ".cache")
+EXO_CONFIG_HOME = _get_xdg_dir(
+    os.environ,
+    sys.platform,
+    Path.home(),
+    "XDG_CONFIG_HOME",
+    ".config",
+)
+EXO_DATA_HOME = _get_xdg_dir(
+    os.environ,
+    sys.platform,
+    Path.home(),
+    "XDG_DATA_HOME",
+    ".local/share",
+)
+EXO_CACHE_HOME = _get_xdg_dir(
+    os.environ,
+    sys.platform,
+    Path.home(),
+    "XDG_CACHE_HOME",
+    ".cache",
+)
 
 # Default models directory (always included as first entry in writable dirs)
-_EXO_DEFAULT_MODELS_DIR_ENV = os.environ.get("EXO_DEFAULT_MODELS_DIR", None)
+_EXO_DEFAULT_MODELS_DIR_ENV = get_compatible_environment_value(
+    os.environ,
+    "EXO_DEFAULT_MODELS_DIR",
+)
 EXO_DEFAULT_MODELS_DIR = (
     Path(_EXO_DEFAULT_MODELS_DIR_ENV).expanduser()
     if _EXO_DEFAULT_MODELS_DIR_ENV is not None
@@ -35,17 +63,25 @@ EXO_DEFAULT_MODELS_DIR = (
 )
 
 
-def _parse_colon_dirs(env_var: str) -> tuple[Path, ...]:
-    raw = os.environ.get(env_var, None)
-    if raw is None:
+def _parse_colon_dirs(environment_value: str | None) -> tuple[Path, ...]:
+    if environment_value is None:
         return ()
-    return tuple(Path(p).expanduser() for p in raw.split(":") if p)
+    return tuple(
+        Path(path).expanduser() for path in environment_value.split(":") if path
+    )
 
 
 # Read-only model directories (colon-separated). Never written to or deleted from.
-_EXO_MODELS_READ_ONLY_DIRS_ENV = _parse_colon_dirs("EXO_MODELS_READ_ONLY_DIRS")
+_EXO_MODELS_READ_ONLY_DIRS_ENV = _parse_colon_dirs(
+    get_compatible_environment_value(
+        os.environ,
+        "EXO_MODELS_READ_ONLY_DIRS",
+    )
+)
 # Writable model directories (colon-separated). Default dir is always prepended.
-_EXO_MODELS_DIRS_ENV = _parse_colon_dirs("EXO_MODELS_DIRS")
+_EXO_MODELS_DIRS_ENV = _parse_colon_dirs(
+    get_compatible_environment_value(os.environ, "EXO_MODELS_DIRS")
+)
 
 # If a directory appears in both lists, treat it as read-only.
 _read_only_set = frozenset(_EXO_MODELS_READ_ONLY_DIRS_ENV)
@@ -56,11 +92,17 @@ EXO_MODELS_DIRS: tuple[Path, ...] = tuple(
 )
 EXO_MODELS_READ_ONLY_DIRS: tuple[Path, ...] = _EXO_MODELS_READ_ONLY_DIRS_ENV
 
-_RESOURCES_DIR_ENV = os.environ.get("EXO_RESOURCES_DIR", None)
+_RESOURCES_DIR_ENV = get_compatible_environment_value(
+    os.environ,
+    "EXO_RESOURCES_DIR",
+)
 RESOURCES_DIR = (
     find_resources() if _RESOURCES_DIR_ENV is None else Path.home() / _RESOURCES_DIR_ENV
 )
-_DASHBOARD_DIR_ENV = os.environ.get("EXO_DASHBOARD_DIR", None)
+_DASHBOARD_DIR_ENV = get_compatible_environment_value(
+    os.environ,
+    "EXO_DASHBOARD_DIR",
+)
 DASHBOARD_DIR = (
     find_dashboard() if _DASHBOARD_DIR_ENV is None else Path.home() / _DASHBOARD_DIR_ENV
 )
@@ -94,15 +136,36 @@ EXO_IMAGE_CACHE_DIR = EXO_CACHE_HOME / "images"
 EXO_TRACING_CACHE_DIR = EXO_CACHE_HOME / "traces"
 
 EXO_ENABLE_IMAGE_MODELS = (
-    os.getenv("EXO_ENABLE_IMAGE_MODELS", "false").lower() == "true"
+    get_compatible_environment_value(
+        os.environ,
+        "EXO_ENABLE_IMAGE_MODELS",
+        "false",
+    ).lower()
+    == "true"
 )
 
-EXO_OFFLINE = os.getenv("EXO_OFFLINE", "false").lower() == "true"
+EXO_OFFLINE = (
+    get_compatible_environment_value(os.environ, "EXO_OFFLINE", "false").lower()
+    == "true"
+)
 
-EXO_TRACING_ENABLED = os.getenv("EXO_TRACING_ENABLED", "false").lower() == "true"
+EXO_TRACING_ENABLED = (
+    get_compatible_environment_value(
+        os.environ,
+        "EXO_TRACING_ENABLED",
+        "false",
+    ).lower()
+    == "true"
+)
 
 ENABLE_DISAGGREGATION = os.getenv("ENABLE_DISAGGREGATION", "false").lower() == "true"
 
-EXO_MAX_CONCURRENT_REQUESTS = int(os.getenv("EXO_MAX_CONCURRENT_REQUESTS", "8"))
+EXO_MAX_CONCURRENT_REQUESTS = int(
+    get_compatible_environment_value(
+        os.environ,
+        "EXO_MAX_CONCURRENT_REQUESTS",
+        "8",
+    )
+)
 
 EXO_MAX_INSTANCE_RETRIES = 5

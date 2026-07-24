@@ -68,7 +68,7 @@
 </script>
 
 <header
-  class="relative z-20 flex items-center justify-center px-4 md:px-6 pt-4 md:pt-8 pb-3 md:pb-4 bg-exo-dark-gray"
+  class="relative z-20 flex items-center justify-center px-4 md:px-6 pt-4 md:pt-8 pb-3 md:pb-4 bg-xeo-dark-gray"
 >
   <!-- Left: Sidebar Toggle (desktop) or Mobile Sidebar Toggle (mobile) -->
   <div
@@ -77,7 +77,7 @@
     <!-- Mobile sidebar toggle -->
     <button
       onclick={handleToggleMobileMenu}
-      class="p-2 rounded border border-exo-light-gray/30 hover:border-exo-yellow/50 hover:bg-exo-medium-gray/30 transition-colors cursor-pointer md:hidden"
+      class="p-2 rounded border border-xeo-light-gray/30 hover:border-xeo-green/50 hover:bg-xeo-medium-gray/30 transition-colors cursor-pointer md:hidden"
       title={mobileMenuOpen ? "Hide sidebar" : "Show sidebar"}
       aria-label={mobileMenuOpen
         ? "Hide conversation sidebar"
@@ -90,8 +90,8 @@
         stroke="currentColor"
         stroke-width="2"
         class="w-5 h-5 {mobileMenuOpen
-          ? 'text-exo-yellow'
-          : 'text-exo-light-gray'}"
+          ? 'text-xeo-green'
+          : 'text-xeo-light-gray'}"
       >
         {#if mobileMenuOpen}
           <path
@@ -111,7 +111,7 @@
     <!-- Desktop sidebar toggle -->
     <button
       onclick={handleToggleSidebar}
-      class="p-2 rounded border border-exo-light-gray/30 hover:border-exo-yellow/50 hover:bg-exo-medium-gray/30 transition-colors cursor-pointer hidden md:block"
+      class="p-2 rounded border border-xeo-light-gray/30 hover:border-xeo-green/50 hover:bg-xeo-medium-gray/30 transition-colors cursor-pointer hidden md:block"
       title={sidebarVisible ? "Hide sidebar" : "Show sidebar"}
       aria-label={sidebarVisible
         ? "Hide conversation sidebar"
@@ -124,8 +124,8 @@
         stroke="currentColor"
         stroke-width="2"
         class="w-5 h-5 {sidebarVisible
-          ? 'text-exo-yellow'
-          : 'text-exo-light-gray'}"
+          ? 'text-xeo-green'
+          : 'text-xeo-light-gray'}"
       >
         {#if sidebarVisible}
           <path
@@ -154,9 +154,9 @@
     disabled={!showHome}
   >
     <img
-      src="/exo-logo.png"
-      alt="EXO"
-      class="h-12 md:h-18 drop-shadow-[0_0_4px_rgba(255,215,0,0.3)]"
+      src="/xeo-wordmark.svg"
+      alt="XEO"
+      class="h-12 md:h-18 drop-shadow-[0_0_4px_oklch(0.78_0.17_145/0.3)]"
     />
   </button>
 
@@ -169,7 +169,7 @@
     {#if showMobileRightToggle}
       <button
         onclick={handleToggleMobileRight}
-        class="p-2 rounded border border-exo-light-gray/30 hover:border-exo-yellow/50 hover:bg-exo-medium-gray/30 transition-colors cursor-pointer md:hidden"
+        class="p-2 rounded border border-xeo-light-gray/30 hover:border-xeo-green/50 hover:bg-xeo-medium-gray/30 transition-colors cursor-pointer md:hidden"
         title={mobileRightOpen ? "Hide instances" : "Show instances"}
         aria-label={mobileRightOpen
           ? "Hide instances panel"
@@ -182,8 +182,8 @@
           stroke="currentColor"
           stroke-width="2"
           class="w-5 h-5 {mobileRightOpen
-            ? 'text-exo-yellow'
-            : 'text-exo-light-gray'}"
+            ? 'text-xeo-green'
+            : 'text-xeo-light-gray'}"
         >
           {#if mobileRightOpen}
             <path
@@ -204,7 +204,7 @@
     {#if showHome}
       <button
         onclick={handleHome}
-        class="flex text-sm text-white/70 hover:text-exo-yellow transition-colors tracking-wider uppercase items-center gap-2 cursor-pointer"
+        class="flex text-sm text-white/70 hover:text-xeo-green transition-colors tracking-wider uppercase items-center gap-2 cursor-pointer"
         title="Back to topology view"
       >
         <svg
@@ -225,7 +225,7 @@
     {/if}
     <a
       href="/#/downloads"
-      class="text-xs md:text-sm text-white/70 hover:text-exo-yellow transition-colors tracking-wider uppercase flex items-center gap-1.5 md:gap-2 cursor-pointer"
+      class="text-xs md:text-sm text-white/70 hover:text-xeo-green transition-colors tracking-wider uppercase flex items-center gap-1.5 md:gap-2 cursor-pointer"
       title="View downloads overview"
     >
       {#if downloadProgress}
@@ -281,7 +281,7 @@
     </a>
     <a
       href="/#/integrations"
-      class="text-xs md:text-sm text-white/70 hover:text-exo-yellow transition-colors tracking-wider uppercase flex items-center gap-1.5 md:gap-2 cursor-pointer"
+      class="text-xs md:text-sm text-white/70 hover:text-xeo-green transition-colors tracking-wider uppercase flex items-center gap-1.5 md:gap-2 cursor-pointer"
       title="Integration configs for external tools"
     >
       <svg
@@ -303,7 +303,7 @@
     {#if showAdvanced}
       <a
         href="/#/advanced"
-        class="text-xs md:text-sm text-white/70 hover:text-exo-yellow transition-colors tracking-wider uppercase flex items-center gap-1.5 md:gap-2 cursor-pointer"
+        class="text-xs md:text-sm text-white/70 hover:text-xeo-green transition-colors tracking-wider uppercase flex items-center gap-1.5 md:gap-2 cursor-pointer"
         title="Advanced cluster settings"
       >
         <svg

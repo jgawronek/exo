@@ -54,6 +54,8 @@
     toggleTopologyOnlyMode,
     chatSidebarVisible,
     toggleChatSidebarVisible,
+    rightSidebarWidth,
+    setRightSidebarWidth,
     mobileChatSidebarOpen,
     toggleMobileChatSidebar,
     setMobileChatSidebarOpen,
@@ -90,6 +92,7 @@
   const debugEnabled = $derived(debugMode());
   const topologyOnlyEnabled = $derived(topologyOnlyMode());
   const sidebarVisible = $derived(chatSidebarVisible());
+  const rightSidebarWidthPx = $derived(rightSidebarWidth());
   const mobileChatOpen = $derived(mobileChatSidebarOpen());
   const mobileRightOpen = $derived(mobileRightSidebarOpen());
   const tbBridgeCycles = $derived(thunderboltBridgeCycles());
@@ -360,7 +363,7 @@
   const titleOpacity = tweened(0, { duration: 500, easing: cubicOut });
   const subtitleOpacity = tweened(0, { duration: 500, easing: cubicOut });
 
-  // ── Step 1: "Your EXO Network" — show real topology ──
+  // ── Step 1: "Your XEO Network" — show real topology ──
   $effect(() => {
     if (onboardingStep === 1) {
       showContinueButton = false;
@@ -470,7 +473,7 @@
       titleOpacity.set(0, { duration: 250 });
       subtitleOpacity.set(0, { duration: 250 });
       setTimeout(() => {
-        stepTitle = "exo splits models across devices";
+        stepTitle = "XEO splits models across devices";
         titleOpacity.set(1, { duration: 400 });
         subtitleOpacity.set(1, { duration: 400 });
       }, 250);
@@ -529,7 +532,7 @@
         subtitleOpacity.set(0, { duration: 250 });
       }, 2550);
       const t4b = setTimeout(() => {
-        stepTitle = "exo self-heals";
+        stepTitle = "XEO self-heals";
         titleOpacity.set(1, { duration: 400 });
         subtitleOpacity.set(1, { duration: 400 });
       }, 2800);
@@ -976,6 +979,9 @@
   // Slider dragging state
   let isDraggingSlider = $state(false);
   let sliderTrackElement: HTMLDivElement | null = $state(null);
+  let rightSidebarElement: HTMLElement | null = $state(null);
+  let isDraggingRightSidebar = $state(false);
+  let rightSidebarDragRightEdge = 0;
 
   // Instances container ref for scrolling
   let instancesContainerRef: HTMLDivElement | null = $state(null);
@@ -1873,7 +1879,7 @@
       case "LOADED":
         return "text-green-400";
       default:
-        return "text-exo-light-gray";
+        return "text-xeo-light-gray";
     }
   }
 
@@ -2285,17 +2291,26 @@
   }
 
   let rebalancingInstances = $state<Record<string, boolean>>({});
-  // Instances mid-rebalance: the old instance is deleted, the master waits
-  // for memory to be released, then relaunches. This keeps a placeholder
-  // card visible for the whole transition instead of the card vanishing.
+  // Instances mid-rebalance. The rebalance is a live migration: the master
+  // moves one layer at a time between adjacent pipeline ranks while the
+  // instance keeps serving, so the card never disappears — it shows a
+  // defrag-style progress bar driven by the shard assignments in state.
   let rebalanceTransitions = $state<
-    Record<string, { modelId: string; startedAt: number }>
+    Record<
+      string,
+      {
+        modelId: string;
+        startedAt: number;
+        nodeLayers: Record<string, number>;
+        totalSteps: number;
+      }
+    >
   >({});
 
   const pendingRebalances = $derived.by(() => {
     return Object.entries(rebalanceTransitions).filter(([oldId, t]) => {
-      if (instanceData[oldId]) return false; // old card still visible
-      // Hide once the relaunched instance shows up (its own card takes over)
+      if (instanceData[oldId]) return false; // instance card still visible
+      // Hide once a replacement instance shows up (its own card takes over)
       for (const [id, inst] of Object.entries(instanceData)) {
         if (id !== oldId && getInstanceModelId(inst) === t.modelId)
           return false;
@@ -2304,17 +2319,81 @@
     });
   });
 
+  // Remaining single-layer boundary moves for a live migration, derived from
+  // the same cumulative-boundary distance the server's planner uses, so the
+  // bar advances exactly once per committed shift.
+  function getRebalanceMigration(
+    instanceId: string,
+    instanceWrapped: unknown,
+  ): { done: number; total: number } | null {
+    const transition = rebalanceTransitions[instanceId];
+    if (!transition || transition.totalSteps <= 0) return null;
+    const [, instance] = getTagged(instanceWrapped);
+    const inst = (instance ?? {}) as {
+      shardAssignments?: {
+        runnerToShard?: Record<string, unknown>;
+        nodeToRunner?: Record<string, string>;
+      };
+    };
+    const runnerToShard = inst.shardAssignments?.runnerToShard || {};
+    const nodeToRunner = inst.shardAssignments?.nodeToRunner || {};
+    const shards = Object.entries(runnerToShard)
+      .map(([runnerId, wrapped]) => {
+        const [, shard] = getTagged(wrapped);
+        const shardInfo = (shard ?? {}) as {
+          deviceRank?: number;
+          startLayer?: number;
+          endLayer?: number;
+        };
+        return {
+          runnerId,
+          rank: shardInfo.deviceRank ?? 0,
+          layers: (shardInfo.endLayer ?? 0) - (shardInfo.startLayer ?? 0),
+        };
+      })
+      .sort((a, b) => a.rank - b.rank);
+    if (shards.length < 2) return null;
+    const targetByRunner: Record<string, number> = {};
+    for (const [nodeId, layers] of Object.entries(transition.nodeLayers)) {
+      const runnerId = nodeToRunner[nodeId];
+      if (!runnerId) return null;
+      targetByRunner[runnerId] = layers;
+    }
+    let currentBoundary = 0;
+    let targetBoundary = 0;
+    let remaining = 0;
+    for (const shard of shards.slice(0, -1)) {
+      const target = targetByRunner[shard.runnerId];
+      if (target === undefined) return null;
+      currentBoundary += shard.layers;
+      targetBoundary += target;
+      remaining += Math.abs(currentBoundary - targetBoundary);
+    }
+    return {
+      done: Math.max(transition.totalSteps - remaining, 0),
+      total: transition.totalSteps,
+    };
+  }
+
+  // Drop finished migrations so the REBALANCE button returns.
+  $effect(() => {
+    for (const [id, transition] of Object.entries(rebalanceTransitions)) {
+      const wrapped = instanceData[id];
+      if (!wrapped) continue; // instance vanished; the safety timeout cleans up
+      const migration = getRebalanceMigration(id, wrapped);
+      if (migration !== null && migration.done >= migration.total) {
+        delete rebalanceTransitions[id];
+        addToast({
+          type: "info",
+          message: `Layer migration complete for ${transition.modelId}`,
+        });
+      }
+    }
+  });
+
   async function rebalanceInstance(instanceId: string) {
     if (rebalancingInstances[instanceId]) return;
     rebalancingInstances[instanceId] = true;
-    const modelId = getInstanceModelId(instanceData[instanceId]);
-    // Optimistic: the endpoint blocks while memory is reclaimed, so the
-    // placeholder must exist before the response arrives.
-    rebalanceTransitions[instanceId] = { modelId, startedAt: Date.now() };
-    // Failure safety: never leave a placeholder around forever.
-    setTimeout(() => {
-      delete rebalanceTransitions[instanceId];
-    }, 240_000);
     try {
       const response = await fetch(`/instance/${instanceId}/rebalance`, {
         method: "POST",
@@ -2323,25 +2402,37 @@
         message?: string;
         detail?: string;
         command_id?: string | null;
+        node_layers?: Record<string, number>;
+        steps?: number;
       } | null = await response.json().catch(() => null);
       if (!response.ok) {
-        delete rebalanceTransitions[instanceId];
         addToast({
           type: "error",
           message: result?.detail || "Failed to rebalance instance",
         });
-      } else {
-        if (!result?.command_id) {
-          // Already balanced — nothing was relaunched.
+      } else if (result?.command_id && result.node_layers) {
+        const modelId = getInstanceModelId(instanceData[instanceId]);
+        rebalanceTransitions[instanceId] = {
+          modelId,
+          startedAt: Date.now(),
+          nodeLayers: result.node_layers,
+          totalSteps: result.steps ?? 0,
+        };
+        // Failure safety: never track a migration forever.
+        setTimeout(() => {
           delete rebalanceTransitions[instanceId];
-        }
+        }, 600_000);
         addToast({
           type: "info",
-          message: result?.message || "Rebalance started",
+          message: result.message || "Live layer migration started",
+        });
+      } else {
+        addToast({
+          type: "info",
+          message: result?.message || "Already balanced",
         });
       }
     } catch (error) {
-      delete rebalanceTransitions[instanceId];
       console.error("Error rebalancing instance:", error);
       addToast({ type: "error", message: "Failed to rebalance instance" });
     } finally {
@@ -2702,6 +2793,45 @@
   function handleSliderTouchEnd() {
     isDraggingSlider = false;
     saveLaunchDefaults();
+  }
+
+  function handleRightSidebarResizePointerDown(event: PointerEvent) {
+    if (!rightSidebarElement) return;
+    event.preventDefault();
+    isDraggingRightSidebar = true;
+    rightSidebarDragRightEdge = rightSidebarElement.getBoundingClientRect().right;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
+  function handleRightSidebarResizePointerMove(event: PointerEvent) {
+    if (!isDraggingRightSidebar) return;
+    setRightSidebarWidth(rightSidebarDragRightEdge - event.clientX);
+  }
+
+  function handleRightSidebarResizePointerUp(event: PointerEvent) {
+    if (!isDraggingRightSidebar) return;
+    isDraggingRightSidebar = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    try {
+      (event.currentTarget as HTMLElement).releasePointerCapture(
+        event.pointerId,
+      );
+    } catch {
+      // Pointer already released
+    }
+  }
+
+  function handleRightSidebarResizeKeyDown(event: KeyboardEvent) {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setRightSidebarWidth(rightSidebarWidthPx + 16);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setRightSidebarWidth(rightSidebarWidthPx - 16);
+    }
   }
 
   const nodeCount = $derived(data ? Object.keys(data.nodes).length : 0);
@@ -3539,7 +3669,7 @@
 
           <!-- Tooltip on hover -->
           <div
-            class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-exo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
+            class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-xeo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
           >
             <p class="text-xs text-white/80 mb-2">
               A network routing cycle was detected between nodes connected via
@@ -3556,12 +3686,12 @@
             <button
               type="button"
               onclick={() => copyToClipboard(disableCmd)}
-              class="w-full flex items-center gap-2 text-[10px] font-mono bg-exo-black/60 px-2 py-1.5 rounded text-exo-yellow break-all text-left hover:bg-exo-black/80 transition-colors cursor-pointer group/copy"
+              class="w-full flex items-center gap-2 text-[10px] font-mono bg-xeo-black/60 px-2 py-1.5 rounded text-xeo-green break-all text-left hover:bg-xeo-black/80 transition-colors cursor-pointer group/copy"
               title="Click to copy"
             >
               <span class="flex-1">{disableCmd}</span>
               <svg
-                class="w-3.5 h-3.5 flex-shrink-0 text-white/40 group-hover/copy:text-exo-yellow transition-colors"
+                class="w-3.5 h-3.5 flex-shrink-0 text-white/40 group-hover/copy:text-xeo-green transition-colors"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -3611,7 +3741,7 @@
 
           <!-- Tooltip on hover -->
           <div
-            class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-exo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
+            class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-xeo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
           >
             <p class="text-xs text-white/80 mb-2">
               Nodes in this cluster are running different macOS versions. This
@@ -3677,7 +3807,7 @@
           </div>
           <!-- Tooltip on hover -->
           <div
-            class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-exo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
+            class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-xeo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
           >
             <p class="text-xs text-white/80 mb-2">
               Thunderbolt 5 hardware detected on multiple nodes. Enable RDMA for
@@ -4071,7 +4201,7 @@
 />
 
 <div
-  class="relative h-screen w-full flex flex-col bg-exo-dark-gray overflow-hidden"
+  class="relative h-screen w-full flex flex-col bg-xeo-dark-gray overflow-hidden"
 >
   <!-- Scanline overlay -->
   <!-- Scanline overlay -->
@@ -4108,7 +4238,7 @@
     <!-- FULL-SCREEN ONBOARDING WIZARD (overlay)                -->
     <!-- ═══════════════════════════════════════════════════════ -->
     <div
-      class="absolute inset-0 flex items-center justify-center z-30 bg-exo-black"
+      class="absolute inset-0 flex items-center justify-center z-30 bg-xeo-black"
       style="transition: opacity 0.45s cubic-bezier(0.4, 0, 0.2, 1); opacity: {onboardingFadingOut
         ? 0
         : 1};"
@@ -4128,7 +4258,7 @@
               style="opacity: {$logoOpacity}; max-height: {$logoOpacity *
                 80}px; overflow: hidden; transition: max-height 0.6s cubic-bezier(0.4, 0, 0.2, 1);"
             >
-              <img src="/exo-logo.png" alt="exo" class="w-36 mx-auto mb-10" />
+              <img src="/xeo-wordmark.svg" alt="XEO" class="w-36 mx-auto mb-10" />
             </div>
 
             <!-- Title — single element, text updates instantly -->
@@ -4137,7 +4267,7 @@
               style="opacity: {$titleOpacity}; font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif; letter-spacing: 0.02em;"
             >
               {onboardingStep === 1
-                ? "EXO connects all your devices into an AI supercomputer."
+                ? "XEO connects all your devices into an AI supercomputer."
                 : stepTitle}
             </h1>
 
@@ -4152,8 +4282,8 @@
                 The model is automatically distributed. Each device handles a
                 piece.
               {:else if onboardingStep === 4}
-                {stepTitle === "exo self-heals"
-                  ? "exo automatically redistributes the model so inference continues without interruption."
+                {stepTitle === "XEO self-heals"
+                  ? "XEO automatically redistributes the model so inference continues without interruption."
                   : "Devices can leave anytime. Laptops close, machines restart."}
               {:else}
                 &nbsp;
@@ -4168,7 +4298,7 @@
               class="absolute left-0 right-0 text-center text-lg text-white/50 font-light tracking-wide z-10"
               style="top: 20px; opacity: {$deviceCountOpacity}; font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif; pointer-events: none;"
             >
-              Your EXO Network
+              Your XEO Network
             </p>
 
             <!-- Step 1: Real topology graph -->
@@ -4220,7 +4350,7 @@
                   text-anchor="middle"
                   style="font-size: 14px; font-family: 'SF Mono', ui-monospace, monospace;"
                 >
-                  <tspan fill="rgba(255,215,0,0.9)"
+                  <tspan fill="oklch(0.78 0.17 145 / 0.9)"
                     >{userDeviceInfo.memoryGB}</tspan
                   ><tspan fill="rgba(255,255,255,0.4)">{" "}GB</tspan>
                 </text>
@@ -4266,7 +4396,7 @@
                   text-anchor="middle"
                   style="font-size: 14px; font-family: 'SF Mono', ui-monospace, monospace;"
                 >
-                  <tspan fill="rgba(255,215,0,0.9)">{SIMULATED_STUDIO_GB}</tspan
+                  <tspan fill="oklch(0.78 0.17 145 / 0.9)">{SIMULATED_STUDIO_GB}</tspan
                   ><tspan fill="rgba(255,255,255,0.4)">{" "}GB</tspan>
                 </text>
                 <text
@@ -4335,14 +4465,14 @@
                 x={($device1X + $device2X) / 2}
                 y={130}
                 text-anchor="middle"
-                fill="rgba(255,215,0,0.7)"
+                fill="oklch(0.78 0.17 145 / 0.7)"
                 style="font-size: 14px; font-family: 'SF Mono', ui-monospace, monospace; font-weight: 500; letter-spacing: 0.02em;"
                 opacity={$combinedLabelOpacity}
               >
                 {onboardingCombinedGB} GB combined
               </text>
 
-              <!-- Step 2: Models unlocked — staggered slide-up + yellow glow -->
+              <!-- Step 2: Models unlocked — staggered slide-up + brand glow -->
               {#if unlockedModels.length > 0 && $chipPhase > 0.01}
                 {@const centerX = ($device1X + $device2X) / 2}
                 {@const chipW = 140}
@@ -4352,7 +4482,7 @@
                   unlockedModels.length * chipW +
                   (unlockedModels.length - 1) * chipGap}
                 {@const startX = centerX - totalW / 2}
-                <!-- SVG filter for yellow glow -->
+                <!-- SVG filter for XEO green glow -->
                 <defs>
                   <filter
                     id="chip-glow"
@@ -4369,7 +4499,7 @@
                     <feColorMatrix
                       in="blur"
                       type="matrix"
-                      values="1 0.8 0 0 0  0.8 0.7 0 0 0  0 0 0 0 0  0 0 0 0.4 0"
+                      values="0 0 0 0 0.4  0 0 0 0 0.83  0 0 0 0 0.44  0 0 0 0.4 0"
                       result="glow"
                     />
                     <feMerge>
@@ -4378,25 +4508,25 @@
                     </feMerge>
                   </filter>
                 </defs>
-                <!-- Header slides up + fades with yellow tint -->
+                <!-- Header slides up + fades with green tint -->
                 {@const headerProgress = Math.min(1, $chipPhase)}
                 {@const headerY = 332 + 12 * (1 - headerProgress)}
-                {@const yellowR = 234}
-                {@const yellowG = 179}
-                {@const yellowB = 8}
+                {@const greenRed = 103}
+                {@const greenGreen = 211}
+                {@const greenBlue = 111}
                 <text
                   x={centerX}
                   y={headerY}
                   text-anchor="middle"
                   dominant-baseline="middle"
-                  fill="rgba({yellowR},{yellowG},{yellowB},{0.5 *
+                  fill="rgba({greenRed},{greenGreen},{greenBlue},{0.5 *
                     headerProgress})"
                   opacity={headerProgress}
                   style="font-size: 10px; font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif; font-weight: 500; letter-spacing: 0.1em;"
                 >
                   NEW MODELS UNLOCKED
                 </text>
-                <!-- Model chips — staggered slide-up + scale + yellow highlight -->
+                <!-- Model chips — staggered slide-up + scale + green highlight -->
                 {#each unlockedModels as model, i}
                   {@const stagger = i * 0.6}
                   {@const progress = Math.max(
@@ -4411,13 +4541,13 @@
                   {@const modelSize = Math.round(getModelSizeGB(model))}
                   {@const slideY = 16 * (1 - progress)}
                   {@const chipScale = 0.85 + 0.15 * progress}
-                  <!-- Yellow highlight peaks at ~0.6 progress then settles to subtle -->
+                  <!-- Brand highlight peaks at ~0.6 progress then settles to subtle -->
                   {@const highlightPeak =
                     progress < 0.6
                       ? progress / 0.6
                       : 1 - ((progress - 0.6) / 0.4) * 0.6}
-                  {@const borderYellow = 0.15 + 0.35 * highlightPeak}
-                  {@const fillYellow = 0.02 + 0.06 * highlightPeak}
+                  {@const borderGreen = 0.15 + 0.35 * highlightPeak}
+                  {@const fillGreen = 0.02 + 0.06 * highlightPeak}
                   {#if progress > 0}
                     <g
                       transform="translate({startX +
@@ -4432,8 +4562,8 @@
                         width={chipW}
                         height={chipH}
                         rx="15"
-                        fill="rgba({yellowR},{yellowG},{yellowB},{fillYellow})"
-                        stroke="rgba({yellowR},{yellowG},{yellowB},{borderYellow})"
+                        fill="rgba({greenRed},{greenGreen},{greenBlue},{fillGreen})"
+                        stroke="rgba({greenRed},{greenGreen},{greenBlue},{borderGreen})"
                         stroke-width="1"
                       />
                       <text
@@ -4572,12 +4702,12 @@
               type="button"
               onclick={() =>
                 advanceStep(onboardingStep < 4 ? onboardingStep + 1 : 6)}
-              class="inline-flex items-center gap-2.5 px-10 py-3.5 bg-exo-yellow text-exo-black text-sm font-semibold rounded-full cursor-pointer"
+              class="inline-flex items-center gap-2.5 px-10 py-3.5 bg-xeo-green text-xeo-black text-sm font-semibold rounded-full cursor-pointer"
               style="transition: transform 0.2s ease, box-shadow 0.3s ease, filter 0.2s ease; font-family: -apple-system, 'SF Pro Display', system-ui, sans-serif; letter-spacing: 0.02em;"
               onmouseenter={(e) => {
                 e.currentTarget.style.filter = "brightness(1.08)";
                 e.currentTarget.style.boxShadow =
-                  "0 0 30px rgba(255,215,0,0.2)";
+                  "0 0 30px oklch(0.78 0.17 145 / 0.2)";
               }}
               onmouseleave={(e) => {
                 e.currentTarget.style.filter = "brightness(1)";
@@ -4645,7 +4775,7 @@
                   type="button"
                   onclick={() => onboardingLaunchModel(model.id)}
                   class="w-full flex items-center justify-between gap-4 px-5 py-4 rounded-xl border transition-all duration-200 cursor-pointer {fitsNow
-                    ? 'border-white/10 bg-white/5 hover:border-exo-yellow/50 hover:bg-exo-yellow/5'
+                    ? 'border-white/10 bg-white/5 hover:border-xeo-green/50 hover:bg-xeo-green/5'
                     : 'border-white/10 bg-white/[0.02] hover:border-white/20 opacity-60'}"
                 >
                   <div class="flex flex-col items-start gap-1 min-w-0">
@@ -4656,7 +4786,7 @@
                       >
                       {#each tags as tag}
                         <span
-                          class="text-[10px] font-sans font-medium px-1.5 py-0.5 rounded-full bg-exo-yellow/10 text-exo-yellow/80"
+                          class="text-[10px] font-sans font-medium px-1.5 py-0.5 rounded-full bg-xeo-green/10 text-xeo-green/80"
                           >{tag}</span
                         >
                       {/each}
@@ -4694,7 +4824,7 @@
               modelPickerContext = "dashboard";
               isModelPickerOpen = true;
             }}
-            class="text-sm font-sans text-white/40 hover:text-exo-yellow transition-colors cursor-pointer underline underline-offset-4 decoration-white/20 hover:decoration-exo-yellow/50"
+            class="text-sm font-sans text-white/40 hover:text-xeo-green transition-colors cursor-pointer underline underline-offset-4 decoration-white/20 hover:decoration-xeo-green/50"
           >
             Browse all models
           </button>
@@ -4724,7 +4854,7 @@
                 class="relative h-2 bg-white/10 rounded-full overflow-hidden"
               >
                 <div
-                  class="absolute inset-y-0 left-0 bg-gradient-to-r from-exo-yellow to-exo-yellow-darker rounded-full transition-all duration-500"
+                  class="absolute inset-y-0 left-0 bg-gradient-to-r from-xeo-green to-xeo-green-darker rounded-full transition-all duration-500"
                   style="width: {onboardingDownloadProgress.percentage}%"
                 ></div>
               </div>
@@ -4746,7 +4876,7 @@
                 class="relative h-2 bg-white/10 rounded-full overflow-hidden"
               >
                 <div
-                  class="absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-exo-yellow to-exo-yellow-darker rounded-full animate-pulse"
+                  class="absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-xeo-green to-xeo-green-darker rounded-full animate-pulse"
                 ></div>
               </div>
               <p class="text-xs font-mono text-white/40 mt-4">
@@ -4802,7 +4932,7 @@
                 class="relative h-2 bg-white/10 rounded-full overflow-hidden"
               >
                 <div
-                  class="absolute inset-y-0 left-0 bg-gradient-to-r from-exo-yellow to-exo-yellow-darker rounded-full transition-all duration-500"
+                  class="absolute inset-y-0 left-0 bg-gradient-to-r from-xeo-green to-xeo-green-darker rounded-full transition-all duration-500"
                   style="width: {onboardingLoadProgress.percentage}%"
                 ></div>
               </div>
@@ -4814,7 +4944,7 @@
           {:else}
             <div class="flex justify-center mb-4">
               <div
-                class="w-8 h-8 border-2 border-exo-yellow/15 border-t-exo-yellow/70 rounded-full animate-spin"
+                class="w-8 h-8 border-2 border-xeo-green/15 border-t-xeo-green/70 rounded-full animate-spin"
               ></div>
             </div>
             <p class="text-sm text-white/30 font-sans">Loading...</p>
@@ -4828,8 +4958,8 @@
           style="opacity: 0; animation: onb-fade-opacity 0.6s ease forwards;"
         >
           <img
-            src="/exo-logo.png"
-            alt="exo"
+            src="/xeo-wordmark.svg"
+            alt="XEO"
             class="w-28 mb-6"
             style="opacity: 0.8;"
           />
@@ -4983,7 +5113,7 @@
     <!-- Left: Conversation History Sidebar (hidden in topology-only mode, welcome state, or when toggled off) - Desktop only -->
     {#if !topologyOnlyEnabled && sidebarVisible}
       <div
-        class="hidden md:block w-80 flex-shrink-0 border-r border-exo-yellow/10"
+        class="hidden md:block w-80 flex-shrink-0 border-r border-xeo-green/10"
         role="complementary"
         aria-label="Conversation history"
       >
@@ -5004,7 +5134,7 @@
         in:fade={{ duration: 300 }}
       >
         <div
-          class="flex-1 relative bg-exo-dark-gray/40 rounded-lg overflow-hidden"
+          class="flex-1 relative bg-xeo-dark-gray/40 rounded-lg overflow-hidden"
         >
           <TopologyGraph
             class="w-full h-full"
@@ -5065,7 +5195,7 @@
               </div>
               <!-- Tooltip on hover -->
               <div
-                class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-exo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
+                class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-xeo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
               >
                 <p class="text-xs text-white/80 mb-2">
                   Thunderbolt 5 hardware detected on multiple nodes. Enable RDMA
@@ -5099,12 +5229,12 @@
           <button
             type="button"
             onclick={toggleTopologyOnlyMode}
-            class="absolute bottom-4 right-4 p-2 rounded border border-exo-yellow/30 bg-exo-dark-gray/80 hover:border-exo-yellow/50 hover:bg-exo-dark-gray transition-colors cursor-pointer backdrop-blur-sm"
+            class="absolute bottom-4 right-4 p-2 rounded border border-xeo-green/30 bg-xeo-dark-gray/80 hover:border-xeo-green/50 hover:bg-xeo-dark-gray transition-colors cursor-pointer backdrop-blur-sm"
             title="Exit topology only mode"
             aria-label="Exit topology only mode"
           >
             <svg
-              class="w-5 h-5 text-exo-yellow"
+              class="w-5 h-5 text-xeo-green"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -5129,7 +5259,7 @@
         <div class="flex-1 flex flex-col min-h-0 min-w-0 py-4">
           <!-- Topology Container - Takes most of the space -->
           <div
-            class="flex-1 relative bg-exo-dark-gray/40 mx-4 mb-4 rounded-lg overflow-hidden"
+            class="flex-1 relative bg-xeo-dark-gray/40 mx-4 mb-4 rounded-lg overflow-hidden"
           >
             <!-- The main topology graph - full container -->
             <TopologyGraph
@@ -5142,13 +5272,13 @@
             <!-- Initial loading state before first data fetch -->
             {#if !update}
               <div
-                class="absolute inset-0 flex items-center justify-center bg-exo-dark-gray/80"
+                class="absolute inset-0 flex items-center justify-center bg-xeo-dark-gray/80"
                 in:fade={{ duration: 200 }}
                 out:fade={{ duration: 300 }}
               >
                 <div class="text-center">
                   <div
-                    class="w-8 h-8 border-2 border-exo-yellow/30 border-t-exo-yellow rounded-full animate-spin mx-auto mb-4"
+                    class="w-8 h-8 border-2 border-xeo-green/30 border-t-xeo-green rounded-full animate-spin mx-auto mb-4"
                   ></div>
                   <p
                     class="text-xs font-mono text-white/40 tracking-wider uppercase"
@@ -5212,7 +5342,7 @@
 
                 <!-- Tooltip on hover -->
                 <div
-                  class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-exo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
+                  class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-yellow-500/30 bg-xeo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
                 >
                   <p class="text-xs text-white/80 mb-2">
                     Thunderbolt 5 hardware detected on multiple nodes. Enable
@@ -5247,7 +5377,7 @@
             {#if isFilterActive()}
               <button
                 onclick={clearPreviewNodeFilter}
-                class="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 bg-exo-dark-gray/80 border border-exo-yellow/40 rounded text-exo-yellow hover:border-exo-yellow/60 transition-colors cursor-pointer backdrop-blur-sm"
+                class="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 bg-xeo-dark-gray/80 border border-xeo-green/40 rounded text-xeo-green hover:border-xeo-green/60 transition-colors cursor-pointer backdrop-blur-sm"
                 title="Clear filter"
               >
                 <span class="text-[10px] font-mono tracking-wider">
@@ -5306,7 +5436,7 @@
           ></button>
           <!-- Drawer panel -->
           <aside
-            class="fixed right-0 top-0 bottom-0 w-80 bg-exo-dark-gray border-l border-exo-yellow/10 z-50 flex flex-col md:hidden overflow-y-auto"
+            class="fixed right-0 top-0 bottom-0 w-80 bg-xeo-dark-gray border-l border-xeo-green/10 z-50 flex flex-col md:hidden overflow-y-auto"
             aria-label="Instance controls mobile"
           >
             {@render rightSidebarContent()}
@@ -5315,9 +5445,28 @@
 
         <!-- Right Sidebar: Instance Controls (wider on welcome page for better visibility) - Desktop only -->
         <aside
-          class="hidden md:flex w-80 border-l border-exo-yellow/10 bg-exo-dark-gray flex-col flex-shrink-0"
+          bind:this={rightSidebarElement}
+          class="hidden md:flex relative border-l border-xeo-green/10 bg-xeo-dark-gray flex-col flex-shrink-0"
+          style="width: {rightSidebarWidthPx}px"
           aria-label="Instance controls"
         >
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize instance controls"
+            aria-valuemin={240}
+            aria-valuemax={560}
+            aria-valuenow={rightSidebarWidthPx}
+            tabindex="0"
+            class="absolute left-0 top-0 bottom-0 w-1 -ml-0.5 z-10 cursor-col-resize hover:bg-xeo-green/30 {isDraggingRightSidebar
+              ? 'bg-xeo-green/30'
+              : ''}"
+            onpointerdown={handleRightSidebarResizePointerDown}
+            onpointermove={handleRightSidebarResizePointerMove}
+            onpointerup={handleRightSidebarResizePointerUp}
+            onpointercancel={handleRightSidebarResizePointerUp}
+            onkeydown={handleRightSidebarResizeKeyDown}
+          ></div>
           {@render rightSidebarContent()}
         </aside>
 
@@ -5328,15 +5477,15 @@
               <!-- Panel Header -->
               <div class="flex items-center gap-2 mb-4">
                 <div
-                  class="w-2 h-2 bg-exo-yellow rounded-full shadow-[0_0_8px_rgba(255,215,0,0.6)] animate-pulse"
+                  class="w-2 h-2 bg-xeo-green rounded-full shadow-[0_0_8px_oklch(0.78_0.17_145/0.6)] animate-pulse"
                 ></div>
                 <h3
-                  class="text-xs text-exo-yellow font-mono tracking-[0.2em] uppercase"
+                  class="text-xs text-xeo-green font-mono tracking-[0.2em] uppercase"
                 >
                   Instances
                 </h3>
                 <div
-                  class="flex-1 h-px bg-gradient-to-r from-exo-yellow/30 to-transparent"
+                  class="flex-1 h-px bg-gradient-to-r from-xeo-green/30 to-transparent"
                 ></div>
               </div>
 
@@ -5371,6 +5520,7 @@
                     id,
                     instance,
                   )}
+                  {@const migration = getRebalanceMigration(id, instance)}
                   {@const prepProgress =
                     !isFailed && !isDownloading
                       ? getPreparationProgress(instance)
@@ -5451,12 +5601,12 @@
                     ></div>
 
                     <div
-                      class="bg-exo-dark-gray/60 border border-l-2 transition-all duration-200 group-hover:bg-exo-dark-gray/80 {isDownloading
+                      class="bg-xeo-dark-gray/60 border border-l-2 transition-all duration-200 group-hover:bg-xeo-dark-gray/80 {isDownloading
                         ? 'border-blue-500/30 border-l-blue-400 group-hover:border-blue-500/50'
                         : isFailed
                           ? 'border-red-500/30 border-l-red-400 group-hover:border-red-500/50'
                           : isLoading
-                            ? 'border-exo-yellow/30 border-l-yellow-400 group-hover:border-exo-yellow/50'
+                            ? 'border-yellow-500/30 border-l-yellow-400 group-hover:border-yellow-500/50'
                             : isReady
                               ? 'border-green-500/30 border-l-green-400 group-hover:border-green-500/50'
                               : 'border-teal-500/30 border-l-teal-400 group-hover:border-teal-500/50'} p-3"
@@ -5475,7 +5625,7 @@
                                     : 'bg-teal-400'} rounded-full shadow-[0_0_6px_currentColor]"
                           ></div>
                           <span
-                            class="text-exo-light-gray font-mono text-sm tracking-wider"
+                            class="text-xeo-light-gray font-mono text-sm tracking-wider"
                             >{id.slice(0, 8).toUpperCase()}</span
                           >
                         </div>
@@ -5488,7 +5638,7 @@
                       </div>
                       <div class="pl-2">
                         <div
-                          class="text-exo-yellow text-xs font-mono tracking-wide truncate"
+                          class="text-xeo-green text-xs font-mono tracking-wide truncate"
                         >
                           {getInstanceModelId(instance)}
                         </div>
@@ -5516,7 +5666,7 @@
                         </div>
                         {#if instanceModelId && instanceModelId !== "Unknown" && instanceModelId !== "Unknown Model"}
                           <a
-                            class="inline-flex items-center gap-1 text-[11px] text-white/60 hover:text-exo-yellow transition-colors mt-1"
+                            class="inline-flex items-center gap-1 text-[11px] text-white/60 hover:text-xeo-green transition-colors mt-1"
                             href={`https://huggingface.co/${instanceModelId}`}
                             target="_blank"
                             rel="noreferrer noopener"
@@ -5547,7 +5697,7 @@
                         {/if}
                         {#if stageTimingRows.length > 0}
                           <div
-                            class="mt-2 space-y-0.5 border-t border-exo-medium-gray/30 pt-2"
+                            class="mt-2 space-y-0.5 border-t border-xeo-medium-gray/30 pt-2"
                           >
                             {#each stageTimingRows as row (row.nodeId)}
                               <div
@@ -5561,24 +5711,47 @@
                                 >
                               </div>
                             {/each}
-                            <button
-                              onclick={(event) => {
-                                event.stopPropagation();
-                                rebalanceInstance(id);
-                              }}
-                              disabled={rebalancingInstances[id]}
-                              title="Relaunch this instance with layers split by measured per-node speed (a few seconds of downtime)"
-                              class="mt-1.5 text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
-                                null && rebalanceGain > 0.1
-                                ? 'border-exo-yellow/60 text-exo-yellow shadow-[0_0_8px_rgba(255,215,0,0.35)] hover:bg-exo-yellow/20'
-                                : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
-                            >
-                              {rebalancingInstances[id]
-                                ? "REBALANCING..."
-                                : rebalanceGain !== null && rebalanceGain > 0.1
-                                  ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
-                                  : "REBALANCE"}
-                            </button>
+                            {#if migration}
+                              <div class="mt-1.5 space-y-1">
+                                <div
+                                  class="flex justify-between text-[10px] font-mono tracking-wider text-teal-400"
+                                >
+                                  <span>MIGRATING LAYERS</span>
+                                  <span>{migration.done}/{migration.total}</span
+                                  >
+                                </div>
+                                <div
+                                  class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
+                                >
+                                  <div
+                                    class="absolute inset-y-0 left-0 bg-teal-400/80 transition-all duration-500"
+                                    style="width: {(migration.done /
+                                      migration.total) *
+                                      100}%"
+                                  ></div>
+                                </div>
+                              </div>
+                            {:else}
+                              <button
+                                onclick={(event) => {
+                                  event.stopPropagation();
+                                  rebalanceInstance(id);
+                                }}
+                                disabled={rebalancingInstances[id]}
+                                title="Live-migrate layers one at a time to the measured-speed split (no downtime)"
+                                class="mt-1.5 text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
+                                  null && rebalanceGain > 0.1
+                                  ? 'border-xeo-green/60 text-xeo-green shadow-[0_0_8px_oklch(0.78_0.17_145/0.35)] hover:bg-xeo-green/20'
+                                  : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
+                              >
+                                {rebalancingInstances[id]
+                                  ? "REBALANCING..."
+                                  : rebalanceGain !== null &&
+                                      rebalanceGain > 0.1
+                                    ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
+                                    : "REBALANCE"}
+                              </button>
+                            {/if}
                           </div>
                         {/if}
                         {#if debugEnabled && instanceConnections.length > 0}
@@ -5609,7 +5782,7 @@
                                   1,
                                 )}%</span
                               >
-                              <span class="text-exo-light-gray"
+                              <span class="text-xeo-light-gray"
                                 >{formatBytes(
                                   downloadInfo.progress.downloadedBytes,
                                 )}/{formatBytes(
@@ -5618,7 +5791,7 @@
                               >
                             </div>
                             <div
-                              class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                              class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                             >
                               <div
                                 class="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-300"
@@ -5627,7 +5800,7 @@
                               ></div>
                             </div>
                             <div
-                              class="flex justify-between text-xs font-mono text-exo-light-gray"
+                              class="flex justify-between text-xs font-mono text-xeo-light-gray"
                             >
                               <span
                                 >{formatSpeed(
@@ -5660,7 +5833,7 @@
                                     nodeProg.nodeId,
                                   )}
                                 <div
-                                  class="rounded border border-exo-medium-gray/40 bg-exo-black/30 p-2"
+                                  class="rounded border border-xeo-medium-gray/40 bg-xeo-black/30 p-2"
                                 >
                                   <button
                                     type="button"
@@ -5671,7 +5844,7 @@
                                       )}
                                   >
                                     <div
-                                      class="flex items-center justify-between text-[11px] font-mono text-exo-light-gray"
+                                      class="flex items-center justify-between text-[11px] font-mono text-xeo-light-gray"
                                     >
                                       <span class="text-white/80 truncate pr-2"
                                         >{nodeProg.nodeName}</span
@@ -5681,7 +5854,7 @@
                                       >
                                         {nodePercent.toFixed(1)}%
                                         <svg
-                                          class="w-3 h-3 text-exo-light-gray"
+                                          class="w-3 h-3 text-xeo-light-gray"
                                           viewBox="0 0 20 20"
                                           fill="none"
                                           stroke="currentColor"
@@ -5697,7 +5870,7 @@
                                       </span>
                                     </div>
                                     <div
-                                      class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                                      class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                                     >
                                       <div
                                         class="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-300"
@@ -5705,7 +5878,7 @@
                                       ></div>
                                     </div>
                                     <div
-                                      class="flex items-center justify-between text-[11px] font-mono text-exo-light-gray"
+                                      class="flex items-center justify-between text-[11px] font-mono text-xeo-light-gray"
                                     >
                                       <span
                                         >{formatBytes(
@@ -5729,7 +5902,7 @@
                                     <div class="mt-2 space-y-1.5">
                                       {#if nodeProg.progress?.files ?? [].length === 0}
                                         <div
-                                          class="text-[11px] font-mono text-exo-light-gray/70"
+                                          class="text-[11px] font-mono text-xeo-light-gray/70"
                                         >
                                           No file details reported.
                                         </div>
@@ -5742,10 +5915,10 @@
                                           {@const isFileComplete =
                                             filePercent >= 100}
                                           <div
-                                            class="rounded border border-exo-medium-gray/30 bg-exo-black/40 p-2"
+                                            class="rounded border border-xeo-medium-gray/30 bg-xeo-black/40 p-2"
                                           >
                                             <div
-                                              class="flex items-center justify-between text-[10px] font-mono text-exo-light-gray/90"
+                                              class="flex items-center justify-between text-[10px] font-mono text-xeo-light-gray/90"
                                             >
                                               <span class="truncate pr-2"
                                                 >{f.name}</span
@@ -5758,19 +5931,19 @@
                                               >
                                             </div>
                                             <div
-                                              class="relative h-1 bg-exo-black/60 rounded-sm overflow-hidden mt-1"
+                                              class="relative h-1 bg-xeo-black/60 rounded-sm overflow-hidden mt-1"
                                             >
                                               <div
                                                 class="absolute inset-y-0 left-0 bg-gradient-to-r {isFileComplete
                                                   ? 'from-green-500 to-green-400'
-                                                  : 'from-exo-yellow to-exo-yellow/70'} transition-all duration-300"
+                                                  : 'from-xeo-green to-xeo-green/70'} transition-all duration-300"
                                                 style="width: {filePercent.toFixed(
                                                   1,
                                                 )}%"
                                               ></div>
                                             </div>
                                             <div
-                                              class="flex items-center justify-between text-[10px] text-exo-light-gray/70 mt-0.5"
+                                              class="flex items-center justify-between text-[10px] text-xeo-light-gray/70 mt-0.5"
                                             >
                                               <span
                                                 >{formatBytes(
@@ -5832,13 +6005,13 @@
                                         100
                                       ).toFixed(0)}%</span
                                     >
-                                    <span class="text-exo-light-gray"
+                                    <span class="text-xeo-light-gray"
                                       >{loadStatus.layersLoaded ?? 0} / {loadStatus.totalLayers}
                                       layers</span
                                     >
                                   </div>
                                   <div
-                                    class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                                    class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                                   >
                                     <div
                                       class="absolute inset-y-0 left-0 bg-gradient-to-r from-yellow-500 to-yellow-400 transition-all duration-300"
@@ -5866,12 +6039,12 @@
                                     <span class="text-yellow-400"
                                       >{prep.percent}%</span
                                     >
-                                    <span class="text-exo-light-gray"
+                                    <span class="text-xeo-light-gray"
                                       >{prep.detail}</span
                                     >
                                   </div>
                                   <div
-                                    class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                                    class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                                   >
                                     <div
                                       class="absolute inset-y-0 left-0 bg-gradient-to-r from-yellow-500 to-yellow-400 transition-all duration-300"
@@ -5912,7 +6085,7 @@
                     transition:slide={{ duration: 250, easing: cubicOut }}
                   >
                     <div
-                      class="border border-teal-500/40 bg-exo-dark-gray/50 rounded p-3 space-y-2"
+                      class="border border-teal-500/40 bg-xeo-dark-gray/50 rounded p-3 space-y-2"
                     >
                       <div class="flex items-center justify-between">
                         <div class="flex items-center gap-2">
@@ -5920,7 +6093,7 @@
                             class="w-2 h-2 bg-teal-400 rounded-full shadow-[0_0_6px_currentColor] animate-pulse"
                           ></div>
                           <span
-                            class="text-exo-light-gray font-mono text-sm tracking-wider"
+                            class="text-xeo-light-gray font-mono text-sm tracking-wider"
                             >{oldId.slice(0, 8).toUpperCase()}</span
                           >
                         </div>
@@ -5931,7 +6104,7 @@
                         </span>
                       </div>
                       <div
-                        class="text-exo-yellow text-xs font-mono tracking-wide truncate"
+                        class="text-xeo-green text-xs font-mono tracking-wide truncate"
                       >
                         {transition.modelId}
                       </div>
@@ -5940,7 +6113,7 @@
                         memory to be released...
                       </p>
                       <div
-                        class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                        class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                       >
                         <div
                           class="absolute inset-0 bg-gradient-to-r from-teal-500/20 via-teal-400/70 to-teal-500/20 animate-pulse"
@@ -5957,14 +6130,14 @@
           <div class="p-4 flex-1 overflow-y-auto">
             <!-- Panel Header -->
             <div class="flex items-center gap-2 mb-3 flex-shrink-0">
-              <div class="w-2 h-2 border border-exo-yellow/60 rotate-45"></div>
+              <div class="w-2 h-2 border border-xeo-green/60 rotate-45"></div>
               <h3
-                class="text-xs text-exo-yellow font-mono tracking-[0.2em] uppercase"
+                class="text-xs text-xeo-green font-mono tracking-[0.2em] uppercase"
               >
                 Load Model
               </h3>
               <div
-                class="flex-1 h-px bg-gradient-to-r from-exo-yellow/30 to-transparent"
+                class="flex-1 h-px bg-gradient-to-r from-xeo-green/30 to-transparent"
               ></div>
               <span class="text-sm text-white/70 font-mono"
                 >{models.length} models</span
@@ -5979,7 +6152,7 @@
                   modelPickerContext = "dashboard";
                   isModelPickerOpen = true;
                 }}
-                class="w-full bg-exo-medium-gray/50 border border-exo-yellow/30 rounded pl-3 pr-8 py-2.5 text-sm font-mono text-left tracking-wide cursor-pointer transition-all duration-200 hover:border-exo-yellow/50 focus:outline-none focus:border-exo-yellow/70 relative"
+                class="w-full bg-xeo-medium-gray/50 border border-xeo-green/30 rounded pl-3 pr-8 py-2.5 text-sm font-mono text-left tracking-wide cursor-pointer transition-all duration-200 hover:border-xeo-green/50 focus:outline-none focus:border-xeo-green/70 relative"
               >
                 {#if selectedModelId}
                   {@const foundModel = models.find(
@@ -5991,7 +6164,7 @@
                       class="flex items-center justify-between gap-2 w-full pr-4"
                     >
                       <span
-                        class="flex items-center gap-2 text-exo-light-gray truncate"
+                        class="flex items-center gap-2 text-xeo-light-gray truncate"
                       >
                         <span class="truncate"
                           >{foundModel.name || foundModel.id}</span
@@ -6004,7 +6177,7 @@
                       >
                     </span>
                   {:else}
-                    <span class="text-exo-light-gray">{selectedModelId}</span>
+                    <span class="text-xeo-light-gray">{selectedModelId}</span>
                   {/if}
                 {:else if bestRunningModelId}
                   {@const runModel = models.find(
@@ -6016,7 +6189,7 @@
                       class="flex items-center justify-between gap-2 w-full pr-4"
                     >
                       <span
-                        class="flex items-center gap-2 text-exo-light-gray truncate"
+                        class="flex items-center gap-2 text-xeo-light-gray truncate"
                       >
                         <span class="truncate"
                           >{runModel.name || runModel.id}</span
@@ -6029,7 +6202,7 @@
                       >
                     </span>
                   {:else}
-                    <span class="text-exo-light-gray">{bestRunningModelId}</span
+                    <span class="text-xeo-light-gray">{bestRunningModelId}</span
                     >
                   {/if}
                 {:else}
@@ -6039,7 +6212,7 @@
                   class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
                 >
                   <svg
-                    class="w-4 h-4 text-exo-yellow/60"
+                    class="w-4 h-4 text-xeo-green/60"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -6096,17 +6269,17 @@
                         }}
                         class="flex items-center gap-2 py-1.5 px-3 text-xs font-mono border rounded transition-all duration-200 cursor-pointer {selectedSharding ===
                         'Pipeline'
-                          ? 'bg-transparent text-exo-yellow border-exo-yellow'
-                          : 'bg-transparent text-white/70 border-exo-medium-gray/50 hover:border-exo-yellow/50'}"
+                          ? 'bg-transparent text-xeo-green border-xeo-green'
+                          : 'bg-transparent text-white/70 border-xeo-medium-gray/50 hover:border-xeo-green/50'}"
                       >
                         <span
                           class="w-3 h-3 rounded-full border-2 flex items-center justify-center {selectedSharding ===
                           'Pipeline'
-                            ? 'border-exo-yellow'
-                            : 'border-exo-medium-gray'}"
+                            ? 'border-xeo-green'
+                            : 'border-xeo-medium-gray'}"
                         >
                           {#if selectedSharding === "Pipeline"}
-                            <span class="w-1.5 h-1.5 rounded-full bg-exo-yellow"
+                            <span class="w-1.5 h-1.5 rounded-full bg-xeo-green"
                             ></span>
                           {/if}
                         </span>
@@ -6119,17 +6292,17 @@
                         }}
                         class="flex items-center gap-2 py-1.5 px-3 text-xs font-mono border rounded transition-all duration-200 cursor-pointer {selectedSharding ===
                         'Tensor'
-                          ? 'bg-transparent text-exo-yellow border-exo-yellow'
-                          : 'bg-transparent text-white/70 border-exo-medium-gray/50 hover:border-exo-yellow/50'}"
+                          ? 'bg-transparent text-xeo-green border-xeo-green'
+                          : 'bg-transparent text-white/70 border-xeo-medium-gray/50 hover:border-xeo-green/50'}"
                       >
                         <span
                           class="w-3 h-3 rounded-full border-2 flex items-center justify-center {selectedSharding ===
                           'Tensor'
-                            ? 'border-exo-yellow'
-                            : 'border-exo-medium-gray'}"
+                            ? 'border-xeo-green'
+                            : 'border-xeo-medium-gray'}"
                         >
                           {#if selectedSharding === "Tensor"}
-                            <span class="w-1.5 h-1.5 rounded-full bg-exo-yellow"
+                            <span class="w-1.5 h-1.5 rounded-full bg-xeo-green"
                             ></span>
                           {/if}
                         </span>
@@ -6151,17 +6324,17 @@
                         }}
                         class="flex items-center gap-2 py-1.5 px-3 text-xs font-mono border rounded transition-all duration-200 cursor-pointer {selectedInstanceType ===
                         'MlxRing'
-                          ? 'bg-transparent text-exo-yellow border-exo-yellow'
-                          : 'bg-transparent text-white/70 border-exo-medium-gray/50 hover:border-exo-yellow/50'}"
+                          ? 'bg-transparent text-xeo-green border-xeo-green'
+                          : 'bg-transparent text-white/70 border-xeo-medium-gray/50 hover:border-xeo-green/50'}"
                       >
                         <span
                           class="w-3 h-3 rounded-full border-2 flex items-center justify-center {selectedInstanceType ===
                           'MlxRing'
-                            ? 'border-exo-yellow'
-                            : 'border-exo-medium-gray'}"
+                            ? 'border-xeo-green'
+                            : 'border-xeo-medium-gray'}"
                         >
                           {#if selectedInstanceType === "MlxRing"}
-                            <span class="w-1.5 h-1.5 rounded-full bg-exo-yellow"
+                            <span class="w-1.5 h-1.5 rounded-full bg-xeo-green"
                             ></span>
                           {/if}
                         </span>
@@ -6174,17 +6347,17 @@
                         }}
                         class="flex items-center gap-2 py-1.5 px-3 text-xs font-mono border rounded transition-all duration-200 cursor-pointer {selectedInstanceType ===
                         'MlxJaccl'
-                          ? 'bg-transparent text-exo-yellow border-exo-yellow'
-                          : 'bg-transparent text-white/70 border-exo-medium-gray/50 hover:border-exo-yellow/50'}"
+                          ? 'bg-transparent text-xeo-green border-xeo-green'
+                          : 'bg-transparent text-white/70 border-xeo-medium-gray/50 hover:border-xeo-green/50'}"
                       >
                         <span
                           class="w-3 h-3 rounded-full border-2 flex items-center justify-center {selectedInstanceType ===
                           'MlxJaccl'
-                            ? 'border-exo-yellow'
-                            : 'border-exo-medium-gray'}"
+                            ? 'border-xeo-green'
+                            : 'border-xeo-medium-gray'}"
                         >
                           {#if selectedInstanceType === "MlxJaccl"}
-                            <span class="w-1.5 h-1.5 rounded-full bg-exo-yellow"
+                            <span class="w-1.5 h-1.5 rounded-full bg-xeo-green"
                             ></span>
                           {/if}
                         </span>
@@ -6208,7 +6381,7 @@
                     >
                       <!-- Track background -->
                       <div
-                        class="absolute top-6 left-0 right-0 h-2 bg-exo-medium-gray/50 rounded-full"
+                        class="absolute top-6 left-0 right-0 h-2 bg-xeo-medium-gray/50 rounded-full"
                       ></div>
                       <!-- Active track (fills up to selected) -->
                       {#if availableMinNodes > 1}
@@ -6233,14 +6406,14 @@
                         >
                           <span
                             class="rounded-full transition-all {isSelected
-                              ? 'w-6 h-6 bg-exo-yellow shadow-[0_0_10px_rgba(255,215,0,0.6)]'
+                              ? 'w-6 h-6 bg-xeo-green shadow-[0_0_10px_oklch(0.78_0.17_145/0.6)]'
                               : isValid
-                                ? 'w-4 h-4 bg-exo-light-gray/70 mt-1'
-                                : 'w-3 h-3 bg-exo-medium-gray/50 mt-1.5'}"
+                                ? 'w-4 h-4 bg-xeo-light-gray/70 mt-1'
+                                : 'w-3 h-3 bg-xeo-medium-gray/50 mt-1.5'}"
                           ></span>
                           <span
                             class="text-sm font-mono mt-1.5 tabular-nums transition-colors {isSelected
-                              ? 'text-exo-yellow font-bold'
+                              ? 'text-xeo-green font-bold'
                               : isValid
                                 ? 'text-white/70'
                                 : 'text-white/30'}">{n}</span
@@ -6266,7 +6439,7 @@
               {:else if loadingPreviews}
                 <div class="text-center py-8">
                   <div
-                    class="text-xs text-exo-yellow font-mono tracking-wider uppercase animate-pulse"
+                    class="text-xs text-xeo-green font-mono tracking-wider uppercase animate-pulse"
                   >
                     Loading preview...
                   </div>
@@ -6350,10 +6523,10 @@
                 {#if chatLaunchState === "launching"}
                   <div class="flex flex-col items-center gap-3">
                     <div
-                      class="w-8 h-8 border-2 border-exo-yellow/30 border-t-exo-yellow rounded-full animate-spin"
+                      class="w-8 h-8 border-2 border-xeo-green/30 border-t-xeo-green rounded-full animate-spin"
                     ></div>
                     <p
-                      class="text-xs text-exo-light-gray font-mono uppercase tracking-wider"
+                      class="text-xs text-xeo-light-gray font-mono uppercase tracking-wider"
                     >
                       Preparing to launch&hellip;
                     </p>
@@ -6363,26 +6536,26 @@
                     <div
                       class="flex items-center justify-between text-xs font-mono"
                     >
-                      <span class="text-exo-yellow uppercase tracking-wider"
+                      <span class="text-xeo-green uppercase tracking-wider"
                         >Downloading</span
                       >
                       {#if chatLaunchDownload}
-                        <span class="text-exo-light-gray tabular-nums">
+                        <span class="text-xeo-light-gray tabular-nums">
                           {chatLaunchDownload.percentage.toFixed(1)}%
                         </span>
                       {/if}
                     </div>
                     <div
-                      class="w-full h-2 bg-exo-dark-gray rounded-full overflow-hidden border border-exo-medium-gray/30"
+                      class="w-full h-2 bg-xeo-dark-gray rounded-full overflow-hidden border border-xeo-medium-gray/30"
                     >
                       <div
-                        class="h-full bg-gradient-to-r from-exo-yellow/80 to-exo-yellow rounded-full transition-all duration-300"
+                        class="h-full bg-gradient-to-r from-xeo-green/80 to-xeo-green rounded-full transition-all duration-300"
                         style="width: {chatLaunchDownload?.percentage ?? 0}%"
                       ></div>
                     </div>
                     {#if chatLaunchDownload}
                       <div
-                        class="flex justify-between text-[10px] text-exo-light-gray/60 font-mono"
+                        class="flex justify-between text-[10px] text-xeo-light-gray/60 font-mono"
                       >
                         <span
                           >{formatBytes(chatLaunchDownload.downloadedBytes)} / {formatBytes(
@@ -6405,21 +6578,21 @@
                     <div
                       class="flex items-center justify-between text-xs font-mono"
                     >
-                      <span class="text-exo-yellow uppercase tracking-wider"
+                      <span class="text-xeo-green uppercase tracking-wider"
                         >Loading model</span
                       >
                       {#if chatLaunchLoadProgress}
-                        <span class="text-exo-light-gray tabular-nums">
+                        <span class="text-xeo-light-gray tabular-nums">
                           {chatLaunchLoadProgress.layersLoaded}/{chatLaunchLoadProgress.totalLayers}
                           layers
                         </span>
                       {/if}
                     </div>
                     <div
-                      class="w-full h-2 bg-exo-dark-gray rounded-full overflow-hidden border border-exo-medium-gray/30"
+                      class="w-full h-2 bg-xeo-dark-gray rounded-full overflow-hidden border border-xeo-medium-gray/30"
                     >
                       <div
-                        class="h-full bg-gradient-to-r from-exo-yellow/80 to-exo-yellow rounded-full transition-all duration-300"
+                        class="h-full bg-gradient-to-r from-xeo-green/80 to-xeo-green rounded-full transition-all duration-300"
                         style="width: {chatLaunchLoadProgress?.percentage ??
                           0}%"
                       ></div>
@@ -6429,7 +6602,7 @@
               </div>
             </div>
             <div
-              class="flex-shrink-0 px-8 pb-6 pt-4 bg-gradient-to-t from-exo-black via-exo-black to-transparent"
+              class="flex-shrink-0 px-8 pb-6 pt-4 bg-gradient-to-t from-xeo-black via-xeo-black to-transparent"
             >
               <div class="max-w-7xl mx-auto">
                 <ChatForm
@@ -6462,7 +6635,7 @@
                     in:fade={{ duration: 300 }}
                   >
                     <p
-                      class="text-xs text-exo-light-gray/60 font-mono uppercase tracking-wider"
+                      class="text-xs text-xeo-light-gray/60 font-mono uppercase tracking-wider"
                     >
                       Try asking
                     </p>
@@ -6475,7 +6648,7 @@
                             selectedChatCategory = null;
                             handleChatSend(prompt);
                           }}
-                          class="text-left px-3 py-2.5 text-xs text-exo-light-gray hover:text-white font-mono rounded-lg border border-exo-medium-gray/30 hover:border-exo-yellow/30 bg-exo-dark-gray/30 hover:bg-exo-dark-gray/60 transition-all duration-200 cursor-pointer"
+                          class="text-left px-3 py-2.5 text-xs text-xeo-light-gray hover:text-white font-mono rounded-lg border border-xeo-medium-gray/30 hover:border-xeo-green/30 bg-xeo-dark-gray/30 hover:bg-xeo-dark-gray/60 transition-all duration-200 cursor-pointer"
                         >
                           {prompt}
                         </button>
@@ -6486,7 +6659,7 @@
               </div>
             </div>
             <div
-              class="flex-shrink-0 px-8 pb-6 pt-4 bg-gradient-to-t from-exo-black via-exo-black to-transparent"
+              class="flex-shrink-0 px-8 pb-6 pt-4 bg-gradient-to-t from-xeo-black via-xeo-black to-transparent"
             >
               <div class="max-w-7xl mx-auto">
                 <ChatForm
@@ -6521,7 +6694,7 @@
               />
             </div>
             <div
-              class="flex-shrink-0 px-8 pb-6 pt-4 bg-gradient-to-t from-exo-black via-exo-black to-transparent"
+              class="flex-shrink-0 px-8 pb-6 pt-4 bg-gradient-to-t from-xeo-black via-xeo-black to-transparent"
             >
               <div class="max-w-7xl mx-auto">
                 <ChatForm
@@ -6541,22 +6714,22 @@
         <!-- Right: Mini-Map Sidebar - Desktop only -->
         {#if minimized}
           <aside
-            class="hidden md:flex w-80 border-l border-exo-yellow/20 bg-exo-dark-gray flex-col flex-shrink-0 overflow-y-auto"
+            class="hidden md:flex w-80 border-l border-xeo-green/20 bg-xeo-dark-gray flex-col flex-shrink-0 overflow-y-auto"
             in:fly={{ x: 100, duration: 400, easing: cubicInOut }}
             aria-label="Cluster topology"
           >
             <!-- Topology Section - clickable to go back to main view -->
             <button
-              class="p-4 border-b border-exo-medium-gray/30 w-full text-left cursor-pointer hover:bg-exo-medium-gray/10 transition-colors"
+              class="p-4 border-b border-xeo-medium-gray/30 w-full text-left cursor-pointer hover:bg-xeo-medium-gray/10 transition-colors"
               onclick={handleGoHome}
               title="Click to return to main topology view"
             >
               <div class="flex items-center justify-between mb-3">
                 <div
-                  class="text-xs text-exo-yellow tracking-[0.2em] uppercase flex items-center gap-2"
+                  class="text-xs text-xeo-green tracking-[0.2em] uppercase flex items-center gap-2"
                 >
                   <span
-                    class="w-1.5 h-1.5 bg-exo-yellow rounded-full status-pulse"
+                    class="w-1.5 h-1.5 bg-xeo-green rounded-full status-pulse"
                   ></span>
                   TOPOLOGY
                 </div>
@@ -6566,7 +6739,7 @@
               </div>
 
               <div
-                class="relative aspect-square bg-exo-dark-gray rounded-lg overflow-hidden pointer-events-none"
+                class="relative aspect-square bg-xeo-dark-gray rounded-lg overflow-hidden pointer-events-none"
               >
                 <TopologyGraph
                   highlightedNodes={highlightedNodes()}
@@ -6583,15 +6756,15 @@
                 <!-- Panel Header -->
                 <div class="flex items-center gap-2 mb-4">
                   <div
-                    class="w-2 h-2 bg-exo-yellow rounded-full shadow-[0_0_8px_rgba(255,215,0,0.6)] animate-pulse"
+                    class="w-2 h-2 bg-xeo-green rounded-full shadow-[0_0_8px_oklch(0.78_0.17_145/0.6)] animate-pulse"
                   ></div>
                   <h3
-                    class="text-xs text-exo-yellow font-mono tracking-[0.2em] uppercase"
+                    class="text-xs text-xeo-green font-mono tracking-[0.2em] uppercase"
                   >
                     Instances
                   </h3>
                   <div
-                    class="flex-1 h-px bg-gradient-to-r from-exo-yellow/30 to-transparent"
+                    class="flex-1 h-px bg-gradient-to-r from-xeo-green/30 to-transparent"
                   ></div>
                 </div>
                 <div
@@ -6624,6 +6797,7 @@
                       id,
                       instance,
                     )}
+                    {@const migration = getRebalanceMigration(id, instance)}
                     {@const prepProgress =
                       !isFailed && !isDownloading
                         ? getPreparationProgress(instance)
@@ -6703,12 +6877,12 @@
                       ></div>
 
                       <div
-                        class="bg-exo-dark-gray/60 border border-l-2 {isDownloading
+                        class="bg-xeo-dark-gray/60 border border-l-2 {isDownloading
                           ? 'border-blue-500/30 border-l-blue-400'
                           : isFailed
                             ? 'border-red-500/30 border-l-red-400'
                             : isLoading
-                              ? 'border-exo-yellow/30 border-l-yellow-400'
+                              ? 'border-yellow-500/30 border-l-yellow-400'
                               : isReady
                                 ? 'border-green-500/30 border-l-green-400'
                                 : 'border-teal-500/30 border-l-teal-400'} p-3"
@@ -6727,7 +6901,7 @@
                                       : 'bg-teal-400'} rounded-full shadow-[0_0_6px_currentColor]"
                             ></div>
                             <span
-                              class="text-exo-light-gray font-mono text-sm tracking-wider"
+                              class="text-xeo-light-gray font-mono text-sm tracking-wider"
                               >{id.slice(0, 8).toUpperCase()}</span
                             >
                           </div>
@@ -6740,7 +6914,7 @@
                         </div>
                         <div class="pl-2">
                           <div
-                            class="text-exo-yellow text-xs font-mono tracking-wide truncate"
+                            class="text-xeo-green text-xs font-mono tracking-wide truncate"
                           >
                             {getInstanceModelId(instance)}
                           </div>
@@ -6768,7 +6942,7 @@
                           </div>
                           {#if instanceModelId && instanceModelId !== "Unknown" && instanceModelId !== "Unknown Model"}
                             <a
-                              class="inline-flex items-center gap-1 text-[11px] text-white/60 hover:text-exo-yellow transition-colors mt-1"
+                              class="inline-flex items-center gap-1 text-[11px] text-white/60 hover:text-xeo-green transition-colors mt-1"
                               href={`https://huggingface.co/${instanceModelId}`}
                               target="_blank"
                               rel="noreferrer noopener"
@@ -6799,7 +6973,7 @@
                           {/if}
                           {#if stageTimingRows.length > 0}
                             <div
-                              class="mt-2 space-y-0.5 border-t border-exo-medium-gray/30 pt-2"
+                              class="mt-2 space-y-0.5 border-t border-xeo-medium-gray/30 pt-2"
                             >
                               {#each stageTimingRows as row (row.nodeId)}
                                 <div
@@ -6813,25 +6987,48 @@
                                   >
                                 </div>
                               {/each}
-                              <button
-                                onclick={(event) => {
-                                  event.stopPropagation();
-                                  rebalanceInstance(id);
-                                }}
-                                disabled={rebalancingInstances[id]}
-                                title="Relaunch this instance with layers split by measured per-node speed (a few seconds of downtime)"
-                                class="mt-1.5 text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
-                                  null && rebalanceGain > 0.1
-                                  ? 'border-exo-yellow/60 text-exo-yellow shadow-[0_0_8px_rgba(255,215,0,0.35)] hover:bg-exo-yellow/20'
-                                  : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
-                              >
-                                {rebalancingInstances[id]
-                                  ? "REBALANCING..."
-                                  : rebalanceGain !== null &&
-                                      rebalanceGain > 0.1
-                                    ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
-                                    : "REBALANCE"}
-                              </button>
+                              {#if migration}
+                                <div class="mt-1.5 space-y-1">
+                                  <div
+                                    class="flex justify-between text-[10px] font-mono tracking-wider text-teal-400"
+                                  >
+                                    <span>MIGRATING LAYERS</span>
+                                    <span
+                                      >{migration.done}/{migration.total}</span
+                                    >
+                                  </div>
+                                  <div
+                                    class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
+                                  >
+                                    <div
+                                      class="absolute inset-y-0 left-0 bg-teal-400/80 transition-all duration-500"
+                                      style="width: {(migration.done /
+                                        migration.total) *
+                                        100}%"
+                                    ></div>
+                                  </div>
+                                </div>
+                              {:else}
+                                <button
+                                  onclick={(event) => {
+                                    event.stopPropagation();
+                                    rebalanceInstance(id);
+                                  }}
+                                  disabled={rebalancingInstances[id]}
+                                  title="Live-migrate layers one at a time to the measured-speed split (no downtime)"
+                                  class="mt-1.5 text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
+                                    null && rebalanceGain > 0.1
+                                    ? 'border-xeo-green/60 text-xeo-green shadow-[0_0_8px_oklch(0.78_0.17_145/0.35)] hover:bg-xeo-green/20'
+                                    : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
+                                >
+                                  {rebalancingInstances[id]
+                                    ? "REBALANCING..."
+                                    : rebalanceGain !== null &&
+                                        rebalanceGain > 0.1
+                                      ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
+                                      : "REBALANCE"}
+                                </button>
+                              {/if}
                             </div>
                           {/if}
                           {#if debugEnabled && instanceConnections.length > 0}
@@ -6866,7 +7063,7 @@
                                     1,
                                   )}%</span
                                 >
-                                <span class="text-exo-light-gray"
+                                <span class="text-xeo-light-gray"
                                   >{formatBytes(
                                     downloadInfo.progress.downloadedBytes,
                                   )}/{formatBytes(
@@ -6875,7 +7072,7 @@
                                 >
                               </div>
                               <div
-                                class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                                class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                               >
                                 <div
                                   class="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-300"
@@ -6884,7 +7081,7 @@
                                 ></div>
                               </div>
                               <div
-                                class="flex justify-between text-xs font-mono text-exo-light-gray"
+                                class="flex justify-between text-xs font-mono text-xeo-light-gray"
                               >
                                 <span
                                   >{formatSpeed(
@@ -6917,7 +7114,7 @@
                                       nodeProg.nodeId,
                                     )}
                                   <div
-                                    class="rounded border border-exo-medium-gray/40 bg-exo-black/30 p-2"
+                                    class="rounded border border-xeo-medium-gray/40 bg-xeo-black/30 p-2"
                                   >
                                     <button
                                       type="button"
@@ -6928,7 +7125,7 @@
                                         )}
                                     >
                                       <div
-                                        class="flex items-center justify-between text-[11px] font-mono text-exo-light-gray"
+                                        class="flex items-center justify-between text-[11px] font-mono text-xeo-light-gray"
                                       >
                                         <span
                                           class="text-white/80 truncate pr-2"
@@ -6939,7 +7136,7 @@
                                         >
                                           {nodePercent.toFixed(1)}%
                                           <svg
-                                            class="w-3 h-3 text-exo-light-gray"
+                                            class="w-3 h-3 text-xeo-light-gray"
                                             viewBox="0 0 20 20"
                                             fill="none"
                                             stroke="currentColor"
@@ -6955,7 +7152,7 @@
                                         </span>
                                       </div>
                                       <div
-                                        class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                                        class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                                       >
                                         <div
                                           class="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-300"
@@ -6965,7 +7162,7 @@
                                         ></div>
                                       </div>
                                       <div
-                                        class="flex items-center justify-between text-[11px] font-mono text-exo-light-gray"
+                                        class="flex items-center justify-between text-[11px] font-mono text-xeo-light-gray"
                                       >
                                         <span
                                           >{formatBytes(
@@ -6989,7 +7186,7 @@
                                       <div class="mt-2 space-y-1.5">
                                         {#if nodeProg.progress?.files ?? [].length === 0}
                                           <div
-                                            class="text-[11px] font-mono text-exo-light-gray/70"
+                                            class="text-[11px] font-mono text-xeo-light-gray/70"
                                           >
                                             No file details reported.
                                           </div>
@@ -7002,10 +7199,10 @@
                                             {@const isFileComplete =
                                               filePercent >= 100}
                                             <div
-                                              class="rounded border border-exo-medium-gray/30 bg-exo-black/40 p-2"
+                                              class="rounded border border-xeo-medium-gray/30 bg-xeo-black/40 p-2"
                                             >
                                               <div
-                                                class="flex items-center justify-between text-[10px] font-mono text-exo-light-gray/90"
+                                                class="flex items-center justify-between text-[10px] font-mono text-xeo-light-gray/90"
                                               >
                                                 <span class="truncate pr-2"
                                                   >{f.name}</span
@@ -7020,19 +7217,19 @@
                                                 >
                                               </div>
                                               <div
-                                                class="relative h-1 bg-exo-black/60 rounded-sm overflow-hidden mt-1"
+                                                class="relative h-1 bg-xeo-black/60 rounded-sm overflow-hidden mt-1"
                                               >
                                                 <div
                                                   class="absolute inset-y-0 left-0 bg-gradient-to-r {isFileComplete
                                                     ? 'from-green-500 to-green-400'
-                                                    : 'from-exo-yellow to-exo-yellow/70'} transition-all duration-300"
+                                                    : 'from-xeo-green to-xeo-green/70'} transition-all duration-300"
                                                   style="width: {filePercent.toFixed(
                                                     1,
                                                   )}%"
                                                 ></div>
                                               </div>
                                               <div
-                                                class="flex items-center justify-between text-[10px] text-exo-light-gray/70 mt-0.5"
+                                                class="flex items-center justify-between text-[10px] text-xeo-light-gray/70 mt-0.5"
                                               >
                                                 <span
                                                   >{formatBytes(
@@ -7093,13 +7290,13 @@
                                           100
                                         ).toFixed(0)}%</span
                                       >
-                                      <span class="text-exo-light-gray"
+                                      <span class="text-xeo-light-gray"
                                         >{loadStatus.layersLoaded ?? 0} / {loadStatus.totalLayers}
                                         layers</span
                                       >
                                     </div>
                                     <div
-                                      class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                                      class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                                     >
                                       <div
                                         class="absolute inset-y-0 left-0 bg-gradient-to-r from-yellow-500 to-yellow-400 transition-all duration-300"
@@ -7127,12 +7324,12 @@
                                       <span class="text-yellow-400"
                                         >{prep.percent}%</span
                                       >
-                                      <span class="text-exo-light-gray"
+                                      <span class="text-xeo-light-gray"
                                         >{prep.detail}</span
                                       >
                                     </div>
                                     <div
-                                      class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                                      class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                                     >
                                       <div
                                         class="absolute inset-y-0 left-0 bg-gradient-to-r from-yellow-500 to-yellow-400 transition-all duration-300"
@@ -7173,7 +7370,7 @@
                       transition:slide={{ duration: 250, easing: cubicOut }}
                     >
                       <div
-                        class="border border-teal-500/40 bg-exo-dark-gray/50 rounded p-3 space-y-2"
+                        class="border border-teal-500/40 bg-xeo-dark-gray/50 rounded p-3 space-y-2"
                       >
                         <div class="flex items-center justify-between">
                           <div class="flex items-center gap-2">
@@ -7181,7 +7378,7 @@
                               class="w-2 h-2 bg-teal-400 rounded-full shadow-[0_0_6px_currentColor] animate-pulse"
                             ></div>
                             <span
-                              class="text-exo-light-gray font-mono text-sm tracking-wider"
+                              class="text-xeo-light-gray font-mono text-sm tracking-wider"
                               >{oldId.slice(0, 8).toUpperCase()}</span
                             >
                           </div>
@@ -7192,7 +7389,7 @@
                           </span>
                         </div>
                         <div
-                          class="text-exo-yellow text-xs font-mono tracking-wide truncate"
+                          class="text-xeo-green text-xs font-mono tracking-wide truncate"
                         >
                           {transition.modelId}
                         </div>
@@ -7201,7 +7398,7 @@
                           memory to be released...
                         </p>
                         <div
-                          class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                          class="relative h-1.5 bg-xeo-black/60 rounded-sm overflow-hidden"
                         >
                           <div
                             class="absolute inset-0 bg-gradient-to-r from-teal-500/20 via-teal-400/70 to-teal-500/20 animate-pulse"

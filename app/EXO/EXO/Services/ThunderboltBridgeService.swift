@@ -156,7 +156,7 @@ final class ThunderboltBridgeService: ObservableObject {
         guard
             let prefs = SCPreferencesCreateWithAuthorization(
                 kCFAllocatorDefault,
-                "EXO" as CFString,
+                "XEO" as CFString,
                 nil,
                 authRef
             )

@@ -4,6 +4,7 @@ import os
 import resource
 import signal
 import sys
+from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from typing import Self
 
@@ -24,6 +25,7 @@ from exo.routing.event_router import EventRouter
 from exo.routing.router import Router, get_node_zid
 from exo.shared.constants import EXO_DEFAULT_MODELS_DIR, EXO_LOG, EXO_PID_FILE
 from exo.shared.election import Election, ElectionResult
+from exo.shared.environment import get_compatible_environment_value
 from exo.shared.logging import logger_cleanup, logger_setup
 from exo.shared.types.common import NodeId, SessionId
 from exo.utils import STDIO_FDS
@@ -329,6 +331,20 @@ def main():
         pidfile.close()
 
 
+def apply_runner_environment_overrides(
+    args: "Args",
+    environment: MutableMapping[str, str],
+) -> None:
+    if args.no_batch:
+        environment["XEO_NO_BATCH"] = "1"
+        environment["EXO_NO_BATCH"] = "1"
+
+    if args.fast_synch is not None:
+        fast_synch_value = "true" if args.fast_synch else "false"
+        environment["XEO_FAST_SYNCH"] = fast_synch_value
+        environment["EXO_FAST_SYNCH"] = fast_synch_value
+
+
 def main_inner(args: "Args"):
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     target = min(max(soft, 65535), hard)
@@ -340,11 +356,15 @@ def main_inner(args: "Args"):
     logger_setup(EXO_LOG, args.verbosity)
 
     logger.info(f"pid = {os.getpid()}")
-    if os.getenv("EXO_LIBP2P_NAMESPACE"):
+    if get_compatible_environment_value(os.environ, "EXO_LIBP2P_NAMESPACE"):
         raise ValueError(
-            "EXO_LIBP2P_NAMESPACE has been removed - use EXO_ZENOH_NAMESPACE instead"
+            "XEO_LIBP2P_NAMESPACE and EXO_LIBP2P_NAMESPACE have been removed; "
+            "use XEO_ZENOH_NAMESPACE instead"
         )
-    logger.info(f"EXO_ZENOH_NAMESPACE: {os.getenv('EXO_ZENOH_NAMESPACE')}")
+    logger.info(
+        "XEO_ZENOH_NAMESPACE: "
+        f"{get_compatible_environment_value(os.environ, 'EXO_ZENOH_NAMESPACE')}"
+    )
 
     if args.offline:
         logger.info("Running in OFFLINE mode — no internet checks, local models only")
@@ -352,16 +372,13 @@ def main_inner(args: "Args"):
     if args.bootstrap_peers:
         raise ValueError("Bootstrap peers has been temporarily removed")
 
+    apply_runner_environment_overrides(args, os.environ)
     if args.no_batch:
-        os.environ["EXO_NO_BATCH"] = "1"
         logger.info("Continuous batching disabled (--no-batch)")
 
-    # Set FAST_SYNCH override env var for runner subprocesses
     if args.fast_synch is True:
-        os.environ["EXO_FAST_SYNCH"] = "true"
         logger.info("FAST_SYNCH forced ON")
     elif args.fast_synch is False:
-        os.environ["EXO_FAST_SYNCH"] = "false"
         logger.info("FAST_SYNCH forced OFF")
 
     node = anyio.run(Node.create, args)
@@ -385,7 +402,14 @@ class Args(FrozenModel):
     tb_only: bool = False
     no_worker: bool = False
     no_downloads: bool = False
-    offline: bool = os.getenv("EXO_OFFLINE", "false").lower() == "true"
+    offline: bool = (
+        get_compatible_environment_value(
+            os.environ,
+            "EXO_OFFLINE",
+            "false",
+        ).lower()
+        == "true"
+    )
     no_batch: bool = False
     fast_synch: bool | None = None  # None = auto, True = force on, False = force off
     legacy_daemon: bool = False
@@ -396,7 +420,7 @@ class Args(FrozenModel):
 
     @classmethod
     def parse(cls) -> Self:
-        parser = argparse.ArgumentParser(prog="EXO")
+        parser = argparse.ArgumentParser(prog="XEO")
         default_verbosity = 0
         parser.add_argument(
             "-q",
@@ -442,7 +466,12 @@ class Args(FrozenModel):
         parser.add_argument(
             "--offline",
             action="store_true",
-            default=os.getenv("EXO_OFFLINE", "false").lower() == "true",
+            default=get_compatible_environment_value(
+                os.environ,
+                "EXO_OFFLINE",
+                "false",
+            ).lower()
+            == "true",
             help="Run in offline/air-gapped mode: skip internet checks, use only pre-staged local models",
         )
         parser.add_argument(
@@ -455,14 +484,18 @@ class Args(FrozenModel):
             action="store_true",
             help="Run as a legacy SysV-style background daemon using double-fork daemonization",
         )
+        bootstrap_peers_environment_value = get_compatible_environment_value(
+            os.environ,
+            "EXO_BOOTSTRAP_PEERS",
+        )
         parser.add_argument(
             "--bootstrap-peers",
             type=lambda s: [p for p in s.split(",") if p],
-            default=os.getenv("EXO_BOOTSTRAP_PEERS", "").split(",")
-            if os.getenv("EXO_BOOTSTRAP_PEERS")
+            default=bootstrap_peers_environment_value.split(",")
+            if bootstrap_peers_environment_value
             else [],
             dest="bootstrap_peers",
-            help="Comma-separated libp2p multiaddrs to dial on startup (env: EXO_BOOTSTRAP_PEERS)",
+            help="Comma-separated libp2p multiaddrs to dial on startup (env: XEO_BOOTSTRAP_PEERS)",
         )
         parser.add_argument(
             "--namespace",

@@ -40,7 +40,7 @@
 
 <div class="prefill-progress {className}">
   <div
-    class="flex items-center justify-between text-xs text-exo-light-gray mb-1"
+    class="flex items-center justify-between text-xs text-xeo-light-gray mb-1"
   >
     <span>Processing prompt</span>
     <span class="font-mono">
@@ -49,14 +49,14 @@
       )} tokens
     </span>
   </div>
-  <div class="h-1.5 bg-exo-black/60 rounded-full overflow-hidden">
+  <div class="h-1.5 bg-xeo-black/60 rounded-full overflow-hidden">
     <div
-      class="h-full bg-exo-yellow rounded-full transition-all duration-150 ease-out"
+      class="h-full bg-xeo-green rounded-full transition-all duration-150 ease-out"
       style="width: {percentage}%"
     ></div>
   </div>
   <div
-    class="flex items-center justify-between text-xs text-exo-light-gray/70 mt-0.5 font-mono"
+    class="flex items-center justify-between text-xs text-xeo-light-gray/70 mt-0.5 font-mono"
   >
     <span>{etaText ?? ""}</span>
     <span>{percentage}%</span>

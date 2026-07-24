@@ -126,7 +126,10 @@ from exo.api.types.openai_responses import (
 )
 from exo.master.image_store import ImageStore
 from exo.master.placement import place_instance as get_instance_placements
-from exo.master.placement_utils import allocate_layers_by_measured_speed
+from exo.master.placement_utils import (
+    allocate_layers_by_measured_speed,
+    plan_pipeline_layer_shift_steps,
+)
 from exo.shared.apply import apply
 from exo.shared.constants import (
     DASHBOARD_DIR,
@@ -171,6 +174,7 @@ from exo.shared.types.commands import (
     PlaceInstance,
     SendInputChunk,
     SetInstanceLink,
+    ShiftInstanceLayers,
     StartDownload,
     TaskCancelled,
     TaskFinished,
@@ -205,7 +209,6 @@ from exo.shared.types.worker.instances import (
     Instance,
     InstanceId,
     InstanceMeta,
-    MlxRingInstance,
 )
 from exo.shared.types.worker.shards import PipelineShardMetadata, Sharding
 from exo.utils.banner import print_startup_banner
@@ -216,10 +219,6 @@ from exo.utils.task_group import TaskGroup
 
 _API_EVENT_LOG_DIR = EXO_EVENT_LOG_DIR / "api"
 ONBOARDING_COMPLETE_FILE = EXO_CACHE_HOME / "onboarding_complete"
-
-# How long a rebalance waits for the deleted instance's memory to be
-# reported as reclaimed before giving up on the automatic relaunch.
-REBALANCE_MEMORY_WAIT_SECONDS = 60.0
 
 
 def _format_to_content_type(image_format: Literal["png", "jpeg", "webp"] | None) -> str:
@@ -710,11 +709,12 @@ class API:
     async def rebalance_instance(
         self, instance_id: InstanceId
     ) -> RebalanceInstanceResponse:
-        """Relaunch an instance with layer counts derived from measured stage timings.
+        """Live-migrate an instance's layers to the measured-speed allocation.
 
-        The existing instance is deleted, and once its memory is reported as
-        reclaimed a new placement is requested on the same nodes with a
-        manual layer split proportional to each node's measured decode speed.
+        Like a disk defragmenter, the rebalance moves one layer at a time
+        between adjacent pipeline ranks while the instance keeps serving
+        requests; each step pauses generation only for the moment the gaining
+        rank loads that layer's weights from local disk.
         """
         instance = self.state.instances.get(instance_id)
         if instance is None:
@@ -773,51 +773,31 @@ class API:
                 node_layers=node_layers,
             )
 
-        instance_meta = (
-            InstanceMeta.MlxRing
-            if isinstance(instance, MlxRingInstance)
-            else InstanceMeta.MlxJaccl
+        current_pipeline_shards = {
+            shard_assignments.node_to_runner[node_id]: shard
+            for node_id, shard in node_to_shard.items()
+            if isinstance(shard, PipelineShardMetadata)
+        }
+        target_layer_counts = {
+            shard_assignments.node_to_runner[node_id]: layer_count
+            for node_id, layer_count in node_layers.items()
+        }
+        steps = len(
+            plan_pipeline_layer_shift_steps(
+                current_pipeline_shards, target_layer_counts
+            )
         )
-        await self._send(DeleteInstance(instance_id=instance_id))
-
-        def _memory_reports_allow_relaunch() -> bool:
-            for node_id, layer_count in node_layers.items():
-                required = (
-                    model_card.storage_size * layer_count
-                ) // model_card.n_layers
-                memory = self.state.node_memory.get(node_id)
-                if memory is None or memory.ram_available < required:
-                    return False
-            return True
-
-        deadline = anyio.current_time() + REBALANCE_MEMORY_WAIT_SECONDS
-        while (
-            instance_id in self.state.instances
-            or not _memory_reports_allow_relaunch()
-        ):
-            if anyio.current_time() > deadline:
-                raise HTTPException(
-                    status_code=504,
-                    detail=(
-                        "The instance was deleted but its memory was not reported "
-                        "as reclaimed in time; relaunch the model manually."
-                    ),
-                )
-            await anyio.sleep(0.5)
-
-        command = PlaceInstance(
-            model_card=model_card,
-            sharding=Sharding.Pipeline,
-            instance_meta=instance_meta,
-            min_nodes=len(node_ids),
+        command = ShiftInstanceLayers(
+            instance_id=instance_id,
             node_layers=node_layers,
         )
         await self._send(command)
         return RebalanceInstanceResponse(
-            message="Instance relaunching with measured layer split.",
+            message="Live layer migration started.",
             instance_id=instance_id,
             node_layers=node_layers,
             command_id=command.command_id,
+            steps=steps,
         )
 
     async def get_feature_flags(self) -> dict[str, bool]:

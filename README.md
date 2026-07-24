@@ -1,11 +1,14 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="/docs/imgs/exo-logo-black-bg.jpg">
-  <img alt="exo logo" src="/docs/imgs/exo-logo-transparent.png" width="50%" height="50%">
-</picture>
+<img alt="XEO" src="/docs/imgs/xeo-wordmark.svg" width="50%" />
 
-exo: Run frontier AI locally. Maintained by [exo labs](https://x.com/exolabs).
+XEO: Run frontier AI locally.
+
+XEO is an independent fork and evolution of the upstream
+[EXO project](https://github.com/exo-explore/exo). It is not affiliated with or
+endorsed by the upstream project. Upstream attribution and source links are
+retained throughout this documentation. Upstream EXO is maintained by
+[exo labs](https://x.com/exolabs).
 
 <p align="center">
   <a href="https://discord.gg/TJ4P57arEm" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
@@ -17,24 +20,24 @@ exo: Run frontier AI locally. Maintained by [exo labs](https://x.com/exolabs).
 
 ---
 
-exo connects all your devices into an AI cluster. Not only does exo enable running models larger than would fit on a single device, but with [day-0 support for RDMA over Thunderbolt](https://x.com/exolabs/status/2001817749744476256?s=20), makes models run faster as you add more devices.
+XEO connects all your devices into an AI cluster. Not only does XEO enable running models larger than would fit on a single device, but with [day-0 support for RDMA over Thunderbolt](https://x.com/exolabs/status/2001817749744476256?s=20), makes models run faster as you add more devices.
 
 ## Features
 
-- **Automatic Device Discovery**: Devices running exo automatically discover each other - no manual configuration.
-- **RDMA over Thunderbolt**: exo ships with [day-0 support for RDMA over Thunderbolt 5](https://x.com/exolabs/status/2001817749744476256?s=20), enabling 99% reduction in latency between devices.
-- **Topology-Aware Auto Parallel**: exo figures out the best way to split your model across all available devices based on a realtime view of your device topology. It takes into account device resources and network latency/bandwidth between each link.
-- **Tensor Parallelism**: exo supports sharding models, for up to 1.8x speedup on 2 devices and 3.2x speedup on 4 devices.
-- **MLX Support**: exo uses [MLX](https://github.com/ml-explore/mlx) as an inference backend and [MLX distributed](https://ml-explore.github.io/mlx/build/html/usage/distributed.html) for distributed communication.
+- **Automatic Device Discovery**: Devices running XEO automatically discover each other - no manual configuration.
+- **RDMA over Thunderbolt**: XEO ships with [day-0 support for RDMA over Thunderbolt 5](https://x.com/exolabs/status/2001817749744476256?s=20), enabling 99% reduction in latency between devices.
+- **Topology-Aware Auto Parallel**: XEO figures out the best way to split your model across all available devices based on a realtime view of your device topology. It takes into account device resources and network latency/bandwidth between each link.
+- **Tensor Parallelism**: XEO supports sharding models, for up to 1.8x speedup on 2 devices and 3.2x speedup on 4 devices.
+- **MLX Support**: XEO uses [MLX](https://github.com/ml-explore/mlx) as an inference backend and [MLX distributed](https://ml-explore.github.io/mlx/build/html/usage/distributed.html) for distributed communication.
 - **Multiple API Compatibility**: Compatible with OpenAI Chat Completions API, Claude Messages API, OpenAI Responses API, and Ollama API - use your existing tools and clients.
 - **Custom Model Support**: Load custom models from HuggingFace hub to expand the range of available models.
 
 ## Dashboard
 
-exo includes a built-in dashboard for managing your cluster and chatting with models.
+XEO includes a built-in dashboard for managing your cluster and chatting with models.
 
 <p align="center">
-  <img src="docs/imgs/dashboard-cluster-view.png" alt="exo dashboard - cluster view showing 4 x M3 Ultra Mac Studio with DeepSeek v3.1 and Kimi-K2-Thinking loaded" width="80%" />
+  <img src="docs/imgs/dashboard-cluster-view.png" alt="XEO dashboard - cluster view showing 4 x M3 Ultra Mac Studio with DeepSeek v3.1 and Kimi-K2-Thinking loaded" width="80%" />
 </p>
 <p align="center"><em>4 × 512GB M3 Ultra Mac Studio running DeepSeek v3.1 (8-bit) and Kimi-K2-Thinking (4-bit)</em></p>
 
@@ -68,13 +71,26 @@ exo includes a built-in dashboard for managing your cluster and chatting with mo
 
 ## Quick Start
 
-Devices running exo automatically discover each other, without needing any manual configuration. Each device provides an API and a dashboard for interacting with your cluster (runs at `http://localhost:52415`).
+Devices running XEO automatically discover each other, without needing any manual configuration. Each device provides an API and a dashboard for interacting with your cluster (runs at `http://localhost:52415`).
 
-There are two ways to run exo:
+There are two ways to run XEO:
+
+### Compatibility identifiers
+
+Use the `xeo` CLI and supported `XEO_*` environment variables for new
+configurations. The legacy `exo` CLI and corresponding `EXO_*` names remain
+supported as compatibility fallbacks. When both forms of a supported
+environment variable are set, the `XEO_*` value takes precedence.
+
+Existing EXO data paths remain unchanged: XEO continues to use `~/.exo` on
+macOS and the established `exo` directories under the Linux XDG locations.
+Technical package names, imports, and executable paths also remain `exo`.
+The wire-affecting `EXO_WIRE_QUANT` setting intentionally keeps its legacy
+name so every node in a mixed-version cluster reads the same value.
 
 ### Run from Source (macOS)
 
-If you have [Nix](https://nixos.org/) installed, you can skip most of the steps below and run exo directly:
+If you have [Nix](https://nixos.org/) installed, you can skip most of the steps below and run XEO directly:
 
 ```bash
 nix run .#exo
@@ -118,20 +134,22 @@ Then restart the Nix daemon: `sudo launchctl kickstart -k system/org.nixos.nix-d
     --force
   ```
 
-Clone the repo, build the dashboard, and run exo:
+Clone XEO, build the dashboard, and run it. The upstream source URL is retained
+below for attribution:
 
 ```bash
-# Clone exo
-git clone https://github.com/exo-explore/exo
+# Clone XEO
+git clone https://github.com/jgawronek/exo xeo
+# Upstream source: https://github.com/exo-explore/exo
 
 # Build dashboard
-cd exo/dashboard && npm install && npm run build && cd ..
+cd xeo/dashboard && npm install && npm run build && cd ..
 
-# Run exo
-uv run exo
+# Run XEO
+uv run xeo
 ```
 
-This starts the exo dashboard and API at http://localhost:52415/
+This starts the XEO dashboard and API at http://localhost:52415/
 
 
 *Please view the section on RDMA to enable this feature on MacOS >=26.2!*
@@ -176,40 +194,42 @@ rustup toolchain install nightly
 
 **Note:** The `macmon` package is macOS-only and not required for Linux.
 
-Clone the repo, build the dashboard, and run exo:
+Clone XEO, build the dashboard, and run it. The upstream source URL is retained
+below for attribution:
 
 ```bash
-# Clone exo
-git clone https://github.com/exo-explore/exo
+# Clone XEO
+git clone https://github.com/jgawronek/exo xeo
+# Upstream source: https://github.com/exo-explore/exo
 
 # Build dashboard
-cd exo/dashboard && npm install && npm run build && cd ..
+cd xeo/dashboard && npm install && npm run build && cd ..
 
-# Run exo
-uv run exo
+# Run XEO
+uv run xeo
 ```
 
-This starts the exo dashboard and API at http://localhost:52415/
+This starts the XEO dashboard and API at http://localhost:52415/
 
-**Important note for Linux users:** Currently, exo runs on CPU on Linux. GPU support for Linux platforms is under development. If you'd like to see support for your specific Linux hardware, please [search for existing feature requests](https://github.com/exo-explore/exo/issues) or create a new one.
+**Important note for Linux users:** Currently, XEO runs on CPU on Linux. GPU support for Linux platforms is under development. For upstream hardware-support discussions, [search the upstream EXO feature requests](https://github.com/exo-explore/exo/issues).
 
 **Configuration Options:**
 
-- `--no-worker`: Run exo without the worker component. Useful for coordinator-only nodes that handle networking and orchestration but don't execute inference tasks. This is helpful for machines without sufficient GPU resources but with good network connectivity.
+- `--no-worker`: Run XEO without the worker component. Useful for coordinator-only nodes that handle networking and orchestration but don't execute inference tasks. This is helpful for machines without sufficient GPU resources but with good network connectivity.
 
   ```bash
-  uv run exo --no-worker
+  uv run xeo --no-worker
   ```
 
-- `--legacy-daemon`: Run exo as a legacy SysV-style background daemon using double-fork daemonization. This is intended for legacy init scripts; systemd and launchd should run exo in the foreground without this flag.
+- `--legacy-daemon`: Run XEO as a legacy SysV-style background daemon using double-fork daemonization. This is intended for legacy init scripts; systemd and launchd should run XEO in the foreground without this flag.
 
   ```bash
-  uv run exo --legacy-daemon
+  uv run xeo --legacy-daemon
   ```
 
 **File Locations (Linux):**
 
-exo follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) on Linux:
+XEO follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) on Linux. The `exo` directory names are retained compatibility identifiers:
 
 - **Configuration files**: `~/.config/exo/` (or `$XDG_CONFIG_HOME/exo/`)
 - **Data files**: `~/.local/share/exo/` (or `$XDG_DATA_HOME/exo/`)
@@ -221,32 +241,28 @@ You can override these locations by setting the corresponding XDG environment va
 
 ### macOS App
 
-exo ships a macOS app that runs in the background on your Mac.
+XEO ships a macOS app that runs in the background on your Mac.
 
-<img src="docs/imgs/macos-app-one-macbook.png" alt="exo macOS App - running on a MacBook" width="35%" />
+<img src="docs/imgs/macos-app-one-macbook.png" alt="XEO macOS App - running on a MacBook" width="35%" />
 
 The macOS app requires macOS Tahoe 26.2 or later.
 
-Download the latest build here: [EXO-latest.dmg](https://assets.exolabs.net/EXO-latest.dmg).
-
-You can also install the latest build with Homebrew:
-
-```bash
-brew install --cask exo
-```
+Download signed XEO builds from the
+[latest GitHub release](https://github.com/jgawronek/exo/releases/latest).
+The upstream `exo` Homebrew cask installs upstream EXO, not XEO.
 
 The app will ask for permission to modify system settings and install a new Network profile. Improvements to this are being worked on.
 
 **Custom Namespace for Cluster Isolation:**
 
-The macOS app includes a custom namespace feature that allows you to isolate your exo cluster from others on the same network. This is configured through the `EXO_LIBP2P_NAMESPACE` setting:
+The macOS app includes a custom namespace feature that allows you to isolate your XEO cluster from others on the same network. Use `XEO_ZENOH_NAMESPACE` when configuring it from the environment:
 
 - **Use cases**:
-  - Running multiple separate exo clusters on the same network
+  - Running multiple separate XEO clusters on the same network
   - Isolating development/testing clusters from production clusters
   - Preventing accidental cluster joining
 
-- **Configuration**: Access this setting in the app's Advanced settings (or set the `EXO_LIBP2P_NAMESPACE` environment variable when running from source)
+- **Configuration**: Access this setting in the app's Advanced settings (or set `XEO_ZENOH_NAMESPACE`; `EXO_ZENOH_NAMESPACE` remains its compatibility fallback)
 
 The namespace is logged on startup for debugging purposes.
 
@@ -264,9 +280,9 @@ This removes:
 - Network setup LaunchDaemon
 - Network configuration script
 - Log files
-- The "exo" network location
+- The legacy `exo` network location
 
-**Note:** You'll need to manually remove EXO from Login Items in System Settings → General → Login Items.
+**Note:** You'll need to manually remove XEO from Login Items in System Settings → General → Login Items.
 
 ---
 
@@ -289,7 +305,7 @@ To enable RDMA on macOS, follow these steps:
    and press Enter.
 6. Reboot your Mac.
 
-After that, RDMA will be enabled in macOS and exo will take care of the rest.
+After that, RDMA will be enabled in macOS and XEO will take care of the rest.
 
 **Important Caveats**
 
@@ -303,50 +319,61 @@ After that, RDMA will be enabled in macOS and exo will take care of the rest.
 
 ## Environment Variables
 
-exo supports several environment variables for configuration:
+Use the `XEO_*` names below for new configurations. Each corresponding
+`EXO_*` name remains a supported fallback; if both are set, XEO uses the
+`XEO_*` value.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `EXO_DEFAULT_MODELS_DIR` | Default directory for model downloads and caches. Always first in the writable dirs list. | `~/.local/share/exo/models` (Linux) or `~/.exo/models` (macOS) |
-| `EXO_MODELS_DIRS` | Colon-separated additional writable directories for model downloads. Checked in order after the default; first with enough free space is used. | None |
-| `EXO_MODELS_READ_ONLY_DIRS` | Colon-separated read-only directories to search for pre-downloaded models (e.g., NFS mounts, shared storage). Models here cannot be deleted. | None |
-| `EXO_OFFLINE` | Run without internet connection (uses only local models) | `false` |
-| `EXO_ENABLE_IMAGE_MODELS` | Enable image model support | `false` |
-| `EXO_LIBP2P_NAMESPACE` | Custom namespace for cluster isolation | None |
-| `EXO_FAST_SYNCH` | Control MLX_METAL_FAST_SYNCH behavior (for JACCL backend) | Auto |
-| `EXO_TRACING_ENABLED` | Enable distributed tracing for performance analysis | `false` |
+| Preferred variable | Legacy fallback | Description | Default |
+|--------------------|-----------------|-------------|---------|
+| `XEO_HOME` | `EXO_HOME` | Override the base configuration, data, and cache directory. | Platform-specific legacy EXO paths |
+| `XEO_DEFAULT_MODELS_DIR` | `EXO_DEFAULT_MODELS_DIR` | Default directory for model downloads and caches. Always first in the writable dirs list. | `~/.local/share/exo/models` (Linux) or `~/.exo/models` (macOS) |
+| `XEO_MODELS_DIRS` | `EXO_MODELS_DIRS` | Colon-separated additional writable model directories. | None |
+| `XEO_MODELS_READ_ONLY_DIRS` | `EXO_MODELS_READ_ONLY_DIRS` | Colon-separated read-only directories containing pre-downloaded models. | None |
+| `XEO_RESOURCES_DIR` | `EXO_RESOURCES_DIR` | Override the bundled resources directory. | Auto-detected |
+| `XEO_DASHBOARD_DIR` | `EXO_DASHBOARD_DIR` | Override the dashboard build directory. | Auto-detected |
+| `XEO_OFFLINE` | `EXO_OFFLINE` | Run without an internet connection, using only local models. | `false` |
+| `XEO_ENABLE_IMAGE_MODELS` | `EXO_ENABLE_IMAGE_MODELS` | Enable image model support. | `false` |
+| `XEO_TRACING_ENABLED` | `EXO_TRACING_ENABLED` | Enable distributed tracing for performance analysis. | `false` |
+| `XEO_MAX_CONCURRENT_REQUESTS` | `EXO_MAX_CONCURRENT_REQUESTS` | Set the maximum number of concurrent requests. | `8` |
+| `XEO_ZENOH_NAMESPACE` | `EXO_ZENOH_NAMESPACE` | Set a custom namespace for cluster isolation. | None |
+| `XEO_FAST_SYNCH` | `EXO_FAST_SYNCH` | Control `MLX_METAL_FAST_SYNCH` behavior for the JACCL backend. | Auto |
+
+Other environment settings follow the same precedence rule: prefer the `XEO_*`
+name and use the corresponding `EXO_*` name only as a compatibility fallback.
+The removed `XEO_LIBP2P_NAMESPACE` and `EXO_LIBP2P_NAMESPACE` names must not be
+used.
 
 **Example usage:**
 
 ```bash
 # Use pre-downloaded models from NFS mount (read-only)
-EXO_MODELS_READ_ONLY_DIRS=/mnt/nfs/models:/opt/ai-models uv run exo
+XEO_MODELS_READ_ONLY_DIRS=/mnt/nfs/models:/opt/ai-models uv run xeo
 
 # Download models to an external SSD (falls back to default dir if full)
-EXO_MODELS_DIRS=/Volumes/ExternalSSD/exo-models uv run exo
+XEO_MODELS_DIRS=/Volumes/ExternalSSD/exo-models uv run xeo
 
 # Run in offline mode
-EXO_OFFLINE=true uv run exo
+XEO_OFFLINE=true uv run xeo
 
 # Enable image models
-EXO_ENABLE_IMAGE_MODELS=true uv run exo
+XEO_ENABLE_IMAGE_MODELS=true uv run xeo
 
-# Use custom namespace for cluster isolation
-EXO_LIBP2P_NAMESPACE=my-dev-cluster uv run exo
+# Use a custom namespace for cluster isolation
+XEO_ZENOH_NAMESPACE=my-dev-cluster uv run xeo
 ```
 
 ---
 
 ### Using the API
 
-exo provides multiple API-compatible interfaces for maximum compatibility with existing tools:
+XEO provides multiple API-compatible interfaces for maximum compatibility with existing tools:
 
 - **OpenAI Chat Completions API** - Compatible with OpenAI clients
 - **Claude Messages API** - Compatible with Anthropic's Claude format
 - **OpenAI Responses API** - Compatible with OpenAI's Responses format
 - **Ollama API** - Compatible with Ollama and tools like OpenWebUI
 
-If you prefer to interact with exo via the API, here is an example creating an instance of a small model (`mlx-community/Llama-3.2-1B-Instruct-4bit`), sending a chat completions request and deleting the instance.
+If you prefer to interact with XEO via the API, here is an example creating an instance of a small model (`mlx-community/Llama-3.2-1B-Instruct-4bit`), sending a chat completions request and deleting the instance.
 
 ---
 
@@ -482,7 +509,7 @@ curl -N -X POST http://localhost:52415/v1/responses \
 
 ### Ollama API Compatibility
 
-exo supports Ollama API endpoints for compatibility with tools like OpenWebUI:
+XEO supports Ollama API endpoints for compatibility with tools like OpenWebUI:
 
 ```bash
 # Ollama chat
@@ -535,7 +562,7 @@ For further details, see:
 The `exo-bench` tool measures model prefill and token generation speed across different placement configurations. This helps you optimize model performance and validate improvements.
 
 **Prerequisites:**
-- Nodes should be running with `uv run exo` before benchmarking
+- Nodes should be running with `uv run xeo` before benchmarking
 - The tool uses the `/bench/chat/completions` endpoint
 
 **Basic usage:**
@@ -578,10 +605,10 @@ The tool outputs performance metrics including prompt tokens per second (prompt_
 
 ## Hardware Accelerator Support
 
-On macOS, exo uses the GPU. On Linux, exo currently runs on CPU. We are working on extending hardware accelerator support. If you'd like support for a new hardware platform, please [search for an existing feature request](https://github.com/exo-explore/exo/issues) and add a thumbs up so we know what hardware is important to the community.
+On macOS, XEO uses the GPU. On Linux, XEO currently runs on CPU. We are working on extending hardware accelerator support. For upstream hardware-support discussions, [search the upstream EXO feature requests](https://github.com/exo-explore/exo/issues).
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to exo.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.

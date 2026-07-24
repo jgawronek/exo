@@ -129,7 +129,7 @@
       <button
         type="button"
         onclick={onSelect}
-        class="px-3 py-1.5 text-xs font-mono tracking-wider uppercase bg-exo-yellow/10 text-exo-yellow border border-exo-yellow/30 hover:bg-exo-yellow/20 transition-colors rounded cursor-pointer"
+        class="px-3 py-1.5 text-xs font-mono tracking-wider uppercase bg-xeo-green/10 text-xeo-green border border-xeo-green/30 hover:bg-xeo-green/20 transition-colors rounded cursor-pointer"
       >
         Select
       </button>

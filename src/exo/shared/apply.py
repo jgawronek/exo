@@ -17,6 +17,7 @@ from exo.shared.types.events import (
     InstanceDeleted,
     InstanceLinkCreated,
     InstanceLinkDeleted,
+    InstanceShardAssignmentsUpdated,
     NodeDownloadProgress,
     NodeGatheredInfo,
     NodeTimedOut,
@@ -63,6 +64,7 @@ from exo.utils.info_gatherer.info_gatherer import (
     NodeConfig,
     NodeDiskUsage,
     NodeNetworkInterfaces,
+    NvmlMetrics,
     RdmaCtlStatus,
     StaticNodeInformation,
     ThunderboltBridgeInfo,
@@ -101,6 +103,8 @@ def event_apply(event: Event, state: State) -> State:
             return apply_instance_created(event, state)
         case InstanceDeleted():
             return apply_instance_deleted(event, state)
+        case InstanceShardAssignmentsUpdated():
+            return apply_instance_shard_assignments_updated(event, state)
         case NodeTimedOut():
             return apply_node_timed_out(event, state)
         case NodeDownloadProgress():
@@ -254,6 +258,35 @@ def apply_instance_deleted(event: InstanceDeleted, state: State) -> State:
     )
 
 
+def apply_instance_shard_assignments_updated(
+    event: InstanceShardAssignmentsUpdated, state: State
+) -> State:
+    instance = state.instances.get(event.instance_id)
+    if instance is None:
+        # Stale shift commit from an instance that was already deleted.
+        return state
+    new_instances: Mapping[InstanceId, Instance] = {
+        **state.instances,
+        event.instance_id: instance.model_copy(
+            update={"shard_assignments": event.shard_assignments}
+        ),
+    }
+    # Measured stage timings were taken under the previous layer allocation,
+    # so they no longer describe the instance; drop them and let the runners
+    # republish under the new layout.
+    new_stage_timings: Mapping[InstanceId, Mapping[NodeId, StageTiming]] = {
+        iid: timings
+        for iid, timings in state.instance_stage_timings.items()
+        if iid != event.instance_id
+    }
+    return state.model_copy(
+        update={
+            "instances": new_instances,
+            "instance_stage_timings": new_stage_timings,
+        }
+    )
+
+
 def apply_stage_timings_updated(event: StageTimingsUpdated, state: State) -> State:
     if event.instance_id not in state.instances:
         # Stale timing from a runner whose instance was already deleted.
@@ -396,6 +429,11 @@ def apply_node_gathered_info(event: NodeGatheredInfo, state: State) -> State:
                 event.node_id: info.system_profile,
             }
             update["node_memory"] = {**state.node_memory, event.node_id: info.memory}
+        case NvmlMetrics():
+            update["node_system"] = {
+                **state.node_system,
+                event.node_id: info.system_profile,
+            }
         case MemoryUsage():
             update["node_memory"] = {**state.node_memory, event.node_id: info}
         case NodeDiskUsage():

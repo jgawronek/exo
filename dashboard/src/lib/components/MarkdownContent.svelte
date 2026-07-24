@@ -556,14 +556,14 @@
     font-size: 1.5rem;
     font-weight: 700;
     margin: 1.5rem 0 0.75rem 0;
-    color: var(--exo-yellow, #ffd700);
+    color: var(--xeo-green, oklch(0.78 0.17 145));
   }
 
   .markdown-content :global(h2) {
     font-size: 1.25rem;
     font-weight: 600;
     margin: 1.25rem 0 0.5rem 0;
-    color: var(--exo-yellow, #ffd700);
+    color: var(--xeo-green, oklch(0.78 0.17 145));
   }
 
   .markdown-content :global(h3) {
@@ -591,8 +591,8 @@
 
   /* Inline code */
   .markdown-content :global(.inline-code) {
-    background: rgba(255, 215, 0, 0.1);
-    color: var(--exo-yellow, #ffd700);
+    background: oklch(0.78 0.17 145 / 0.1);
+    color: var(--xeo-green, oklch(0.78 0.17 145));
     padding: 0.125rem 0.375rem;
     border-radius: 0.25rem;
     font-family:
@@ -602,7 +602,7 @@
 
   /* Links */
   .markdown-content :global(a) {
-    color: var(--exo-yellow, #ffd700);
+    color: var(--xeo-green, oklch(0.78 0.17 145));
     text-decoration: underline;
     text-underline-offset: 2px;
   }
@@ -629,15 +629,15 @@
   }
 
   .markdown-content :global(li::marker) {
-    color: var(--exo-light-gray, #9ca3af);
+    color: var(--xeo-light-gray, #9ca3af);
   }
 
   /* Blockquotes */
   .markdown-content :global(blockquote) {
-    border-left: 3px solid var(--exo-yellow, #ffd700);
+    border-left: 3px solid var(--xeo-green, oklch(0.78 0.17 145));
     padding: 0.5rem 1rem;
     margin: 1rem 0;
-    background: rgba(255, 215, 0, 0.05);
+    background: oklch(0.78 0.17 145 / 0.05);
     border-radius: 0 0.25rem 0.25rem 0;
   }
 
@@ -650,8 +650,8 @@
   }
 
   .markdown-content :global(th) {
-    background: rgba(255, 215, 0, 0.1);
-    border: 1px solid rgba(255, 215, 0, 0.2);
+    background: oklch(0.78 0.17 145 / 0.1);
+    border: 1px solid oklch(0.78 0.17 145 / 0.2);
     padding: 0.5rem;
     text-align: left;
     font-weight: 600;
@@ -674,7 +674,7 @@
     margin: 1rem 0;
     border-radius: 0.5rem;
     overflow: hidden;
-    border: 1px solid rgba(255, 215, 0, 0.2);
+    border: 1px solid oklch(0.78 0.17 145 / 0.2);
     background: rgba(0, 0, 0, 0.4);
   }
 
@@ -683,12 +683,12 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.5rem 0.75rem;
-    background: rgba(255, 215, 0, 0.05);
-    border-bottom: 1px solid rgba(255, 215, 0, 0.1);
+    background: oklch(0.78 0.17 145 / 0.05);
+    border-bottom: 1px solid oklch(0.78 0.17 145 / 0.1);
   }
 
   .markdown-content :global(.code-language) {
-    color: var(--exo-yellow, #ffd700);
+    color: var(--xeo-green, oklch(0.78 0.17 145));
     font-size: 0.7rem;
     font-weight: 500;
     text-transform: uppercase;
@@ -704,14 +704,14 @@
     padding: 0.25rem;
     background: transparent;
     border: none;
-    color: var(--exo-light-gray, #9ca3af);
+    color: var(--xeo-light-gray, #9ca3af);
     cursor: pointer;
     transition: color 0.2s;
     border-radius: 0.25rem;
   }
 
   .markdown-content :global(.copy-code-btn:hover) {
-    color: var(--exo-yellow, #ffd700);
+    color: var(--xeo-green, oklch(0.78 0.17 145));
   }
 
   .markdown-content :global(.copy-code-btn.copied) {
@@ -733,7 +733,7 @@
     background: transparent;
   }
 
-  /* Syntax highlighting - dark theme matching EXO style */
+  /* Syntax highlighting - dark theme matching XEO style */
   .markdown-content :global(.hljs) {
     color: #e5e7eb;
   }
@@ -790,7 +790,7 @@
     margin: 1rem 0;
     border-radius: 0.5rem;
     overflow: hidden;
-    border: 1px solid rgba(255, 215, 0, 0.15);
+    border: 1px solid oklch(0.78 0.17 145 / 0.15);
     background: rgba(0, 0, 0, 0.3);
     transition:
       border-color 0.2s ease,
@@ -798,8 +798,8 @@
   }
 
   .markdown-content :global(.math-display-wrapper:hover) {
-    border-color: rgba(255, 215, 0, 0.25);
-    box-shadow: 0 0 12px rgba(255, 215, 0, 0.08);
+    border-color: oklch(0.78 0.17 145 / 0.25);
+    box-shadow: 0 0 12px oklch(0.78 0.17 145 / 0.08);
   }
 
   /* Display math header - hidden by default, slides in on hover */
@@ -808,8 +808,8 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.375rem 0.75rem;
-    background: rgba(255, 215, 0, 0.03);
-    border-bottom: 1px solid rgba(255, 215, 0, 0.08);
+    background: oklch(0.78 0.17 145 / 0.03);
+    border-bottom: 1px solid oklch(0.78 0.17 145 / 0.08);
     opacity: 0;
     max-height: 0;
     padding-top: 0;
@@ -828,7 +828,7 @@
   }
 
   .markdown-content :global(.math-label) {
-    color: rgba(255, 215, 0, 0.7);
+    color: oklch(0.78 0.17 145 / 0.7);
     font-size: 0.65rem;
     font-weight: 500;
     text-transform: uppercase;
@@ -844,7 +844,7 @@
     padding: 0.25rem;
     background: transparent;
     border: none;
-    color: var(--exo-light-gray, #9ca3af);
+    color: var(--xeo-light-gray, #9ca3af);
     cursor: pointer;
     transition: color 0.2s;
     border-radius: 0.25rem;
@@ -859,7 +859,7 @@
   }
 
   .markdown-content :global(.copy-math-btn:hover) {
-    color: var(--exo-yellow, #ffd700);
+    color: var(--xeo-green, oklch(0.78 0.17 145));
   }
 
   .markdown-content :global(.copy-math-btn.copied) {
@@ -884,13 +884,13 @@
   }
 
   .markdown-content :global(.math-display-content::-webkit-scrollbar-thumb) {
-    background: rgba(255, 215, 0, 0.2);
+    background: oklch(0.78 0.17 145 / 0.2);
     border-radius: 3px;
   }
 
   .markdown-content
     :global(.math-display-content::-webkit-scrollbar-thumb:hover) {
-    background: rgba(255, 215, 0, 0.35);
+    background: oklch(0.78 0.17 145 / 0.35);
   }
 
   .markdown-content :global(.math-display-content .katex-display) {
@@ -911,7 +911,7 @@
   }
 
   .markdown-content :global(.math-inline:hover) {
-    background: rgba(255, 215, 0, 0.05);
+    background: oklch(0.78 0.17 145 / 0.05);
   }
 
   /* Dark theme KaTeX overrides */
@@ -984,7 +984,7 @@
     margin: 1rem 0;
     padding: 1rem 1.25rem;
     background: rgba(255, 255, 255, 0.02);
-    border-left: 3px solid rgba(255, 215, 0, 0.4);
+    border-left: 3px solid oklch(0.78 0.17 145 / 0.4);
     border-radius: 0 0.375rem 0.375rem 0;
   }
 
@@ -1020,14 +1020,14 @@
   .markdown-content :global(.latex-theorem) {
     margin: 1rem 0;
     padding: 1rem 1.25rem;
-    background: rgba(255, 215, 0, 0.03);
-    border: 1px solid rgba(255, 215, 0, 0.15);
+    background: oklch(0.78 0.17 145 / 0.03);
+    border: 1px solid oklch(0.78 0.17 145 / 0.15);
     border-radius: 0.375rem;
   }
 
   .markdown-content :global(.latex-theorem-header) {
     font-weight: 700;
-    color: var(--exo-yellow, #ffd700);
+    color: var(--xeo-green, oklch(0.78 0.17 145));
     margin-bottom: 0.5rem;
   }
 
@@ -1053,9 +1053,9 @@
     margin: 1rem 0;
     padding: 1.5rem 2rem;
     background: rgba(255, 255, 255, 0.02);
-    border: 1px dashed rgba(255, 215, 0, 0.25);
+    border: 1px dashed oklch(0.78 0.17 145 / 0.25);
     border-radius: 0.5rem;
-    color: rgba(255, 215, 0, 0.6);
+    color: oklch(0.78 0.17 145 / 0.6);
     font-size: 0.875rem;
   }
 

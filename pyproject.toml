@@ -1,7 +1,7 @@
 [project]
 name = "exo"
 version = "0.3.70"
-description = "Exo"
+description = "XEO distributed AI inference"
 readme = "README.md"
 requires-python = "==3.13.*"
 dependencies = [
@@ -31,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 exo = "exo.main:main"
+xeo = "exo.main:main"
 
 # dependencies only required for development
 [dependency-groups]

@@ -5,6 +5,7 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from functools import partial
 from inspect import signature
+from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, final
 
 import mlx.core as mx
@@ -63,6 +64,7 @@ from mlx_lm.models.qwen3_vl import Model as Qwen3VLModel
 from mlx_lm.models.step3p5 import Model as Step35Model
 from mlx_lm.models.step3p5 import Step3p5MLP as Step35MLP
 from mlx_lm.models.step3p5 import Step3p5Model as Step35InnerModel
+from mlx_lm.utils import load_model
 
 from exo.shared.types.profiling import DecodeTimingSample
 from exo.shared.types.worker.runner_response import ModelLoadingResponse
@@ -146,9 +148,11 @@ class PipelineDecodeTimings:
         if self._drain_steps == 0:
             return None
         sample = DecodeTimingSample(
-            compute_ms_per_token=1000.0 * self._drain_compute_seconds
+            compute_ms_per_token=1000.0
+            * self._drain_compute_seconds
             / self._drain_steps,
-            communication_ms_per_token=1000.0 * self._drain_communication_seconds
+            communication_ms_per_token=1000.0
+            * self._drain_communication_seconds
             / self._drain_steps,
             tokens_measured=self._drain_steps,
         )
@@ -166,7 +170,8 @@ decode_timings = PipelineDecodeTimings()
 # (8-32 MiB per chunk at hidden=4096), so halving the bytes matters on
 # ethernet links. Decode hops (a few KiB) are latency-bound and stay bf16.
 # Every node in the cluster must set the same value or ranks will exchange
-# mismatched payloads and hang.
+# mismatched payloads and hang. Keep the legacy name canonical until mixed-version
+# clusters no longer need to read the same setting.
 WIRE_QUANTIZATION_ENABLED: Final = os.environ.get("EXO_WIRE_QUANT") == "1"
 
 _WIRE_QUANTIZATION_MINIMUM_SCALE: Final = 1e-8
@@ -500,6 +505,15 @@ def _keyword_tolerant_arrays_cache_make_mask(
 ArraysCache.make_mask = _keyword_tolerant_arrays_cache_make_mask  # type: ignore[method-assign,assignment]
 
 
+def _restore_unpatched_make_cache(model: nn.Module) -> None:
+    """Undo a previous ``_patch_hybrid_cache`` before shard attributes are
+    re-applied, so a layer shift that changes which cache types the shard
+    holds starts from the model's original ``make_cache``."""
+    unpatched = getattr(model, "_exo_unpatched_make_cache", None)
+    if unpatched is not None:
+        model.make_cache = unpatched
+
+
 def _patch_hybrid_cache(
     model: Qwen3_5TextModel | Qwen3NextModel | NemotronHModel,
     fa_idx: int,
@@ -509,6 +523,11 @@ def _patch_hybrid_cache(
 ) -> None:
     # Hacks to make make_mask happy.
     original = model.make_cache
+    # Stash the unpatched method once so a later layer shift can restore it
+    # before re-applying shard attributes (patching twice would chain wrappers
+    # built for a stale layer layout).
+    if getattr(model, "_exo_unpatched_make_cache", None) is None:
+        model._exo_unpatched_make_cache = original
 
     def patched() -> list[ArraysCache | KVCache]:
         cache = original()
@@ -530,45 +549,39 @@ def _patch_hybrid_cache(
     model.make_cache = patched
 
 
-def pipeline_auto_parallel(
+def _full_layer_types_of(inner_model_instance: nn.Module) -> list[str] | None:
+    """The unsliced per-layer type list for models that carry one (GPT-OSS).
+
+    Must be captured before the shard attributes slice it; a layer shift
+    recovers it from a freshly (lazily) loaded copy of the model instead.
+    """
+    if isinstance(inner_model_instance, GptOssMoeModel):
+        return list(inner_model_instance.layer_types)
+    return None
+
+
+def _apply_model_specific_shard_attributes(
     model: nn.Module,
-    group: mx.distributed.Group,
-    model_shard_meta: PipelineShardMetadata,
-) -> Generator[ModelLoadingResponse, None, nn.Module]:
+    inner_model_instance: nn.Module,
+    layers: list[_LayerCallable],
+    start_layer: int,
+    end_layer: int,
+    full_layer_types: list[str] | None,
+) -> None:
+    """Point model-family-specific bookkeeping at the shard's layer list.
+
+    Several model families keep indices or counts derived from their layer
+    list (hybrid-attention cache indices, layer type tables, layer counts).
+    Applied at initial shard load and re-applied by ``shift_pipeline_layers``
+    whenever the layer range changes.
     """
-    Automatically parallelize a model across multiple devices.
-    Args:
-    model: The model to parallelize (must have a 'layers' or 'h' property)
-    model_shard_meta: The metadata for the model shard
-    Returns:
-    The parallelized model
-    """
-    inner_model_instance: nn.Module = get_inner_model(model)
-
-    layers = get_layers(inner_model_instance)
-
-    start_layer, end_layer = model_shard_meta.start_layer, model_shard_meta.end_layer
-    device_rank, world_size = model_shard_meta.device_rank, model_shard_meta.world_size
-
-    layers = layers[start_layer:end_layer]
-    total = len(layers)
-    for i, layer in enumerate(layers):
-        mx.eval(layer)  # type: ignore
-        mx.clear_cache()
-        yield ModelLoadingResponse(layers_loaded=i, total=total)
-
-    layers[0] = PipelineFirstLayer(layers[0], device_rank, group=group)
-    layers[-1] = PipelineLastLayer(
-        layers[-1],
-        device_rank,
-        world_size,
-        group=group,
-    )
+    _restore_unpatched_make_cache(model)
 
     if isinstance(inner_model_instance, GptOssMoeModel):
-        inner_model_instance.layer_types = inner_model_instance.layer_types[
-            start_layer:end_layer
-        ]
+        assert full_layer_types is not None, (
+            "GPT-OSS shard attributes require the model's full layer_types"
+        )
+        inner_model_instance.layer_types = full_layer_types[start_layer:end_layer]
         # We can assume the model has at least one layer thanks to placement.
         # If a layer type doesn't exist, we can set it to 0.
         inner_model_instance.swa_idx = (
@@ -643,6 +656,51 @@ def pipeline_auto_parallel(
                 has_linear=has_mamba,
             )
 
+
+def pipeline_auto_parallel(
+    model: nn.Module,
+    group: mx.distributed.Group,
+    model_shard_meta: PipelineShardMetadata,
+) -> Generator[ModelLoadingResponse, None, nn.Module]:
+    """
+    Automatically parallelize a model across multiple devices.
+    Args:
+    model: The model to parallelize (must have a 'layers' or 'h' property)
+    model_shard_meta: The metadata for the model shard
+    Returns:
+    The parallelized model
+    """
+    inner_model_instance: nn.Module = get_inner_model(model)
+
+    layers = get_layers(inner_model_instance)
+
+    start_layer, end_layer = model_shard_meta.start_layer, model_shard_meta.end_layer
+    device_rank, world_size = model_shard_meta.device_rank, model_shard_meta.world_size
+
+    layers = layers[start_layer:end_layer]
+    total = len(layers)
+    for i, layer in enumerate(layers):
+        mx.eval(layer)  # type: ignore
+        mx.clear_cache()
+        yield ModelLoadingResponse(layers_loaded=i, total=total)
+
+    layers[0] = PipelineFirstLayer(layers[0], device_rank, group=group)
+    layers[-1] = PipelineLastLayer(
+        layers[-1],
+        device_rank,
+        world_size,
+        group=group,
+    )
+
+    _apply_model_specific_shard_attributes(
+        model,
+        inner_model_instance,
+        layers,
+        start_layer=start_layer,
+        end_layer=end_layer,
+        full_layer_types=_full_layer_types_of(inner_model_instance),
+    )
+
     _set_layers(model, layers)
 
     assert isinstance(layers, list), (
@@ -650,6 +708,91 @@ def pipeline_auto_parallel(
     )
 
     return patch_pipeline_model(model, group)
+
+
+def shift_pipeline_layers(
+    model: nn.Module,
+    group: mx.distributed.Group,
+    old_shard: PipelineShardMetadata,
+    new_shard: PipelineShardMetadata,
+    model_path: Path,
+) -> None:
+    """Re-shard a live pipeline model to a new contiguous layer range.
+
+    Loads gained layers lazily from local safetensors, drops lost layers,
+    re-wraps the boundary layers, and re-applies model-family shard
+    attributes — all in place on the existing model, keeping the distributed
+    group and rank untouched. Performs no distributed communication, so ranks
+    may apply their shifts at different wall-clock times as long as no
+    forward pass is in flight anywhere in the group (the engine guarantees
+    this by draining its batch before applying a shift).
+    """
+    assert old_shard.device_rank == new_shard.device_rank
+    assert old_shard.world_size == new_shard.world_size
+    assert old_shard.n_layers == new_shard.n_layers
+    assert new_shard.end_layer > new_shard.start_layer
+
+    inner_model_instance = get_inner_model(model)
+    current_layers = get_layers(inner_model_instance)
+
+    def unwrap(layer: _LayerCallable) -> _LayerCallable:
+        while isinstance(layer, (PipelineFirstLayer, PipelineLastLayer)):
+            layer = layer.original_layer
+        return layer
+
+    held: dict[int, _LayerCallable] = {
+        old_shard.start_layer + offset: unwrap(layer)
+        for offset, layer in enumerate(current_layers)
+    }
+
+    gained = [
+        index
+        for index in range(new_shard.start_layer, new_shard.end_layer)
+        if index not in held
+    ]
+    full_layer_types: list[str] | None = None
+    needs_fresh_copy = bool(gained) or isinstance(inner_model_instance, GptOssMoeModel)
+    if needs_fresh_copy:
+        # A lazy load materialises nothing until evaluated, so this only pays
+        # for the safetensors index plus the gained layers' weights.
+        fresh_model, _ = load_model(model_path, lazy=True, strict=False)
+        fresh_inner = get_inner_model(fresh_model)
+        fresh_layers = get_layers(fresh_inner)
+        for index in gained:
+            gained_layer = fresh_layers[index]
+            mx.eval(cast(nn.Module, gained_layer).parameters())
+            held[index] = gained_layer
+        full_layer_types = _full_layer_types_of(fresh_inner)
+        del fresh_model
+
+    layers = [
+        held[index] for index in range(new_shard.start_layer, new_shard.end_layer)
+    ]
+    layers[0] = PipelineFirstLayer(layers[0], new_shard.device_rank, group=group)
+    layers[-1] = PipelineLastLayer(
+        layers[-1],
+        new_shard.device_rank,
+        new_shard.world_size,
+        group=group,
+    )
+
+    _apply_model_specific_shard_attributes(
+        model,
+        inner_model_instance,
+        layers,
+        start_layer=new_shard.start_layer,
+        end_layer=new_shard.end_layer,
+        full_layer_types=full_layer_types,
+    )
+    _set_layers(model, layers)
+
+    # Dropped layers lose their last reference with the list swap; return the
+    # freed buffers to the OS before the next forward pass.
+    mx.clear_cache()
+    logger.info(
+        f"shifted pipeline layers [{old_shard.start_layer}, {old_shard.end_layer}) -> "
+        f"[{new_shard.start_layer}, {new_shard.end_layer}) on rank {new_shard.device_rank}"
+    )
 
 
 def patch_pipeline_model[T](model: T, group: mx.distributed.Group) -> T:

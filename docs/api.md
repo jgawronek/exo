@@ -1,6 +1,6 @@
-# EXO API – Technical Reference
+# XEO API – Technical Reference
 
-This document describes the REST API exposed by the **EXO** service, as implemented in:
+This document describes the REST API exposed by the **XEO** service, as implemented in:
 
 `src/exo/master/api.py`
 
@@ -405,7 +405,7 @@ Returns 404 if the command is not found or already completed.
 
 ## 5. Ollama API Compatibility
 
-EXO provides Ollama API compatibility for tools like OpenWebUI.
+XEO provides Ollama API compatibility for tools like OpenWebUI.
 
 ### Ollama Chat
 
@@ -721,14 +721,14 @@ GET     /images/{image_id}
 
 ### API Compatibility
 
-EXO provides multiple API-compatible interfaces:
+XEO provides multiple API-compatible interfaces:
 
 * **OpenAI Chat Completions API** - Compatible with OpenAI clients and tools
 * **Claude Messages API** - Compatible with Anthropic's Claude API format
 * **OpenAI Responses API** - Compatible with OpenAI's Responses API format
 * **Ollama API** - Compatible with Ollama and tools like OpenWebUI
 
-Existing OpenAI, Claude, or Ollama clients can be pointed to EXO by changing the base URL.
+Existing OpenAI, Claude, or Ollama clients can be pointed to XEO by changing the base URL.
 
 ### Custom Models
 

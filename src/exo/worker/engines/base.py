@@ -4,7 +4,7 @@ from typing import BinaryIO
 
 from exo.shared.types.chunks import Chunk
 from exo.shared.types.profiling import DecodeTimingSample
-from exo.shared.types.tasks import CANCEL_ALL_TASKS, GenerationTask, TaskId
+from exo.shared.types.tasks import CANCEL_ALL_TASKS, GenerationTask, ShiftLayers, TaskId
 from exo.shared.types.worker.instances import BoundInstance
 from exo.shared.types.worker.runner_response import (
     CancelledResponse,
@@ -50,6 +50,17 @@ class Engine(ABC):
         tensor sharding, single-node instances) return None.
         """
         return None
+
+    def submit_shard_update(self, task: ShiftLayers) -> bool:
+        """Queue a live pipeline layer-boundary shift.
+
+        The engine applies the shift once every rank has agreed on it and the
+        current batch has drained, then reports it through ``step()`` as a
+        ``FinishedResponse`` for the task. Returns False when the engine
+        cannot re-shard (image engines, tensor sharding, single-node
+        instances); the runner fails the task in that case.
+        """
+        return False
 
 
 class Builder(ABC):
