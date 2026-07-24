@@ -755,6 +755,7 @@
       let ramTotal = 0;
       let ramUsed = 0;
       let gpuUsagePercent = 0;
+      let sysPower: number | null = null;
 
       if (macmon) {
         if (macmon.memory && macmon.memory.ram_total > 0) {
@@ -768,6 +769,9 @@
         }
         if (macmon.gpu_usage) {
           gpuUsagePercent = macmon.gpu_usage[1] * 100;
+        }
+        if (typeof macmon.sys_power === "number") {
+          sysPower = macmon.sys_power;
         }
       }
 
@@ -1179,88 +1183,120 @@
         }
       }
 
-      // --- Vertical GPU Bar (right side of icon): load % + temp + tok/s ---
+      // --- Telemetry rail (right of icon): load meter + metric stack ---
       if (showFullLabels || isMinimized) {
-        const gpuBarWidth = isMinimized
-          ? Math.max(16, nodeRadius * 0.32)
-          : Math.max(28, nodeRadius * 0.3);
-        const gpuBarHeight = iconBaseHeight * 0.95;
-        const barXOffset = iconBaseWidth / 2 + (isMinimized ? 5 : 10);
-        const gpuBarX = nodeInfo.x + barXOffset;
-        const gpuBarY = nodeInfo.y - gpuBarHeight / 2;
-        const hasGpuMetrics = macmon?.gpu_usage != null || !isNaN(gpuTemp);
+        const clampedLoad = Math.max(0, Math.min(100, gpuUsagePercent));
         const tokPerSec = nodeTokPerSec[nodeInfo.id];
+        const hasGpuMetrics = macmon?.gpu_usage != null || !isNaN(gpuTemp);
 
-        // GPU Bar Background (grey, no border)
+        const railHeight = iconBaseHeight * 0.92;
+        const meterWidth = isMinimized ? 5 : 6;
+        const labelColWidth = isMinimized ? 28 : 36;
+        const railGap = isMinimized ? 5 : 7;
+        const railPadX = isMinimized ? 5 : 7;
+        const railPadY = isMinimized ? 6 : 8;
+        const panelWidth = railPadX * 2 + meterWidth + railGap + labelColWidth;
+        const panelHeight = railHeight;
+        const barXOffset = iconBaseWidth / 2 + (isMinimized ? 6 : 10);
+        const panelX = nodeInfo.x + barXOffset;
+        const panelY = nodeInfo.y - panelHeight / 2;
+
+        const meterX = panelX + railPadX;
+        const meterY = panelY + railPadY;
+        const meterHeight = panelHeight - railPadY * 2;
+        const labelX = meterX + meterWidth + railGap;
+        const valueFontSize = isMinimized ? 9 : 11;
+        const rowGap = meterHeight / 3;
+
+        const tempTint = getTemperatureColor(
+          !isNaN(gpuTemp) ? Math.max(30, gpuTemp) : 45,
+        );
+        const loadFill =
+          clampedLoad > 70
+            ? tempTint
+            : clampedLoad > 35
+              ? "oklch(0.78 0.17 145 / 0.85)"
+              : "oklch(0.78 0.17 145 / 0.55)";
+
+        // Glass panel
         nodeG
           .append("rect")
-          .attr("x", gpuBarX)
-          .attr("y", gpuBarY)
-          .attr("width", gpuBarWidth)
-          .attr("height", gpuBarHeight)
-          .attr("fill", "rgba(80, 80, 90, 0.7)")
-          .attr("rx", 2);
+          .attr("x", panelX)
+          .attr("y", panelY)
+          .attr("width", panelWidth)
+          .attr("height", panelHeight)
+          .attr("rx", 5)
+          .attr("fill", "rgba(12, 12, 14, 0.82)")
+          .attr("stroke", "oklch(0.78 0.17 145 / 0.22)")
+          .attr("stroke-width", 1);
 
-        // GPU Bar Fill (from bottom up, colored by temperature)
-        const clampedLoad = Math.max(0, Math.min(100, gpuUsagePercent));
-        if (clampedLoad > 0) {
-          const fillHeight = Math.max(
-            2,
-            (clampedLoad / 100) * gpuBarHeight,
-          );
-          const gpuFillColor = getTemperatureColor(
-            !isNaN(gpuTemp) ? Math.max(30, gpuTemp) : 45,
-          );
+        // Load meter track
+        nodeG
+          .append("rect")
+          .attr("x", meterX)
+          .attr("y", meterY)
+          .attr("width", meterWidth)
+          .attr("height", meterHeight)
+          .attr("rx", meterWidth / 2)
+          .attr("fill", "rgba(255, 255, 255, 0.06)");
+
+        // Load meter fill (bottom-up)
+        if (hasGpuMetrics && clampedLoad > 0) {
+          const fillHeight = Math.max(3, (clampedLoad / 100) * meterHeight);
           nodeG
             .append("rect")
-            .attr("x", gpuBarX)
-            .attr("y", gpuBarY + (gpuBarHeight - fillHeight))
-            .attr("width", gpuBarWidth)
+            .attr("x", meterX)
+            .attr("y", meterY + meterHeight - fillHeight)
+            .attr("width", meterWidth)
             .attr("height", fillHeight)
-            .attr("fill", gpuFillColor)
-            .attr("opacity", 0.9)
-            .attr("rx", 2);
+            .attr("rx", meterWidth / 2)
+            .attr("fill", loadFill);
         }
 
-        // Load % + temp + tok/s centered on the bar
-        const gpuTextX = gpuBarX + gpuBarWidth / 2;
-        const gpuTextY = gpuBarY + gpuBarHeight / 2;
-        const gpuTextFontSize = isMinimized
-          ? Math.max(9, gpuBarWidth * 0.48)
-          : Math.min(13, Math.max(10, gpuBarWidth * 0.42));
-        const lineSpacing = gpuTextFontSize * 1.2;
-
-        const gpuUsageText = hasGpuMetrics
-          ? `${clampedLoad.toFixed(0)}%`
-          : "-";
-        const tempText = !isNaN(gpuTemp) ? `${gpuTemp.toFixed(0)}°` : "-";
-        const tpsText =
+        const thirdText =
           tokPerSec !== undefined
             ? tokPerSec >= 100
               ? `${tokPerSec.toFixed(0)}t`
               : tokPerSec >= 10
                 ? `${tokPerSec.toFixed(1)}t`
                 : `${tokPerSec.toFixed(2)}t`
-            : "-";
+            : sysPower !== null
+              ? `${sysPower.toFixed(0)}W`
+              : "—";
 
-        const barLines = [
-          { text: gpuUsageText, y: gpuTextY - lineSpacing },
-          { text: tempText, y: gpuTextY },
-          { text: tpsText, y: gpuTextY + lineSpacing },
+        const rows: Array<{ text: string; color: string }> = [
+          {
+            text: hasGpuMetrics ? `${clampedLoad.toFixed(0)}%` : "—",
+            color: "rgba(255, 255, 255, 0.92)",
+          },
+          {
+            text: !isNaN(gpuTemp) ? `${gpuTemp.toFixed(0)}°` : "—",
+            color: !isNaN(gpuTemp) ? tempTint : "rgba(255, 255, 255, 0.35)",
+          },
+          {
+            text: thirdText,
+            color:
+              thirdText !== "—"
+                ? "oklch(0.78 0.17 145 / 0.95)"
+                : "rgba(255, 255, 255, 0.35)",
+          },
         ];
-        for (const line of barLines) {
+
+        rows.forEach((row, index) => {
+          const rowCenterY = meterY + rowGap * (index + 0.5);
           nodeG
             .append("text")
-            .attr("x", gpuTextX)
-            .attr("y", line.y)
-            .attr("text-anchor", "middle")
+            .attr("x", labelX)
+            .attr("y", rowCenterY)
+            .attr("text-anchor", "start")
             .attr("dominant-baseline", "middle")
-            .attr("fill", "#FFFFFF")
-            .attr("font-size", gpuTextFontSize)
-            .attr("font-weight", "700")
-            .attr("font-family", "SF Mono, Monaco, monospace")
-            .text(line.text);
-        }
+            .attr("fill", row.color)
+            .attr("font-size", valueFontSize)
+            .attr("font-weight", "600")
+            .attr("font-family", "SF Mono, ui-monospace, monospace")
+            .attr("letter-spacing", "0.02em")
+            .text(row.text);
+        });
       }
 
       // Labels - adapt based on mode
