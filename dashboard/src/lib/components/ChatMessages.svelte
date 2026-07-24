@@ -462,6 +462,12 @@
                           />
                         </svg>
                         <span>Thinking...</span>
+                        {#if message.thinkingTokens !== undefined}
+                          <span class="tracking-[0.12em] text-xeo-green/80">
+                            {message.thinkingTokens.toLocaleString()}
+                            {message.thinkingTokens === 1 ? "token" : "tokens"}
+                          </span>
+                        {/if}
                       </span>
                       <span
                         class="text-[10px] tracking-[0.2em] text-xeo-light-gray/60 ml-4"

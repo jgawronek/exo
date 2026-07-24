@@ -50,11 +50,7 @@
 
   /** Placement-chosen MLX ring node order (deviceRank), when available. */
   const ringNodeIds = $derived(
-    resolvePipelineRingNodeIds(
-      instancesData,
-      previewsData,
-      selectedModelId,
-    ),
+    resolvePipelineRingNodeIds(instancesData, previewsData, selectedModelId),
   );
   const ringRouteHops = $derived(getRingRouteHops(ringNodeIds));
 
@@ -124,7 +120,10 @@
     const tokensMeasuredByNode: Record<string, number> = {};
     for (const timings of Object.values(stageTimingsData || {})) {
       for (const [nodeId, timing] of Object.entries(timings || {})) {
-        if (timing.computeMsPerToken <= 0 && timing.communicationMsPerToken <= 0) {
+        if (
+          timing.computeMsPerToken <= 0 &&
+          timing.communicationMsPerToken <= 0
+        ) {
           continue;
         }
         const priorTokens = tokensMeasuredByNode[nodeId] ?? -1;
@@ -156,8 +155,7 @@
     const labels: Record<string, { text: string; color: string }> = {};
     for (const timings of Object.values(stageTimingsData || {})) {
       const entries = Object.entries(timings || {}).filter(
-        ([, timing]) =>
-          timing.layersHeld > 0 && timing.computeMsPerToken > 0,
+        ([, timing]) => timing.layersHeld > 0 && timing.computeMsPerToken > 0,
       );
       if (entries.length < 2) continue;
       const ratesByNode = entries.map(([nodeId, timing]) => ({
@@ -277,6 +275,39 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + sizes[i];
   }
 
+  function formatNodeType(
+    modelIdentifier: string | undefined,
+    chipIdentifier: string | undefined,
+  ): string {
+    const model =
+      modelIdentifier && !modelIdentifier.toLowerCase().startsWith("unknown")
+        ? modelIdentifier.trim()
+        : null;
+    const chip =
+      chipIdentifier && !chipIdentifier.toLowerCase().startsWith("unknown")
+        ? chipIdentifier.trim()
+        : null;
+
+    if (chip && /\bGB10\b/i.test(chip)) {
+      return "DGX Spark · GB10";
+    }
+
+    const compactChip = chip
+      ?.replace(/^Apple\s+/i, "")
+      .replace(/^NVIDIA\s+(?:GeForce\s+)?/i, "");
+
+    if (model) {
+      return compactChip ? `${model} · ${compactChip}` : model;
+    }
+    if (chip?.toLowerCase().startsWith("apple")) {
+      return `Mac · ${compactChip}`;
+    }
+    if (compactChip) {
+      return `Linux · ${compactChip}`;
+    }
+    return "Hardware unknown";
+  }
+
   function getTemperatureColor(temp: number): string {
     // Default for N/A temp - light gray
     if (isNaN(temp) || temp === null) return "rgba(179, 179, 179, 0.8)";
@@ -372,7 +403,10 @@
         .style("animation", "none");
     }
     appendArrowMarker("arrowhead", "var(--xeo-light-gray, #B3B3B3)");
-    appendArrowMarker("arrowhead-route", "var(--xeo-green, oklch(0.78 0.17 145))");
+    appendArrowMarker(
+      "arrowhead-route",
+      "var(--xeo-green, oklch(0.78 0.17 145))",
+    );
 
     if (nodeIds.length === 0) {
       svg
@@ -749,6 +783,11 @@
       const macmon = node.macmon_info;
       const modelId = node.system_info?.model_id || "Unknown";
       const friendlyName = node.friendly_name || modelId;
+      const identity = identitiesData[nodeInfo.id];
+      const nodeType = formatNodeType(
+        identity?.modelId ?? modelId,
+        identity?.chipId ?? node.system_info?.chip,
+      );
 
       let ramUsagePercent = 0;
       let gpuTemp = NaN;
@@ -1164,10 +1203,7 @@
           nodeG
             .append("rect")
             .attr("x", nodeInfo.x - hexRadius)
-            .attr(
-              "y",
-              nodeInfo.y + hexRadius - memFillActualHeight,
-            )
+            .attr("y", nodeInfo.y + hexRadius - memFillActualHeight)
             .attr("width", hexRadius * 2)
             .attr("height", memFillActualHeight)
             .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
@@ -1187,26 +1223,38 @@
       if (showFullLabels || isMinimized) {
         const clampedLoad = Math.max(0, Math.min(100, gpuUsagePercent));
         const tokPerSec = nodeTokPerSec[nodeInfo.id];
-        const hasGpuMetrics = macmon?.gpu_usage != null || !isNaN(gpuTemp);
+        const hasGpuUsage = macmon?.gpu_usage != null;
+        const reportedPower =
+          sysPower !== null && sysPower > 0 ? sysPower : null;
 
         const railHeight = iconBaseHeight * 0.92;
         const meterWidth = isMinimized ? 5 : 6;
-        const labelColWidth = isMinimized ? 28 : 36;
+        const labelColWidth = isMinimized ? 44 : 52;
         const railGap = isMinimized ? 5 : 7;
         const railPadX = isMinimized ? 5 : 7;
         const railPadY = isMinimized ? 6 : 8;
+        const preferredValueFontSize = isMinimized ? 9 : 11;
+        const minimumValueFontSize = isMinimized ? 8 : 9;
+        const minimumPanelHeight =
+          railPadY * 2 + 4 * (minimumValueFontSize + 2);
         const panelWidth = railPadX * 2 + meterWidth + railGap + labelColWidth;
-        const panelHeight = railHeight;
+        const panelHeight = Math.max(railHeight, minimumPanelHeight);
         const barXOffset = iconBaseWidth / 2 + (isMinimized ? 6 : 10);
-        const panelX = nodeInfo.x + barXOffset;
+        const rightPanelX = nodeInfo.x + barXOffset;
+        const panelX = Math.max(
+          4,
+          rightPanelX + panelWidth <= width - 4
+            ? rightPanelX
+            : nodeInfo.x - barXOffset - panelWidth,
+        );
         const panelY = nodeInfo.y - panelHeight / 2;
 
         const meterX = panelX + railPadX;
         const meterY = panelY + railPadY;
         const meterHeight = panelHeight - railPadY * 2;
         const labelX = meterX + meterWidth + railGap;
-        const valueFontSize = isMinimized ? 9 : 11;
-        const rowGap = meterHeight / 3;
+        const rowGap = meterHeight / 4;
+        const valueFontSize = Math.min(preferredValueFontSize, rowGap - 2);
 
         const tempTint = getTemperatureColor(
           !isNaN(gpuTemp) ? Math.max(30, gpuTemp) : 45,
@@ -1241,7 +1289,7 @@
           .attr("fill", "rgba(255, 255, 255, 0.06)");
 
         // Load meter fill (bottom-up)
-        if (hasGpuMetrics && clampedLoad > 0) {
+        if (hasGpuUsage && clampedLoad > 0) {
           const fillHeight = Math.max(3, (clampedLoad / 100) * meterHeight);
           nodeG
             .append("rect")
@@ -1253,38 +1301,75 @@
             .attr("fill", loadFill);
         }
 
-        const thirdText =
+        const throughputText =
           tokPerSec !== undefined
             ? tokPerSec >= 100
-              ? `${tokPerSec.toFixed(0)}t`
+              ? `${tokPerSec.toFixed(0)}tps`
               : tokPerSec >= 10
-                ? `${tokPerSec.toFixed(1)}t`
-                : `${tokPerSec.toFixed(2)}t`
-            : sysPower !== null
-              ? `${sysPower.toFixed(0)}W`
-              : "—";
+                ? `${tokPerSec.toFixed(1)}tps`
+                : `${tokPerSec.toFixed(2)}tps`
+            : "—";
+        const powerText =
+          reportedPower !== null ? `${reportedPower.toFixed(0)}W` : "—";
 
-        const rows: Array<{ text: string; color: string }> = [
+        const rows: Array<{
+          text: string;
+          color: string;
+          tooltip: string;
+        }> = [
           {
-            text: hasGpuMetrics ? `${clampedLoad.toFixed(0)}%` : "—",
+            text: hasGpuUsage ? `${clampedLoad.toFixed(0)}%` : "—",
             color: "rgba(255, 255, 255, 0.92)",
+            tooltip: hasGpuUsage
+              ? `GPU load: ${clampedLoad.toFixed(0)}%. Percentage of GPU compute capacity currently in use.`
+              : "GPU load unavailable. This reports the percentage of GPU compute capacity currently in use.",
           },
           {
             text: !isNaN(gpuTemp) ? `${gpuTemp.toFixed(0)}°` : "—",
             color: !isNaN(gpuTemp) ? tempTint : "rgba(255, 255, 255, 0.35)",
+            tooltip: !isNaN(gpuTemp)
+              ? `GPU temperature: ${gpuTemp.toFixed(0)}°C. Average temperature reported by the node's GPU sensors.`
+              : "GPU temperature unavailable. This reports the average temperature from the node's GPU sensors.",
           },
           {
-            text: thirdText,
+            text: throughputText,
             color:
-              thirdText !== "—"
+              throughputText !== "—"
                 ? "oklch(0.78 0.17 145 / 0.95)"
                 : "rgba(255, 255, 255, 0.35)",
+            tooltip:
+              tokPerSec !== undefined
+                ? `Decode throughput: ${tokPerSec.toFixed(2)} tokens per second. Estimated from this node's compute time per generated token.`
+                : "Decode throughput unavailable. This estimates how many generated tokens the node processes each second.",
+          },
+          {
+            text: powerText,
+            color:
+              powerText !== "—"
+                ? "rgba(255, 255, 255, 0.78)"
+                : "rgba(255, 255, 255, 0.35)",
+            tooltip:
+              reportedPower !== null
+                ? `Reported power draw: ${reportedPower.toFixed(0)} watts. This may represent system or accelerator power depending on the node's telemetry provider.`
+                : "Power draw unavailable. This reports system or accelerator power in watts, depending on the node's telemetry provider.",
           },
         ];
 
         rows.forEach((row, index) => {
           const rowCenterY = meterY + rowGap * (index + 0.5);
-          nodeG
+          const rowGroup = nodeG.append("g").style("cursor", "help");
+
+          rowGroup
+            .append("rect")
+            .attr("x", panelX)
+            .attr("y", meterY + rowGap * index)
+            .attr("width", panelWidth)
+            .attr("height", rowGap)
+            .attr("fill", "transparent");
+
+          rowGroup.append("title").text(row.tooltip);
+
+          rowGroup
             .append("text")
             .attr("x", labelX)
             .attr("y", rowCenterY)
@@ -1302,8 +1387,10 @@
       // Labels - adapt based on mode
       if (showFullLabels) {
         // FULL MODE: Name above, memory info below (1-4 nodes)
-        const nameY = nodeInfo.y - iconBaseHeight / 2 - 15;
         const fontSize = Math.max(10, nodeRadius * 0.16);
+        const nodeTypeFontSize = Math.max(7, fontSize * 0.7);
+        const nodeTypeY = nodeInfo.y - iconBaseHeight / 2 - 7;
+        const nameY = nodeTypeY - nodeTypeFontSize - 3;
 
         // Truncate name based on node count
         const maxNameLen =
@@ -1325,6 +1412,25 @@
           .attr("font-weight", 500)
           .attr("font-family", "SF Mono, Monaco, monospace")
           .text(displayName);
+
+        const maxNodeTypeLength =
+          numNodes === 1 ? 30 : numNodes === 2 ? 24 : 18;
+        const displayNodeType =
+          nodeType.length > maxNodeTypeLength
+            ? `${nodeType.slice(0, maxNodeTypeLength - 2)}..`
+            : nodeType;
+        nodeG
+          .append("text")
+          .attr("x", nodeInfo.x)
+          .attr("y", nodeTypeY)
+          .attr("text-anchor", "middle")
+          .attr("dominant-baseline", "middle")
+          .attr("fill", "rgba(255, 255, 255, 0.5)")
+          .attr("font-size", nodeTypeFontSize)
+          .attr("font-family", "SF Mono, Monaco, monospace")
+          .text(displayNodeType)
+          .append("title")
+          .text(nodeType);
 
         // Memory info below - used in grey, total in yellow
         const infoY = nodeInfo.y + iconBaseHeight / 2 + 16;
@@ -1392,8 +1498,23 @@
           .attr("font-family", "SF Mono, Monaco, monospace")
           .text(shortName);
 
+        const shortNodeType =
+          nodeType.length > 16 ? `${nodeType.slice(0, 14)}..` : nodeType;
+        const nodeTypeY = nameY + 9;
+        nodeG
+          .append("text")
+          .attr("x", nodeInfo.x)
+          .attr("y", nodeTypeY)
+          .attr("text-anchor", "middle")
+          .attr("fill", "rgba(255, 255, 255, 0.45)")
+          .attr("font-size", fontSize * 0.8)
+          .attr("font-family", "SF Mono, Monaco, monospace")
+          .text(shortNodeType)
+          .append("title")
+          .text(nodeType);
+
         // Single line of key stats
-        const statsY = nameY + 9;
+        const statsY = nodeTypeY + 9;
         nodeG
           .append("text")
           .attr("x", nodeInfo.x)
@@ -1435,7 +1556,8 @@
         const fontSize = 8;
 
         // Friendly name (shortened) above icon
-        const nameY = nodeInfo.y - iconBaseHeight / 2 - 8;
+        const nodeTypeY = nodeInfo.y - iconBaseHeight / 2 - 4;
+        const nameY = nodeTypeY - 8;
         const shortName =
           friendlyName.length > 12
             ? friendlyName.slice(0, 10) + ".."
@@ -1450,6 +1572,20 @@
           .attr("font-weight", "500")
           .attr("font-family", "SF Mono, Monaco, monospace")
           .text(shortName);
+
+        const shortNodeType =
+          nodeType.length > 16 ? `${nodeType.slice(0, 14)}..` : nodeType;
+        nodeG
+          .append("text")
+          .attr("x", nodeInfo.x)
+          .attr("y", nodeTypeY)
+          .attr("text-anchor", "middle")
+          .attr("fill", "rgba(255, 255, 255, 0.45)")
+          .attr("font-size", fontSize * 0.72)
+          .attr("font-family", "SF Mono, Monaco, monospace")
+          .text(shortNodeType)
+          .append("title")
+          .text(nodeType);
 
         // Memory info below icon - used in grey, total in yellow (same as main topology)
         const infoY = nodeInfo.y + iconBaseHeight / 2 + 10;
@@ -1544,7 +1680,6 @@
           debugLabelY += debugLineHeight;
         }
 
-        const identity = identitiesData[nodeInfo.id];
         if (identity?.osVersion) {
           nodeG
             .append("text")

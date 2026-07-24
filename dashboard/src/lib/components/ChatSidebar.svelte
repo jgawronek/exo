@@ -237,15 +237,6 @@
       }
     }
 
-    // Fallback: use the first available instance if no explicit match
-    if (!matchedInstance) {
-      const firstInstance = Object.values(instanceData)[0];
-      if (firstInstance) {
-        matchedInstance = firstInstance;
-        modelId = modelId ?? extractInstanceModelId(firstInstance);
-      }
-    }
-
     const instanceDetails = matchedInstance
       ? describeInstance(matchedInstance)
       : { sharding: null, instanceType: null };
@@ -405,6 +396,12 @@
                   </div>
                   <div class="text-xs text-xeo-light-gray truncate">
                     {info.modelLabel}
+                  </div>
+                  <div
+                    class="text-[11px] text-white/45 font-mono truncate"
+                    title={info.strategyLabel}
+                  >
+                    Instance · {info.strategyLabel}
                   </div>
                   {#if stats}
                     <div class="text-xs text-white/70 font-mono mt-1">

@@ -54,8 +54,12 @@
     toggleTopologyOnlyMode,
     chatSidebarVisible,
     toggleChatSidebarVisible,
+    chatSidebarWidth,
+    setChatSidebarWidth,
+    persistChatSidebarWidth,
     rightSidebarWidth,
     setRightSidebarWidth,
+    persistRightSidebarWidth,
     mobileChatSidebarOpen,
     toggleMobileChatSidebar,
     setMobileChatSidebarOpen,
@@ -77,7 +81,7 @@
   import { fade, fly, slide } from "svelte/transition";
   import { tweened } from "svelte/motion";
   import { cubicInOut, cubicOut } from "svelte/easing";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
 
   const chatStarted = $derived(hasStartedChat());
   const minimized = $derived(isTopologyMinimized());
@@ -92,6 +96,7 @@
   const debugEnabled = $derived(debugMode());
   const topologyOnlyEnabled = $derived(topologyOnlyMode());
   const sidebarVisible = $derived(chatSidebarVisible());
+  const chatSidebarWidthPx = $derived(chatSidebarWidth());
   const rightSidebarWidthPx = $derived(rightSidebarWidth());
   const mobileChatOpen = $derived(mobileChatSidebarOpen());
   const mobileRightOpen = $derived(mobileRightSidebarOpen());
@@ -979,9 +984,40 @@
   // Slider dragging state
   let isDraggingSlider = $state(false);
   let sliderTrackElement: HTMLDivElement | null = $state(null);
+  let chatSidebarElement: HTMLElement | null = $state(null);
+  let isDraggingChatSidebar = $state(false);
+  let chatSidebarDragLeftEdge = 0;
+  let chatSidebarResizePointerId: number | null = null;
+  let previousBodyCursor = "";
+  let previousBodyUserSelect = "";
   let rightSidebarElement: HTMLElement | null = $state(null);
   let isDraggingRightSidebar = $state(false);
   let rightSidebarDragRightEdge = 0;
+  let rightSidebarResizePointerId: number | null = null;
+  let previousRightSidebarBodyCursor = "";
+  let previousRightSidebarBodyUserSelect = "";
+  let viewportWidth = $state(1440);
+  const maximumChatSidebarWidth = $derived(
+    Math.max(
+      240,
+      Math.min(
+        560,
+        viewportWidth - (rightSidebarElement ? rightSidebarWidthPx : 0) - 320,
+      ),
+    ),
+  );
+  const effectiveChatSidebarWidth = $derived(
+    Math.min(chatSidebarWidthPx, maximumChatSidebarWidth),
+  );
+
+  onMount(() => {
+    const updateViewportWidth = () => {
+      viewportWidth = window.innerWidth;
+    };
+    updateViewportWidth();
+    window.addEventListener("resize", updateViewportWidth);
+    return () => window.removeEventListener("resize", updateViewportWidth);
+  });
 
   // Instances container ref for scrolling
   let instancesContainerRef: HTMLDivElement | null = $state(null);
@@ -990,6 +1026,7 @@
 
   // Instance hover state for highlighting nodes in topology
   let hoveredInstanceId = $state<string | null>(null);
+  let selectedInstanceId = $state<string | null>(null);
 
   // Preview card hover state for highlighting nodes in topology
   let hoveredPreviewNodes = $state<Set<string>>(new Set());
@@ -1022,11 +1059,29 @@
     instanceDownloadExpandedNodes = next;
   }
 
-  // Compute highlighted nodes from hovered instance or hovered preview
+  function selectInstance(instanceId: string, modelId: string | null): void {
+    selectedInstanceId = selectedInstanceId === instanceId ? null : instanceId;
+    if (modelId && modelId !== "Unknown" && modelId !== "Unknown Model") {
+      userForcedIdle = false;
+      setSelectedChatModel(modelId);
+    }
+  }
+
+  $effect(() => {
+    if (selectedInstanceId && !instanceData[selectedInstanceId]) {
+      selectedInstanceId = null;
+    }
+  });
+
+  // Compute highlighted nodes from hovered instance, selected instance, or preview
   const highlightedNodes = $derived(() => {
     // First check instance hover
     if (hoveredInstanceId) {
       const instanceWrapped = instanceData[hoveredInstanceId];
+      return unwrapInstanceNodes(instanceWrapped);
+    }
+    if (selectedInstanceId) {
+      const instanceWrapped = instanceData[selectedInstanceId];
       return unwrapInstanceNodes(instanceWrapped);
     }
     // Then check preview hover
@@ -1995,9 +2050,7 @@
     const runnerIds = Object.keys(inst.shardAssignments?.runnerToShard || {});
     if (runnerIds.length === 0) return null;
 
-    const stageOf = (
-      runnerId: string,
-    ): { fraction: number; label: string } => {
+    const stageOf = (runnerId: string): { fraction: number; label: string } => {
       const wrapped = runnersData[runnerId];
       if (!wrapped) return { fraction: 0, label: "starting runners" };
       const [kind, payload] = getTagged(wrapped);
@@ -2265,7 +2318,9 @@
       if (!memory || storageBytes <= 0) return totalLayers;
       const available = Math.max(memory.ram_total - memory.ram_usage, 0);
       const reclaimable = (storageBytes * row.layers) / totalLayers;
-      return Math.floor(((available + reclaimable) * totalLayers) / storageBytes);
+      return Math.floor(
+        ((available + reclaimable) * totalLayers) / storageBytes,
+      );
     });
     if (caps.some((cap) => cap < 1)) return null;
 
@@ -2795,32 +2850,133 @@
     saveLaunchDefaults();
   }
 
+  function handleChatSidebarResizePointerDown(event: PointerEvent) {
+    if (!chatSidebarElement || isDraggingChatSidebar || isDraggingRightSidebar)
+      return;
+    event.preventDefault();
+    isDraggingChatSidebar = true;
+    chatSidebarResizePointerId = event.pointerId;
+    chatSidebarDragLeftEdge = chatSidebarElement.getBoundingClientRect().left;
+    previousBodyCursor = document.body.style.cursor;
+    previousBodyUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+
+  function getMaximumChatSidebarWidth(): number {
+    return Math.max(240, maximumChatSidebarWidth - chatSidebarDragLeftEdge);
+  }
+
+  function handleChatSidebarResizePointerMove(event: PointerEvent) {
+    if (
+      !isDraggingChatSidebar ||
+      event.pointerId !== chatSidebarResizePointerId
+    )
+      return;
+    setChatSidebarWidth(
+      Math.min(
+        event.clientX - chatSidebarDragLeftEdge,
+        getMaximumChatSidebarWidth(),
+      ),
+    );
+  }
+
+  function finishChatSidebarResize() {
+    if (!isDraggingChatSidebar) return;
+    isDraggingChatSidebar = false;
+    chatSidebarResizePointerId = null;
+    document.body.style.cursor = previousBodyCursor;
+    document.body.style.userSelect = previousBodyUserSelect;
+    persistChatSidebarWidth();
+  }
+
+  function handleChatSidebarResizePointerUp(event: PointerEvent) {
+    if (
+      !isDraggingChatSidebar ||
+      event.pointerId !== chatSidebarResizePointerId
+    )
+      return;
+    finishChatSidebarResize();
+    try {
+      (event.currentTarget as HTMLElement).releasePointerCapture(
+        event.pointerId,
+      );
+    } catch {}
+  }
+
+  function handleChatSidebarLostPointerCapture(event: PointerEvent) {
+    if (event.pointerId === chatSidebarResizePointerId) {
+      finishChatSidebarResize();
+    }
+  }
+
+  function handleChatSidebarResizeKeyDown(event: KeyboardEvent) {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setChatSidebarWidth(effectiveChatSidebarWidth - 16);
+      persistChatSidebarWidth();
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setChatSidebarWidth(
+        Math.min(effectiveChatSidebarWidth + 16, getMaximumChatSidebarWidth()),
+      );
+      persistChatSidebarWidth();
+    }
+  }
+
+  onDestroy(finishChatSidebarResize);
+
   function handleRightSidebarResizePointerDown(event: PointerEvent) {
-    if (!rightSidebarElement) return;
+    if (!rightSidebarElement || isDraggingRightSidebar || isDraggingChatSidebar)
+      return;
     event.preventDefault();
     isDraggingRightSidebar = true;
-    rightSidebarDragRightEdge = rightSidebarElement.getBoundingClientRect().right;
+    rightSidebarResizePointerId = event.pointerId;
+    rightSidebarDragRightEdge =
+      rightSidebarElement.getBoundingClientRect().right;
+    previousRightSidebarBodyCursor = document.body.style.cursor;
+    previousRightSidebarBodyUserSelect = document.body.style.userSelect;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   }
 
   function handleRightSidebarResizePointerMove(event: PointerEvent) {
-    if (!isDraggingRightSidebar) return;
+    if (
+      !isDraggingRightSidebar ||
+      event.pointerId !== rightSidebarResizePointerId
+    )
+      return;
     setRightSidebarWidth(rightSidebarDragRightEdge - event.clientX);
   }
 
-  function handleRightSidebarResizePointerUp(event: PointerEvent) {
+  function finishRightSidebarResize() {
     if (!isDraggingRightSidebar) return;
     isDraggingRightSidebar = false;
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
+    rightSidebarResizePointerId = null;
+    document.body.style.cursor = previousRightSidebarBodyCursor;
+    document.body.style.userSelect = previousRightSidebarBodyUserSelect;
+    persistRightSidebarWidth();
+  }
+
+  function handleRightSidebarResizePointerUp(event: PointerEvent) {
+    if (
+      !isDraggingRightSidebar ||
+      event.pointerId !== rightSidebarResizePointerId
+    )
+      return;
+    finishRightSidebarResize();
     try {
       (event.currentTarget as HTMLElement).releasePointerCapture(
         event.pointerId,
       );
-    } catch {
-      // Pointer already released
+    } catch {}
+  }
+
+  function handleRightSidebarLostPointerCapture(event: PointerEvent) {
+    if (event.pointerId === rightSidebarResizePointerId) {
+      finishRightSidebarResize();
     }
   }
 
@@ -2828,11 +2984,15 @@
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       setRightSidebarWidth(rightSidebarWidthPx + 16);
+      persistRightSidebarWidth();
     } else if (event.key === "ArrowRight") {
       event.preventDefault();
       setRightSidebarWidth(rightSidebarWidthPx - 16);
+      persistRightSidebarWidth();
     }
   }
+
+  onDestroy(finishRightSidebarResize);
 
   const nodeCount = $derived(data ? Object.keys(data.nodes).length : 0);
   const instanceCount = $derived(Object.keys(instanceData).length);
@@ -4258,7 +4418,11 @@
               style="opacity: {$logoOpacity}; max-height: {$logoOpacity *
                 80}px; overflow: hidden; transition: max-height 0.6s cubic-bezier(0.4, 0, 0.2, 1);"
             >
-              <img src="/xeo-wordmark.svg" alt="XEO" class="w-36 mx-auto mb-10" />
+              <img
+                src="/xeo-wordmark.svg"
+                alt="XEO"
+                class="w-36 mx-auto mb-10"
+              />
             </div>
 
             <!-- Title — single element, text updates instantly -->
@@ -4396,7 +4560,8 @@
                   text-anchor="middle"
                   style="font-size: 14px; font-family: 'SF Mono', ui-monospace, monospace;"
                 >
-                  <tspan fill="oklch(0.78 0.17 145 / 0.9)">{SIMULATED_STUDIO_GB}</tspan
+                  <tspan fill="oklch(0.78 0.17 145 / 0.9)"
+                    >{SIMULATED_STUDIO_GB}</tspan
                   ><tspan fill="rgba(255,255,255,0.4)">{" "}GB</tspan>
                 </text>
                 <text
@@ -5113,7 +5278,10 @@
     <!-- Left: Conversation History Sidebar (hidden in topology-only mode, welcome state, or when toggled off) - Desktop only -->
     {#if !topologyOnlyEnabled && sidebarVisible}
       <div
-        class="hidden md:block w-80 flex-shrink-0 border-r border-xeo-green/10"
+        bind:this={chatSidebarElement}
+        class="hidden md:block relative flex-shrink-0 border-r border-xeo-green/10"
+        style="width: {effectiveChatSidebarWidth}px"
+        transition:slide={{ axis: "x", duration: 180, easing: cubicOut }}
         role="complementary"
         aria-label="Conversation history"
       >
@@ -5124,6 +5292,29 @@
             userForcedIdle = false;
           }}
         />
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize conversation history"
+          aria-valuemin={240}
+          aria-valuemax={560}
+          aria-valuenow={effectiveChatSidebarWidth}
+          tabindex="0"
+          class="group absolute right-0 top-0 bottom-0 w-2 -mr-1 z-20 cursor-col-resize touch-none"
+          onpointerdown={handleChatSidebarResizePointerDown}
+          onpointermove={handleChatSidebarResizePointerMove}
+          onpointerup={handleChatSidebarResizePointerUp}
+          onpointercancel={handleChatSidebarResizePointerUp}
+          onlostpointercapture={handleChatSidebarLostPointerCapture}
+          onkeydown={handleChatSidebarResizeKeyDown}
+        >
+          <span
+            class="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors group-hover:bg-xeo-green/40 {isDraggingChatSidebar
+              ? 'bg-xeo-green/60'
+              : ''}"
+          ></span>
+        </div>
       </div>
     {/if}
 
@@ -5450,6 +5641,7 @@
           style="width: {rightSidebarWidthPx}px"
           aria-label="Instance controls"
         >
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
           <div
             role="separator"
             aria-orientation="vertical"
@@ -5458,15 +5650,20 @@
             aria-valuemax={560}
             aria-valuenow={rightSidebarWidthPx}
             tabindex="0"
-            class="absolute left-0 top-0 bottom-0 w-1 -ml-0.5 z-10 cursor-col-resize hover:bg-xeo-green/30 {isDraggingRightSidebar
-              ? 'bg-xeo-green/30'
-              : ''}"
+            class="group absolute left-0 top-0 bottom-0 w-2 -ml-1 z-20 cursor-col-resize touch-none"
             onpointerdown={handleRightSidebarResizePointerDown}
             onpointermove={handleRightSidebarResizePointerMove}
             onpointerup={handleRightSidebarResizePointerUp}
             onpointercancel={handleRightSidebarResizePointerUp}
+            onlostpointercapture={handleRightSidebarLostPointerCapture}
             onkeydown={handleRightSidebarResizeKeyDown}
-          ></div>
+          >
+            <span
+              class="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors group-hover:bg-xeo-green/40 {isDraggingRightSidebar
+                ? 'bg-xeo-green/60'
+                : ''}"
+            ></span>
+          </div>
           {@render rightSidebarContent()}
         </aside>
 
@@ -5526,31 +5723,22 @@
                       ? getPreparationProgress(instance)
                       : null}
                   <div
-                    class="relative group cursor-pointer"
+                    class="relative group cursor-pointer rounded-sm transition-shadow duration-200 {selectedInstanceId ===
+                    id
+                      ? 'ring-1 ring-xeo-green/90 shadow-[0_0_10px_oklch(0.78_0.17_145/0.32)]'
+                      : ''}"
                     role="button"
                     tabindex="0"
+                    aria-pressed={selectedInstanceId === id}
                     transition:slide={{ duration: 250, easing: cubicOut }}
                     onmouseenter={() => (hoveredInstanceId = id)}
                     onmouseleave={() => (hoveredInstanceId = null)}
-                    onclick={() => {
-                      if (
-                        instanceModelId &&
-                        instanceModelId !== "Unknown" &&
-                        instanceModelId !== "Unknown Model"
-                      ) {
-                        userForcedIdle = false;
-                        setSelectedChatModel(instanceModelId);
-                      }
-                    }}
+                    onclick={() => selectInstance(id, instanceModelId ?? null)}
                     onkeydown={(e) => {
+                      if (e.target !== e.currentTarget) return;
                       if (e.key === "Enter" || e.key === " ") {
-                        if (
-                          instanceModelId &&
-                          instanceModelId !== "Unknown" &&
-                          instanceModelId !== "Unknown Model"
-                        ) {
-                          setSelectedChatModel(instanceModelId);
-                        }
+                        e.preventDefault();
+                        selectInstance(id, instanceModelId ?? null);
                       }
                     }}
                   >
@@ -5630,7 +5818,10 @@
                           >
                         </div>
                         <button
-                          onclick={() => deleteInstance(id)}
+                          onclick={(event) => {
+                            event.stopPropagation();
+                            deleteInstance(id);
+                          }}
                           class="text-xs px-2 py-1 font-mono tracking-wider uppercase border border-red-500/30 text-red-400 hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/50 transition-all duration-200 cursor-pointer"
                         >
                           DELETE
@@ -5671,6 +5862,7 @@
                             target="_blank"
                             rel="noreferrer noopener"
                             aria-label="View model on Hugging Face"
+                            onclick={(event) => event.stopPropagation()}
                           >
                             <span>Hugging Face</span>
                             <svg
@@ -6134,7 +6326,7 @@
               <h3
                 class="text-xs text-xeo-green font-mono tracking-[0.2em] uppercase"
               >
-                Load Model
+                New Instance
               </h3>
               <div
                 class="flex-1 h-px bg-gradient-to-r from-xeo-green/30 to-transparent"
@@ -6714,10 +6906,36 @@
         <!-- Right: Mini-Map Sidebar - Desktop only -->
         {#if minimized}
           <aside
-            class="hidden md:flex w-80 border-l border-xeo-green/20 bg-xeo-dark-gray flex-col flex-shrink-0 overflow-y-auto"
-            in:fly={{ x: 100, duration: 400, easing: cubicInOut }}
+            bind:this={rightSidebarElement}
+            class="hidden md:flex relative border-l border-xeo-green/20 bg-xeo-dark-gray flex-col flex-shrink-0 overflow-y-auto"
+            style="width: {rightSidebarWidthPx}px"
+            transition:fly={{ x: 100, duration: 180, easing: cubicOut }}
             aria-label="Cluster topology"
           >
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize cluster topology"
+              aria-valuemin={240}
+              aria-valuemax={560}
+              aria-valuenow={rightSidebarWidthPx}
+              tabindex="0"
+              class="group absolute left-0 top-0 bottom-0 w-2 -ml-1 z-20 cursor-col-resize touch-none"
+              onpointerdown={handleRightSidebarResizePointerDown}
+              onpointermove={handleRightSidebarResizePointerMove}
+              onpointerup={handleRightSidebarResizePointerUp}
+              onpointercancel={handleRightSidebarResizePointerUp}
+              onlostpointercapture={handleRightSidebarLostPointerCapture}
+              onkeydown={handleRightSidebarResizeKeyDown}
+            >
+              <span
+                class="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors group-hover:bg-xeo-green/40 {isDraggingRightSidebar
+                  ? 'bg-xeo-green/60'
+                  : ''}"
+              ></span>
+            </div>
+
             <!-- Topology Section - clickable to go back to main view -->
             <button
               class="p-4 border-b border-xeo-medium-gray/30 w-full text-left cursor-pointer hover:bg-xeo-medium-gray/10 transition-colors"
@@ -6803,30 +7021,22 @@
                         ? getPreparationProgress(instance)
                         : null}
                     <div
-                      class="relative group cursor-pointer"
+                      class="relative group cursor-pointer rounded-sm transition-shadow duration-200 {selectedInstanceId ===
+                      id
+                        ? 'ring-1 ring-xeo-green/90 shadow-[0_0_10px_oklch(0.78_0.17_145/0.32)]'
+                        : ''}"
                       role="button"
                       tabindex="0"
+                      aria-pressed={selectedInstanceId === id}
                       onmouseenter={() => (hoveredInstanceId = id)}
                       onmouseleave={() => (hoveredInstanceId = null)}
-                      onclick={() => {
-                        if (
-                          instanceModelId &&
-                          instanceModelId !== "Unknown" &&
-                          instanceModelId !== "Unknown Model"
-                        ) {
-                          userForcedIdle = false;
-                          setSelectedChatModel(instanceModelId);
-                        }
-                      }}
+                      onclick={() =>
+                        selectInstance(id, instanceModelId ?? null)}
                       onkeydown={(e) => {
+                        if (e.target !== e.currentTarget) return;
                         if (e.key === "Enter" || e.key === " ") {
-                          if (
-                            instanceModelId &&
-                            instanceModelId !== "Unknown" &&
-                            instanceModelId !== "Unknown Model"
-                          ) {
-                            setSelectedChatModel(instanceModelId);
-                          }
+                          e.preventDefault();
+                          selectInstance(id, instanceModelId ?? null);
                         }
                       }}
                     >
@@ -6906,7 +7116,10 @@
                             >
                           </div>
                           <button
-                            onclick={() => deleteInstance(id)}
+                            onclick={(event) => {
+                              event.stopPropagation();
+                              deleteInstance(id);
+                            }}
                             class="text-xs px-2 py-1 font-mono tracking-wider uppercase border border-red-500/30 text-red-400 hover:bg-red-500/20 hover:text-red-400 hover:border-red-500/50 transition-all duration-200 cursor-pointer"
                           >
                             DELETE
@@ -6947,6 +7160,7 @@
                               target="_blank"
                               rel="noreferrer noopener"
                               aria-label="View model on Hugging Face"
+                              onclick={(event) => event.stopPropagation()}
                             >
                               <span>Hugging Face</span>
                               <svg

@@ -306,6 +306,7 @@ export interface Message {
   content: string;
   timestamp: number;
   thinking?: string;
+  thinkingTokens?: number;
   attachments?: MessageAttachment[];
   ttftMs?: number; // Time to first token in ms (for assistant messages)
   tps?: number; // Tokens per second (for assistant messages)
@@ -328,10 +329,21 @@ export interface Conversation {
 
 const STORAGE_KEY = "exo-conversations";
 const IMAGE_PARAMS_STORAGE_KEY = "exo-image-generation-params";
+const CHAT_SIDEBAR_WIDTH_STORAGE_KEY = "exo-chat-sidebar-width";
 const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = "exo-right-sidebar-width";
+const DEFAULT_CHAT_SIDEBAR_WIDTH = 320;
+const MIN_CHAT_SIDEBAR_WIDTH = 240;
+const MAX_CHAT_SIDEBAR_WIDTH = 560;
 const DEFAULT_RIGHT_SIDEBAR_WIDTH = 320;
 const MIN_RIGHT_SIDEBAR_WIDTH = 240;
 const MAX_RIGHT_SIDEBAR_WIDTH = 560;
+
+function clampChatSidebarWidth(width: number): number {
+  return Math.min(
+    MAX_CHAT_SIDEBAR_WIDTH,
+    Math.max(MIN_CHAT_SIDEBAR_WIDTH, Math.round(width)),
+  );
+}
 
 function clampRightSidebarWidth(width: number): number {
   return Math.min(
@@ -612,6 +624,7 @@ class AppStore {
   debugMode = $state(false);
   topologyOnlyMode = $state(false);
   chatSidebarVisible = $state(true); // Shown by default
+  chatSidebarWidth = $state(DEFAULT_CHAT_SIDEBAR_WIDTH);
   rightSidebarWidth = $state(DEFAULT_RIGHT_SIDEBAR_WIDTH);
   mobileChatSidebarOpen = $state(false); // Mobile drawer state
   mobileRightSidebarOpen = $state(false); // Mobile right drawer state
@@ -642,6 +655,7 @@ class AppStore {
       this.loadDebugModeFromStorage();
       this.loadTopologyOnlyModeFromStorage();
       this.loadChatSidebarVisibleFromStorage();
+      this.loadChatSidebarWidthFromStorage();
       this.loadRightSidebarWidthFromStorage();
       this.loadImageGenerationParamsFromStorage();
     }
@@ -754,6 +768,31 @@ class AppStore {
       );
     } catch (error) {
       console.error("Failed to save chat sidebar visibility:", error);
+    }
+  }
+
+  private loadChatSidebarWidthFromStorage() {
+    try {
+      const stored = localStorage.getItem(CHAT_SIDEBAR_WIDTH_STORAGE_KEY);
+      if (stored !== null) {
+        const parsed = Number.parseInt(stored, 10);
+        if (Number.isFinite(parsed)) {
+          this.chatSidebarWidth = clampChatSidebarWidth(parsed);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load chat sidebar width:", error);
+    }
+  }
+
+  private saveChatSidebarWidthToStorage() {
+    try {
+      localStorage.setItem(
+        CHAT_SIDEBAR_WIDTH_STORAGE_KEY,
+        String(this.chatSidebarWidth),
+      );
+    } catch (error) {
+      console.error("Failed to save chat sidebar width:", error);
     }
   }
 
@@ -1306,12 +1345,27 @@ class AppStore {
     this.saveChatSidebarVisibleToStorage();
   }
 
+  getChatSidebarWidth(): number {
+    return this.chatSidebarWidth;
+  }
+
+  setChatSidebarWidth(width: number) {
+    this.chatSidebarWidth = clampChatSidebarWidth(width);
+  }
+
+  persistChatSidebarWidth() {
+    this.saveChatSidebarWidthToStorage();
+  }
+
   getRightSidebarWidth(): number {
     return this.rightSidebarWidth;
   }
 
   setRightSidebarWidth(width: number) {
     this.rightSidebarWidth = clampRightSidebarWidth(width);
+  }
+
+  persistRightSidebarWidth() {
     this.saveRightSidebarWidthToStorage();
   }
 
@@ -1726,6 +1780,8 @@ class AppStore {
     // Update the message to show the prefix
     this.messages[msgIndex].content = prefixText;
     this.messages[msgIndex].tokens = tokensToKeep;
+    this.messages[msgIndex].thinking = undefined;
+    this.messages[msgIndex].thinkingTokens = undefined;
     this.updateActiveConversation();
 
     // Set up for continuation - modify the existing message in place
@@ -1797,6 +1853,7 @@ class AppStore {
 
       let fullContent = prefixText;
       let streamedThinking = "";
+      let thinkingTokenCount = 0;
       const collectedTokens: TokenData[] = [...tokensToKeep];
 
       interface ChatCompletionChunk {
@@ -1843,6 +1900,7 @@ class AppStore {
 
           if (thinkingDelta) {
             streamedThinking += thinkingDelta;
+            thinkingTokenCount += Math.max(logprobsContent?.length ?? 0, 1);
           }
 
           if (delta || thinkingDelta) {
@@ -1879,6 +1937,7 @@ class AppStore {
               (m) => {
                 m.content = displayContent;
                 m.thinking = combinedThinking || undefined;
+                m.thinkingTokens = thinkingTokenCount || undefined;
                 m.tokens = [...collectedTokens];
               },
             );
@@ -1906,6 +1965,7 @@ class AppStore {
         this.updateConversationMessage(targetConversationId, messageId, (m) => {
           m.content = displayContent;
           m.thinking = finalThinking || undefined;
+          m.thinkingTokens = thinkingTokenCount || undefined;
           m.tokens = [...collectedTokens];
           if (this.ttftMs !== null) m.ttftMs = this.ttftMs;
           if (this.tps !== null) m.tps = this.tps;
@@ -2022,6 +2082,7 @@ class AppStore {
 
       let streamedContent = "";
       let streamedThinking = "";
+      let thinkingTokenCount = 0;
       const collectedTokens: TokenData[] = [];
 
       interface ChatCompletionChunk {
@@ -2068,6 +2129,7 @@ class AppStore {
 
           if (thinkingDelta) {
             streamedThinking += thinkingDelta;
+            thinkingTokenCount += Math.max(logprobsContent?.length ?? 0, 1);
           }
 
           if (delta || thinkingDelta) {
@@ -2092,6 +2154,7 @@ class AppStore {
               (msg) => {
                 msg.content = displayContent;
                 msg.thinking = combinedThinking || undefined;
+                msg.thinkingTokens = thinkingTokenCount || undefined;
                 msg.tokens = [...collectedTokens];
               },
             );
@@ -2122,6 +2185,7 @@ class AppStore {
           (msg) => {
             msg.content = displayContent;
             msg.thinking = finalThinking || undefined;
+            msg.thinkingTokens = thinkingTokenCount || undefined;
             msg.tokens = [...collectedTokens];
           },
         );
@@ -2602,6 +2666,7 @@ class AppStore {
 
       let streamedContent = "";
       let streamedThinking = "";
+      let thinkingTokenCount = 0;
       let serverTpsReceived = false;
       interface ChatCompletionChunk {
         choices?: Array<{
@@ -2654,6 +2719,7 @@ class AppStore {
 
           if (thinkingContent) {
             streamedThinking += thinkingContent;
+            thinkingTokenCount += Math.max(logprobsContent?.length ?? 0, 1);
           }
 
           if (tokenContent || thinkingContent) {
@@ -2695,6 +2761,7 @@ class AppStore {
               (msg) => {
                 msg.content = displayContent;
                 msg.thinking = combinedThinking || undefined;
+                msg.thinkingTokens = thinkingTokenCount || undefined;
                 msg.tokens = [...collectedTokens];
               },
             );
@@ -2750,6 +2817,7 @@ class AppStore {
           (msg) => {
             msg.content = displayContent;
             msg.thinking = finalThinking || undefined;
+            msg.thinkingTokens = thinkingTokenCount || undefined;
             msg.tokens = [...collectedTokens];
             // Store performance metrics on the message
             if (this.ttftMs !== null) {
@@ -3575,6 +3643,7 @@ export const thinkingEnabled = () => appStore.thinkingEnabled;
 export const debugMode = () => appStore.getDebugMode();
 export const topologyOnlyMode = () => appStore.getTopologyOnlyMode();
 export const chatSidebarVisible = () => appStore.getChatSidebarVisible();
+export const chatSidebarWidth = () => appStore.getChatSidebarWidth();
 export const rightSidebarWidth = () => appStore.getRightSidebarWidth();
 
 // Actions
@@ -3650,8 +3719,13 @@ export const toggleChatSidebarVisible = () =>
   appStore.toggleChatSidebarVisible();
 export const setChatSidebarVisible = (visible: boolean) =>
   appStore.setChatSidebarVisible(visible);
+export const setChatSidebarWidth = (width: number) =>
+  appStore.setChatSidebarWidth(width);
+export const persistChatSidebarWidth = () => appStore.persistChatSidebarWidth();
 export const setRightSidebarWidth = (width: number) =>
   appStore.setRightSidebarWidth(width);
+export const persistRightSidebarWidth = () =>
+  appStore.persistRightSidebarWidth();
 
 // Mobile sidebar state
 export const mobileChatSidebarOpen = () => appStore.mobileChatSidebarOpen;
