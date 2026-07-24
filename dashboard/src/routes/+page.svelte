@@ -2285,28 +2285,63 @@
   }
 
   let rebalancingInstances = $state<Record<string, boolean>>({});
+  // Instances mid-rebalance: the old instance is deleted, the master waits
+  // for memory to be released, then relaunches. This keeps a placeholder
+  // card visible for the whole transition instead of the card vanishing.
+  let rebalanceTransitions = $state<
+    Record<string, { modelId: string; startedAt: number }>
+  >({});
+
+  const pendingRebalances = $derived.by(() => {
+    return Object.entries(rebalanceTransitions).filter(([oldId, t]) => {
+      if (instanceData[oldId]) return false; // old card still visible
+      // Hide once the relaunched instance shows up (its own card takes over)
+      for (const [id, inst] of Object.entries(instanceData)) {
+        if (id !== oldId && getInstanceModelId(inst) === t.modelId)
+          return false;
+      }
+      return true;
+    });
+  });
 
   async function rebalanceInstance(instanceId: string) {
     if (rebalancingInstances[instanceId]) return;
     rebalancingInstances[instanceId] = true;
+    const modelId = getInstanceModelId(instanceData[instanceId]);
+    // Optimistic: the endpoint blocks while memory is reclaimed, so the
+    // placeholder must exist before the response arrives.
+    rebalanceTransitions[instanceId] = { modelId, startedAt: Date.now() };
+    // Failure safety: never leave a placeholder around forever.
+    setTimeout(() => {
+      delete rebalanceTransitions[instanceId];
+    }, 240_000);
     try {
       const response = await fetch(`/instance/${instanceId}/rebalance`, {
         method: "POST",
       });
-      const result: { message?: string; detail?: string } | null =
-        await response.json().catch(() => null);
+      const result: {
+        message?: string;
+        detail?: string;
+        command_id?: string | null;
+      } | null = await response.json().catch(() => null);
       if (!response.ok) {
+        delete rebalanceTransitions[instanceId];
         addToast({
           type: "error",
           message: result?.detail || "Failed to rebalance instance",
         });
       } else {
+        if (!result?.command_id) {
+          // Already balanced — nothing was relaunched.
+          delete rebalanceTransitions[instanceId];
+        }
         addToast({
           type: "info",
           message: result?.message || "Rebalance started",
         });
       }
     } catch (error) {
+      delete rebalanceTransitions[instanceId];
       console.error("Error rebalancing instance:", error);
       addToast({ type: "error", message: "Failed to rebalance instance" });
     } finally {
@@ -5288,7 +5323,7 @@
 
         {#snippet rightSidebarContent()}
           <!-- Running Instances Panel (only shown when instances exist) - Scrollable -->
-          {#if instanceCount > 0}
+          {#if instanceCount > 0 || pendingRebalances.length > 0}
             <div class="p-4 flex-shrink-0">
               <!-- Panel Header -->
               <div class="flex items-center gap-2 mb-4">
@@ -5867,6 +5902,49 @@
                             </div>
                           {/if}
                         {/if}
+                      </div>
+                    </div>
+                  </div>
+                {/each}
+                {#each pendingRebalances as [oldId, transition] (oldId)}
+                  <div
+                    class="relative"
+                    transition:slide={{ duration: 250, easing: cubicOut }}
+                  >
+                    <div
+                      class="border border-teal-500/40 bg-exo-dark-gray/50 rounded p-3 space-y-2"
+                    >
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                          <div
+                            class="w-2 h-2 bg-teal-400 rounded-full shadow-[0_0_6px_currentColor] animate-pulse"
+                          ></div>
+                          <span
+                            class="text-exo-light-gray font-mono text-sm tracking-wider"
+                            >{oldId.slice(0, 8).toUpperCase()}</span
+                          >
+                        </div>
+                        <span
+                          class="px-1.5 py-0.5 text-[10px] tracking-wider uppercase rounded bg-teal-500/15 text-teal-400"
+                        >
+                          REBALANCING
+                        </span>
+                      </div>
+                      <div
+                        class="text-exo-yellow text-xs font-mono tracking-wide truncate"
+                      >
+                        {transition.modelId}
+                      </div>
+                      <p class="text-[11px] text-white/50 leading-relaxed">
+                        Relaunching with the new layer split — waiting for
+                        memory to be released...
+                      </p>
+                      <div
+                        class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                      >
+                        <div
+                          class="absolute inset-0 bg-gradient-to-r from-teal-500/20 via-teal-400/70 to-teal-500/20 animate-pulse"
+                        ></div>
                       </div>
                     </div>
                   </div>
@@ -6500,7 +6578,7 @@
             </button>
 
             <!-- Instances Section (only shown when instances exist) -->
-            {#if instanceCount > 0}
+            {#if instanceCount > 0 || pendingRebalances.length > 0}
               <div class="p-4 flex-1">
                 <!-- Panel Header -->
                 <div class="flex items-center gap-2 mb-4">
@@ -7085,6 +7163,49 @@
                               </div>
                             {/if}
                           {/if}
+                        </div>
+                      </div>
+                    </div>
+                  {/each}
+                  {#each pendingRebalances as [oldId, transition] (oldId)}
+                    <div
+                      class="relative"
+                      transition:slide={{ duration: 250, easing: cubicOut }}
+                    >
+                      <div
+                        class="border border-teal-500/40 bg-exo-dark-gray/50 rounded p-3 space-y-2"
+                      >
+                        <div class="flex items-center justify-between">
+                          <div class="flex items-center gap-2">
+                            <div
+                              class="w-2 h-2 bg-teal-400 rounded-full shadow-[0_0_6px_currentColor] animate-pulse"
+                            ></div>
+                            <span
+                              class="text-exo-light-gray font-mono text-sm tracking-wider"
+                              >{oldId.slice(0, 8).toUpperCase()}</span
+                            >
+                          </div>
+                          <span
+                            class="px-1.5 py-0.5 text-[10px] tracking-wider uppercase rounded bg-teal-500/15 text-teal-400"
+                          >
+                            REBALANCING
+                          </span>
+                        </div>
+                        <div
+                          class="text-exo-yellow text-xs font-mono tracking-wide truncate"
+                        >
+                          {transition.modelId}
+                        </div>
+                        <p class="text-[11px] text-white/50 leading-relaxed">
+                          Relaunching with the new layer split — waiting for
+                          memory to be released...
+                        </p>
+                        <div
+                          class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                        >
+                          <div
+                            class="absolute inset-0 bg-gradient-to-r from-teal-500/20 via-teal-400/70 to-teal-500/20 animate-pulse"
+                          ></div>
                         </div>
                       </div>
                     </div>
