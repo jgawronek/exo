@@ -8,8 +8,6 @@
     renameConversation,
     clearChat,
     instances,
-    debugMode,
-    toggleDebugMode,
     topologyOnlyMode,
     toggleTopologyOnlyMode,
   } from "$lib/stores/app.svelte";
@@ -35,7 +33,6 @@
   const conversationList = $derived(conversations());
   const activeId = $derived(activeConversationId());
   const instanceData = $derived(instances());
-  const debugEnabled = $derived(debugMode());
   const topologyOnlyEnabled = $derived(topologyOnlyMode());
 
   let searchQuery = $state("");
@@ -550,24 +547,6 @@
         ? 'mt-2'
         : ''}"
     >
-      <button
-        type="button"
-        onclick={toggleDebugMode}
-        class="p-1.5 rounded border border-xeo-medium-gray/40 hover:border-xeo-green/50 transition-colors cursor-pointer"
-        title="Toggle debug mode"
-      >
-        <svg
-          class="w-4 h-4 {debugEnabled
-            ? 'text-xeo-green'
-            : 'text-xeo-medium-gray'}"
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            d="M19 8h-1.81A6.002 6.002 0 0 0 12 2a6.002 6.002 0 0 0-5.19 3H5a1 1 0 0 0 0 2h1v2H5a1 1 0 0 0 0 2h1v2H5a1 1 0 0 0 0 2h1.81A6.002 6.002 0 0 0 12 22a6.002 6.002 0 0 0 5.19-3H19a1 1 0 0 0 0-2h-1v-2h1a1 1 0 0 0 0-2h-1v-2h1a1 1 0 1 0 0-2Zm-5 10.32V19a1 1 0 1 1-2 0v-.68a3.999 3.999 0 0 1-3-3.83V9.32a3.999 3.999 0 0 1 3-3.83V5a1 1 0 0 1 2 0v.49a3.999 3.999 0 0 1 3 3.83v5.17a3.999 3.999 0 0 1-3 3.83Z"
-          />
-        </svg>
-      </button>
       <div class="text-xs text-white/60 font-mono tracking-wider text-center">
         {conversationList.length} CONVERSATION{conversationList.length !== 1
           ? "S"
