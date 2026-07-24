@@ -860,13 +860,13 @@
                     height={node.screenHeight}
                     fill="#0a0a0a"
                   />
-                  <!-- Current memory fill (gray) -->
+                  <!-- Current memory fill -->
                   <rect
                     x="4"
                     y={2 + node.screenHeight - node.currentFillHeight}
                     width={node.iconSize - 8}
                     height={node.currentFillHeight}
-                    fill="#374151"
+                    fill="rgba(255,215,0,0.4)"
                   />
                   <!-- New model memory fill (glowing yellow) -->
                   {#if node.modelUsageGB > 0 && node.isUsed}
@@ -925,7 +925,7 @@
                       (node.iconSize - 8) * (1 - node.currentPercent / 100)}
                     width={node.iconSize - 8}
                     height={(node.iconSize - 8) * (node.currentPercent / 100)}
-                    fill="#374151"
+                    fill="rgba(255,215,0,0.4)"
                   />
                   <!-- New model memory fill -->
                   {#if node.modelUsageGB > 0 && node.isUsed}
@@ -972,7 +972,7 @@
                       node.iconSize * 0.36 * (1 - node.currentPercent / 100)}
                     width={node.iconSize - 8}
                     height={node.iconSize * 0.36 * (node.currentPercent / 100)}
-                    fill="#374151"
+                    fill="rgba(255,215,0,0.4)"
                   />
                   <!-- New model memory fill -->
                   {#if node.modelUsageGB > 0 && node.isUsed}
@@ -1015,7 +1015,7 @@
                       y={node.iconSize * (1 - node.currentPercent / 100)}
                       width={node.iconSize}
                       height={node.iconSize * (node.currentPercent / 100)}
-                      fill="#374151"
+                      fill="rgba(255,215,0,0.4)"
                     />
                     <!-- New model memory fill -->
                     {#if node.modelUsageGB > 0 && node.isUsed}
