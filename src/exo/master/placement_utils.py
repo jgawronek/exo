@@ -99,6 +99,35 @@ def estimate_memory_bandwidth_gigabytes_per_second(
 # unknown chips should not look like an upgrade over known ones.
 _FALLBACK_MEMORY_BANDWIDTH_GBPS = 100.0
 
+# Share of a mixture-of-experts model's weights that are read every token
+# regardless of routing (attention, embeddings, norms, shared experts).
+# Config files do not expose per-tensor sizes, so this is a fixed
+# approximation; it reproduces published active/total parameter ratios well
+# (Qwen3-30B-A3B: true 0.108 vs estimated 0.109; GLM-4.5-355B-A32B: true
+# ~0.09 vs estimated ~0.10).
+_MOE_DENSE_WEIGHT_SHARE = 0.05
+
+
+def estimate_decode_bytes_read_per_token(model_card: ModelCard) -> float:
+    """Weight bytes one decode step reads across the whole model.
+
+    Dense models read every weight each token. Mixture-of-experts models
+    read only the active routed experts plus the always-active dense share,
+    which is why their per-token compute is far below their storage size.
+    """
+    total_bytes = float(model_card.storage_size.in_bytes)
+    mixture_of_experts = model_card.mixture_of_experts
+    if mixture_of_experts is None:
+        return total_bytes
+    routed_fraction = (
+        mixture_of_experts.routed_experts_active
+        / mixture_of_experts.routed_experts_total
+    )
+    active_fraction = routed_fraction + _MOE_DENSE_WEIGHT_SHARE * (
+        1.0 - routed_fraction
+    )
+    return total_bytes * min(1.0, active_fraction)
+
 
 def allocate_layers_by_throughput(
     total_layers: int,
@@ -755,9 +784,11 @@ def estimate_cycle_decode_seconds_per_token(
     except ValueError:
         return float("inf")
 
-    bytes_per_layer = model_card.storage_size.in_bytes / model_card.n_layers
+    bytes_read_per_layer = (
+        estimate_decode_bytes_read_per_token(model_card) / model_card.n_layers
+    )
     compute_seconds = sum(
-        layer_count * bytes_per_layer / (bandwidth * 1e9)
+        layer_count * bytes_read_per_layer / (bandwidth * 1e9)
         for layer_count, bandwidth in zip(
             layer_allocations, node_bandwidths, strict=True
         )

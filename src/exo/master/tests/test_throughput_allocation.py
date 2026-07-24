@@ -686,6 +686,91 @@ def test_estimate_is_infinite_for_cycles_that_cannot_hold_the_model() -> None:
     assert estimate == float("inf")
 
 
+def _mixture_of_experts_card(
+    storage_bytes: int, total_experts: int, active_experts: int
+) -> ModelCard:
+    from exo.shared.models.model_cards import MixtureOfExpertsInfo
+
+    return _pipeline_model_card(storage_bytes=storage_bytes).model_copy(
+        update={
+            "mixture_of_experts": MixtureOfExpertsInfo(
+                routed_experts_total=total_experts,
+                routed_experts_active=active_experts,
+            )
+        }
+    )
+
+
+def test_decode_bytes_read_dense_model_reads_all_weights() -> None:
+    from exo.master.placement_utils import estimate_decode_bytes_read_per_token
+
+    assert (
+        estimate_decode_bytes_read_per_token(_pipeline_model_card(storage_bytes=1000))
+        == 1000.0
+    )
+
+
+def test_decode_bytes_read_moe_model_reads_active_share() -> None:
+    from exo.master.placement_utils import estimate_decode_bytes_read_per_token
+
+    card = _mixture_of_experts_card(
+        storage_bytes=1000, total_experts=128, active_experts=8
+    )
+    routed_fraction = 8 / 128
+    expected = 1000 * (routed_fraction + 0.05 * (1 - routed_fraction))
+    assert abs(estimate_decode_bytes_read_per_token(card) - expected) < 1e-6
+
+
+def test_estimate_moe_decode_is_faster_than_dense_of_same_size() -> None:
+    from exo.master.placement_utils import estimate_cycle_decode_seconds_per_token
+    from exo.shared.types.topology import Cycle
+
+    topology, node_network, node_identities, mac, spark_a, spark_b, _pc_3090 = (
+        _heterogeneous_cluster_topology()
+    )
+    node_memory = {node_id: create_node_memory(500) for node_id in node_identities}
+
+    def estimate_for(model_card: ModelCard) -> float:
+        return estimate_cycle_decode_seconds_per_token(
+            cycle=Cycle(node_ids=[mac, spark_a, spark_b]),
+            cycle_digraph=topology,
+            node_network=node_network,
+            node_identities=node_identities,
+            node_memory=node_memory,
+            model_card=model_card,
+        )
+
+    dense_estimate = estimate_for(_pipeline_model_card(storage_bytes=1000))
+    moe_estimate = estimate_for(
+        _mixture_of_experts_card(
+            storage_bytes=1000, total_experts=128, active_experts=8
+        )
+    )
+    assert moe_estimate < dense_estimate
+
+
+def test_config_data_parses_routed_expert_aliases() -> None:
+    from exo.shared.models.model_cards import ConfigData
+
+    for alias in ("num_experts", "n_routed_experts", "num_local_experts"):
+        config = ConfigData.model_validate(
+            {"num_hidden_layers": 4, "num_experts_per_tok": 8, alias: 128}
+        )
+        info = config.mixture_of_experts
+        assert info is not None
+        assert info.routed_experts_total == 128
+        assert info.routed_experts_active == 8
+
+
+def test_config_data_treats_all_experts_active_as_dense() -> None:
+    from exo.shared.models.model_cards import ConfigData
+
+    config = ConfigData.model_validate(
+        {"num_hidden_layers": 4, "num_experts_per_tok": 8, "num_experts": 8}
+    )
+    assert config.mixture_of_experts is None
+
+
 def test_find_ip_prioritised_falls_back_to_nominal_speeds_for_ring() -> None:
     thunderbolt_ip, ethernet_ip = "169.254.0.8", "169.254.0.9"
     topology, node_a, node_b = _two_node_topology_with_two_links(

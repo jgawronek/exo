@@ -95,7 +95,13 @@ class _CardCache:
 card_cache = _CardCache()
 
 
-def detect_vision_from_config(model_id: ModelId) -> "VisionCardConfig | None":
+def load_local_config_data(model_id: ModelId) -> "ConfigData | None":
+    """Parse an already-downloaded config.json for a model, if present.
+
+    Exceptions from unreadable or unparsable config files are swallowed here
+    because a local config is an optional enrichment source; callers fall
+    back to card-provided values.
+    """
     normalized = model_id.normalize()
     for model_dir in [d / normalized for d in EXO_MODELS_DIRS]:
         config_path = model_dir / "config.json"
@@ -104,12 +110,15 @@ def detect_vision_from_config(model_id: ModelId) -> "VisionCardConfig | None":
         try:
             with open(config_path) as f:
                 raw = json.load(f)  # type: ignore
-            return ConfigData.model_validate(
-                raw, context={"model_id": str(model_id)}
-            ).vision
+            return ConfigData.model_validate(raw, context={"model_id": str(model_id)})
         except Exception:
             continue
     return None
+
+
+def detect_vision_from_config(model_id: ModelId) -> "VisionCardConfig | None":
+    config_data = load_local_config_data(model_id)
+    return config_data.vision if config_data is not None else None
 
 
 def _is_image_card(card: "ModelCard") -> bool:
@@ -137,6 +146,13 @@ class VisionCardConfig(FrozenModel):
     weights_repo: str = ""
     image_token: str | None = None
     processor_repo: str | None = None
+
+
+class MixtureOfExpertsInfo(FrozenModel):
+    """Routed-expert counts, used to estimate weight bytes read per token."""
+
+    routed_experts_total: PositiveInt
+    routed_experts_active: PositiveInt
 
 
 class SamplingValues(FrozenModel):
@@ -174,6 +190,7 @@ class ModelCard(FrozenModel):
     trust_remote_code: bool = True
     is_custom: bool = False
     vision: VisionCardConfig | None = None
+    mixture_of_experts: MixtureOfExpertsInfo | None = None
     sampling_defaults: SamplingDefaults = Field(default_factory=SamplingDefaults)
 
     @model_validator(mode="after")
@@ -182,6 +199,16 @@ class ModelCard(FrozenModel):
             detected = detect_vision_from_config(self.model_id)
             if detected is not None:
                 object.__setattr__(self, "vision", detected)
+        return self
+
+    @model_validator(mode="after")
+    def _autodetect_mixture_of_experts(self) -> "ModelCard":
+        if self.mixture_of_experts is None:
+            config_data = load_local_config_data(self.model_id)
+            if config_data is not None:
+                object.__setattr__(
+                    self, "mixture_of_experts", config_data.mixture_of_experts
+                )
         return self
 
     @model_validator(mode="after")
@@ -256,6 +283,7 @@ class ModelCard(FrozenModel):
             trust_remote_code=False,
             is_custom=True,
             vision=config_data.vision,
+            mixture_of_experts=config_data.mixture_of_experts,
             backends=list(
                 Backend
             ),  # all backends — we don't know what an arbitrary HF model supports; let placement gate decide
@@ -280,6 +308,27 @@ class ConfigData(BaseModel):
     )
     max_position_embeddings: int = 0
     vision: VisionCardConfig | None = None
+    num_experts_per_tok: PositiveInt | None = None
+    routed_experts_count: PositiveInt | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "num_experts",
+            "n_routed_experts",
+            "num_local_experts",
+        ),
+    )
+
+    @property
+    def mixture_of_experts(self) -> MixtureOfExpertsInfo | None:
+        if self.num_experts_per_tok is None or self.routed_experts_count is None:
+            return None
+        if self.num_experts_per_tok >= self.routed_experts_count:
+            # Every expert active every token behaves like a dense model.
+            return None
+        return MixtureOfExpertsInfo(
+            routed_experts_total=self.routed_experts_count,
+            routed_experts_active=self.num_experts_per_tok,
+        )
 
     @property
     def supports_tensor(self) -> bool:
@@ -318,6 +367,10 @@ class ConfigData(BaseModel):
                 "n_layers",
                 "num_decoder_layers",
                 "decoder_layers",
+                "num_experts_per_tok",
+                "num_experts",
+                "n_routed_experts",
+                "num_local_experts",
             ]:
                 if (val := text_config.get(field)) is not None:  # pyright: ignore[reportAny]
                     data[field] = val
