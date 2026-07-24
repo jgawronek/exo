@@ -26,6 +26,8 @@
     filteredNodes?: Set<string>;
     /** Nodes that cannot be selected (e.g. already used by a running instance). */
     disabledNodes?: Set<string>;
+    /** When non-empty, only these nodes (and edges between them) are drawn. */
+    visibleNodes?: Set<string>;
     onNodeClick?: (nodeId: string) => void;
   }
 
@@ -34,6 +36,7 @@
     highlightedNodes = new Set(),
     filteredNodes = new Set(),
     disabledNodes = new Set(),
+    visibleNodes = new Set(),
     onNodeClick,
   }: Props = $props();
 
@@ -357,7 +360,10 @@
 
     const nodes = data.nodes || {};
     const edges = data.edges || [];
-    const nodeIds = orderNodeIdsByRing(Object.keys(nodes), ringNodeIds);
+    const includedNodeIds = Object.keys(nodes).filter(
+      (id) => visibleNodes.size === 0 || visibleNodes.has(id),
+    );
+    const nodeIds = orderNodeIdsByRing(includedNodeIds, ringNodeIds);
     const hasRingRoute = ringRouteHops.length > 0;
     const routeHopKeys = new Set(
       ringRouteHops.map((hop) => `${hop.source}|${hop.target}`),
@@ -1749,6 +1755,8 @@
     const _highlightedNodes = highlightedNodes;
     const _disabledNodes = disabledNodes;
     void _disabledNodes;
+    const _visibleNodes = visibleNodes;
+    void _visibleNodes;
     const _nodeLayerLabels = nodeLayerLabels;
     const _nodeEfficiencyLabels = nodeEfficiencyLabels;
     const _nodeTokPerSec = nodeTokPerSec;

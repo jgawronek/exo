@@ -119,6 +119,7 @@ interface RawNetworkInterfaceInfo {
   ipv6?: string;
   ipAddresses?: string[];
   ips?: string[];
+  interfaceType?: string;
 }
 
 interface RawNodeNetworkInfo {
@@ -326,6 +327,8 @@ export interface Conversation {
   modelId: string | null;
   sharding: string | null;
   instanceType: string | null;
+  /** Full id of the instance this conversation was started from, if pinned. */
+  instanceId: string | null;
   enableThinking: boolean | null;
 }
 
@@ -682,6 +685,7 @@ class AppStore {
           modelId: conversation.modelId ?? null,
           sharding: conversation.sharding ?? null,
           instanceType: conversation.instanceType ?? null,
+          instanceId: conversation.instanceId ?? null,
           enableThinking: conversation.enableThinking ?? null,
         }));
       }
@@ -922,6 +926,7 @@ class AppStore {
       modelId: derivedModelId,
       sharding: derivedSharding,
       instanceType: derivedInstanceType,
+      instanceId: this.selectedChatInstanceId,
       enableThinking: null,
     };
 
@@ -2285,6 +2290,16 @@ class AppStore {
    * Selected model for chat (can be set by the UI)
    */
   selectedChatModel = $state("");
+
+  /**
+   * Instance the user selected for chat; new conversations record it as
+   * the instance they were started from.
+   */
+  selectedChatInstanceId = $state<string | null>(null);
+
+  setSelectedChatInstance(instanceId: string | null) {
+    this.selectedChatInstanceId = instanceId;
+  }
 
   /**
    * Set the model to use for chat
@@ -3745,6 +3760,8 @@ export const clearEditingImage = () => appStore.clearEditingImage();
 export const clearChat = () => appStore.clearChat();
 export const setSelectedChatModel = (modelId: string) =>
   appStore.setSelectedModel(modelId);
+export const setSelectedChatInstance = (instanceId: string | null) =>
+  appStore.setSelectedChatInstance(instanceId);
 export const selectPreviewModel = (modelId: string | null) =>
   appStore.selectPreviewModel(modelId);
 export const togglePreviewNodeFilter = (nodeId: string) =>

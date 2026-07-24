@@ -42,6 +42,7 @@
     occupiedNodeIds,
     createConversation,
     setSelectedChatModel,
+    setSelectedChatInstance,
     selectedChatModel,
     sendMessage,
     thinkingEnabled,
@@ -1069,9 +1070,11 @@
     if (selectedInstanceId === instanceId) {
       selectedInstanceId = null;
       setSelectedChatModel("");
+      setSelectedChatInstance(null);
       return;
     }
     selectedInstanceId = instanceId;
+    setSelectedChatInstance(instanceId);
     if (modelId && modelId !== "Unknown" && modelId !== "Unknown Model") {
       userForcedIdle = false;
       setSelectedChatModel(modelId);
@@ -1082,6 +1085,7 @@
     if (selectedInstanceId && !instanceData[selectedInstanceId]) {
       selectedInstanceId = null;
       setSelectedChatModel("");
+      setSelectedChatInstance(null);
     }
   });
 
@@ -1101,6 +1105,16 @@
     const count = Object.keys(instanceData).length;
     return count === 0 || selectedInstanceModelId === null;
   });
+
+  // When an instance is selected, restrict the topology map to its nodes.
+  const selectedInstanceVisibleNodes = $derived.by(() => {
+    if (!selectedInstanceId) return new Set<string>();
+    return unwrapInstanceNodes(instanceData[selectedInstanceId]);
+  });
+
+  const selectedInstanceShortId = $derived(
+    selectedInstanceId ? selectedInstanceId.slice(0, 8).toUpperCase() : undefined,
+  );
 
   // Compute highlighted nodes from hovered instance, selected instance, or preview
   const highlightedNodes = $derived(() => {
@@ -5004,6 +5018,7 @@
               showModelSelector={true}
               disabled={chatInputDisabled}
               modelDisplayOverride={selectedInstanceModelId ?? undefined}
+              instanceIdLabel={selectedInstanceShortId}
               modelTasks={modelTasks()}
               modelCapabilities={modelCapabilities()}
               onAutoSend={handleChatSend}
@@ -5194,6 +5209,7 @@
             highlightedNodes={highlightedNodes()}
             filteredNodes={nodeFilter}
             disabledNodes={placementDisabledNodes}
+            visibleNodes={selectedInstanceVisibleNodes}
             onNodeClick={togglePreviewNodeFilter}
           />
           {@render debugModeButton()}
@@ -5322,6 +5338,7 @@
               highlightedNodes={highlightedNodes()}
               filteredNodes={nodeFilter}
               disabledNodes={placementDisabledNodes}
+              visibleNodes={selectedInstanceVisibleNodes}
               onNodeClick={togglePreviewNodeFilter}
             />
             {@render debugModeButton()}
@@ -5475,6 +5492,7 @@
                 showModelSelector={true}
                 disabled={chatInputDisabled}
                 modelDisplayOverride={selectedInstanceModelId ?? undefined}
+                instanceIdLabel={selectedInstanceShortId}
                 modelTasks={modelTasks()}
                 modelCapabilities={modelCapabilities()}
                 onAutoSend={handleChatSend}
@@ -5588,10 +5606,12 @@
                       ? getPreparationProgress(instance)
                       : null}
                   <div
-                    class="relative group cursor-pointer rounded-sm transition-shadow duration-200 {selectedInstanceId ===
+                    class="relative group cursor-pointer rounded-sm transition-all duration-200 {selectedInstanceId ===
                     id
-                      ? 'ring-1 ring-xeo-green/90 shadow-[0_0_10px_oklch(0.78_0.17_145/0.32)]'
-                      : ''}"
+                      ? 'ring-2 ring-xeo-green shadow-[0_0_18px_oklch(0.78_0.17_145/0.55)]'
+                      : selectedInstanceId
+                        ? 'opacity-40 saturate-50 hover:opacity-75'
+                        : ''}"
                     role="button"
                     tabindex="0"
                     aria-pressed={selectedInstanceId === id}
@@ -6649,6 +6669,7 @@
                   showModelSelector={true}
                   disabled={chatInputDisabled}
                   modelDisplayOverride={selectedInstanceModelId ?? undefined}
+                  instanceIdLabel={selectedInstanceShortId}
                   modelTasks={modelTasks()}
                   modelCapabilities={modelCapabilities()}
                   onAutoSend={handleChatSend}
@@ -6707,6 +6728,7 @@
                   showModelSelector={true}
                   disabled={chatInputDisabled}
                   modelDisplayOverride={selectedInstanceModelId ?? undefined}
+                  instanceIdLabel={selectedInstanceShortId}
                   modelTasks={modelTasks()}
                   modelCapabilities={modelCapabilities()}
                   onAutoSend={handleChatSend}
@@ -6743,6 +6765,7 @@
                   showModelSelector={true}
                   disabled={chatInputDisabled}
                   modelDisplayOverride={selectedInstanceModelId ?? undefined}
+                  instanceIdLabel={selectedInstanceShortId}
                   modelTasks={modelTasks()}
                   modelCapabilities={modelCapabilities()}
                   onAutoSend={handleAutoSend}
@@ -6811,6 +6834,7 @@
                 <TopologyGraph
                   highlightedNodes={highlightedNodes()}
                   filteredNodes={nodeFilter}
+                  visibleNodes={selectedInstanceVisibleNodes}
                 />
 
                 {@render clusterWarningsCompact()}
@@ -6868,10 +6892,12 @@
                         ? getPreparationProgress(instance)
                         : null}
                     <div
-                      class="relative group cursor-pointer rounded-sm transition-shadow duration-200 {selectedInstanceId ===
+                      class="relative group cursor-pointer rounded-sm transition-all duration-200 {selectedInstanceId ===
                       id
-                        ? 'ring-1 ring-xeo-green/90 shadow-[0_0_10px_oklch(0.78_0.17_145/0.32)]'
-                        : ''}"
+                        ? 'ring-2 ring-xeo-green shadow-[0_0_18px_oklch(0.78_0.17_145/0.55)]'
+                        : selectedInstanceId
+                          ? 'opacity-40 saturate-50 hover:opacity-75'
+                          : ''}"
                       role="button"
                       tabindex="0"
                       aria-pressed={selectedInstanceId === id}

@@ -392,9 +392,16 @@
                   </div>
                   <div
                     class="text-[11px] text-white/45 font-mono truncate"
-                    title={info.strategyLabel}
+                    title={conversation.instanceId ?? info.strategyLabel}
                   >
-                    Instance · {info.strategyLabel}
+                    {#if conversation.instanceId}
+                      <span class="text-xeo-green/70"
+                        >{conversation.instanceId.slice(0, 8).toUpperCase()}</span
+                      >
+                    {:else}
+                      Instance
+                    {/if}
+                    · {info.strategyLabel}
                   </div>
                   {#if stats}
                     <div class="text-xs text-white/70 font-mono mt-1">

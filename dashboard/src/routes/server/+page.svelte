@@ -91,33 +91,64 @@
     );
   }
 
+  function nodeLanIp(nodeId: string): string | null {
+    const network = nodeNetwork()[nodeId];
+    // Wired interfaces first: ethernet IPs are the most reliable targets
+    // for API traffic when a node has both wired and wifi addresses.
+    const candidates: { address: string; wired: boolean }[] = [];
+    for (const iface of network?.interfaces ?? []) {
+      const wired = iface.interfaceType === "ethernet";
+      const push = (address: unknown) => {
+        if (typeof address === "string") candidates.push({ address, wired });
+      };
+      push(iface.ipAddress);
+      push(iface.ipv4);
+      for (const addr of iface.addresses ?? []) {
+        push(typeof addr === "string" ? addr : addr?.address);
+      }
+      for (const addr of iface.ipAddresses ?? []) push(addr);
+      for (const addr of iface.ips ?? []) push(addr);
+    }
+    const usable = candidates.filter((c) => isUsableIpv4(c.address));
+    const isLan = (address: string) =>
+      address.startsWith("192.168.") ||
+      address.startsWith("10.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(address);
+    const pick =
+      usable.find((c) => c.wired && isLan(c.address)) ??
+      usable.find((c) => isLan(c.address)) ??
+      usable[0];
+    return pick?.address ?? null;
+  }
+
   const masterIp = $derived.by(() => {
     const id = masterNodeId();
-    if (!id) return null;
-    const network = nodeNetwork()[id];
-    const candidates: string[] = [];
-    for (const iface of network?.interfaces ?? []) {
-      if (typeof iface.ipAddress === "string") candidates.push(iface.ipAddress);
-      if (typeof iface.ipv4 === "string") candidates.push(iface.ipv4);
-      for (const addr of iface.addresses ?? []) {
-        if (typeof addr === "string") candidates.push(addr);
-        else if (addr?.address) candidates.push(addr.address);
-      }
-      for (const addr of iface.ipAddresses ?? []) candidates.push(addr);
-      for (const addr of iface.ips ?? []) candidates.push(addr);
+    return id ? nodeLanIp(id) : null;
+  });
+
+  /** First node of the selected instance that has a usable LAN IP. */
+  const selectedInstanceEndpoint = $derived.by(() => {
+    for (const nodeId of selectedInstance?.nodeIds ?? []) {
+      const ip = nodeLanIp(nodeId);
+      if (ip) return { ip, nodeId };
     }
-    const usable = candidates.filter(isUsableIpv4);
-    const lan = usable.find(
-      (address) =>
-        address.startsWith("192.168.") ||
-        address.startsWith("10.") ||
-        /^172\.(1[6-9]|2\d|3[01])\./.test(address),
-    );
-    return lan ?? usable[0] ?? null;
+    return null;
   });
 
   const apiUrl = $derived(
-    masterIp ? `http://${masterIp}:${apiPort}` : fallbackApiUrl,
+    selectedInstanceEndpoint
+      ? `http://${selectedInstanceEndpoint.ip}:${apiPort}`
+      : masterIp
+        ? `http://${masterIp}:${apiPort}`
+        : fallbackApiUrl,
+  );
+
+  const apiUrlSourceLabel = $derived(
+    selectedInstanceEndpoint
+      ? `instance node: ${nodeName(selectedInstanceEndpoint.nodeId)}`
+      : masterIp
+        ? "master node"
+        : null,
   );
 
   // Capability lookups accept either a plain model id or an instance alias
@@ -476,21 +507,8 @@
       </p>
     </div>
 
-    <!-- Status -->
-    <div class="mb-6">
-      <span class="text-xeo-light-gray/70 text-xs uppercase tracking-wider"
-        >API Endpoint</span
-      >
-      <span class="text-white font-mono text-sm ml-2">{apiUrl}</span>
-      {#if masterIp}
-        <span class="text-xeo-light-gray/40 text-[10px] ml-2 uppercase"
-          >master node</span
-        >
-      {/if}
-    </div>
-
     <!-- Available Instances -->
-    <div class="mb-8">
+    <div class="mb-6">
       <span
         class="text-xeo-light-gray/70 text-xs uppercase tracking-wider block mb-2"
         >Available Instances</span
@@ -541,6 +559,19 @@
         <p class="text-xeo-light-gray/40 text-xs italic">
           No instances currently running
         </p>
+      {/if}
+    </div>
+
+    <!-- Status -->
+    <div class="mb-8">
+      <span class="text-xeo-light-gray/70 text-xs uppercase tracking-wider"
+        >API Endpoint</span
+      >
+      <span class="text-white font-mono text-sm ml-2">{apiUrl}</span>
+      {#if apiUrlSourceLabel}
+        <span class="text-xeo-light-gray/40 text-[10px] ml-2 uppercase"
+          >{apiUrlSourceLabel}</span
+        >
       {/if}
     </div>
 

@@ -38,6 +38,8 @@
       }[],
     ) => void;
     modelDisplayOverride?: string;
+    /** Short id of the selected instance, shown before the MODEL: label. */
+    instanceIdLabel?: string;
   }
 
   let {
@@ -52,6 +54,7 @@
     onSend,
     onAutoSend,
     modelDisplayOverride,
+    instanceIdLabel,
   }: Props = $props();
 
   let message = $state("");
@@ -340,6 +343,13 @@
         class="flex items-center justify-between gap-2 px-3 py-2 border-b border-xeo-medium-gray/30"
       >
         <div class="flex items-center gap-2 flex-1 min-w-0">
+          {#if instanceIdLabel}
+            <span
+              class="text-xs font-mono text-xeo-green/80 uppercase tracking-wider flex-shrink-0"
+              title="Selected instance">{instanceIdLabel}</span
+            >
+            <span class="text-xs text-xeo-light-gray/40 flex-shrink-0">·</span>
+          {/if}
           <span
             class="text-xs text-xeo-light-gray uppercase tracking-wider flex-shrink-0"
             >MODEL:</span
