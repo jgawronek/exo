@@ -727,10 +727,14 @@ def order_cycle_for_fastest_links(
     return Cycle(node_ids=list(best_order))
 
 
-# Fixed cost of one TCP ring hop during decode: syscall, kernel network
-# stack, and wire round trip. Decode payloads are a few KiB, so this
-# constant dominates the per-hop term on any link faster than ~1 Gb/s.
-RING_HOP_BASE_LATENCY_SECONDS = 0.0003
+# Fixed cost of one ring hop during decode: activation send (~0.4 ms
+# measured), plus this rank's share of the per-token token-relay all_gather
+# (3.8-7.7 ms per token across the whole ring in hop logs). Calibrated
+# live on Qwen3.5-9B-4bit across ring sizes 1-4 (67.5 / 55.0 / 47.0 /
+# 43.5 decode TPS), where each added node cost 1.7-3.4 ms per token.
+# Decode payloads are a few KiB, so this constant dominates the per-hop
+# term on any link faster than ~1 Gb/s.
+RING_HOP_BASE_LATENCY_SECONDS = 0.002
 
 # Decode activations are hidden_size elements of (b)float16 per token.
 _DECODE_PAYLOAD_BYTES_PER_HIDDEN_ELEMENT = 2
