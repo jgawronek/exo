@@ -112,6 +112,43 @@
 
   const stageTimingsData = $derived(instanceStageTimings());
 
+  /**
+   * Best stage-timing sample per node (highest tokensMeasured).
+   * Used for tok/s on node bars and communication ms on ring hops.
+   */
+  const nodeStageTiming = $derived.by(() => {
+    const best: Record<
+      string,
+      { computeMsPerToken: number; communicationMsPerToken: number }
+    > = {};
+    const tokensMeasuredByNode: Record<string, number> = {};
+    for (const timings of Object.values(stageTimingsData || {})) {
+      for (const [nodeId, timing] of Object.entries(timings || {})) {
+        if (timing.computeMsPerToken <= 0 && timing.communicationMsPerToken <= 0) {
+          continue;
+        }
+        const priorTokens = tokensMeasuredByNode[nodeId] ?? -1;
+        if (timing.tokensMeasured < priorTokens) continue;
+        tokensMeasuredByNode[nodeId] = timing.tokensMeasured;
+        best[nodeId] = {
+          computeMsPerToken: timing.computeMsPerToken,
+          communicationMsPerToken: timing.communicationMsPerToken,
+        };
+      }
+    }
+    return best;
+  });
+
+  /** Per-node decode throughput: 1000 / computeMsPerToken. */
+  const nodeTokPerSec = $derived.by(() => {
+    const rates: Record<string, number> = {};
+    for (const [nodeId, timing] of Object.entries(nodeStageTiming)) {
+      if (timing.computeMsPerToken <= 0) continue;
+      rates[nodeId] = 1000 / timing.computeMsPerToken;
+    }
+    return rates;
+  });
+
   // Measured decode effectiveness per node, relative to the fastest node's
   // per-layer rate (100% = fastest). This is the same measurement the
   // rebalance allocator optimizes from.
@@ -557,8 +594,11 @@
       }
     });
 
-    // Placement-chosen ring route: accent directed hops
+    // Placement-chosen ring route: accent directed hops + transport labels
     if (hasRingRoute) {
+      const hopLabelsGroup = svg.append("g").attr("class", "hop-labels-group");
+      const hopLabelFontSize = isMinimized ? 9 : 11;
+
       for (const hop of ringRouteHops) {
         const from = positionById[hop.source];
         const to = positionById[hop.target];
@@ -573,6 +613,50 @@
           .attr("class", "graph-link-route");
 
         drawDirectedArrow(from, to, "arrowhead-route");
+
+        // Mid-edge transport: destination stage's measured communication ms/token
+        // (recv + send + gather for that hop into the target node).
+        const targetTiming = nodeStageTiming[hop.target];
+        const sourceTiming = nodeStageTiming[hop.source];
+        const commMs =
+          targetTiming?.communicationMsPerToken ??
+          sourceTiming?.communicationMsPerToken;
+        if (commMs === undefined || commMs <= 0) continue;
+
+        const mx = (from.x + to.x) / 2;
+        const my = (from.y + to.y) / 2;
+        const label =
+          commMs >= 10 ? `${commMs.toFixed(0)}ms` : `${commMs.toFixed(1)}ms`;
+
+        // Slight offset perpendicular to the edge so text clears the stroke
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const offsetX = (-dy / len) * 10;
+        const offsetY = (dx / len) * 10;
+
+        hopLabelsGroup
+          .append("rect")
+          .attr("x", mx + offsetX - hopLabelFontSize * label.length * 0.32)
+          .attr("y", my + offsetY - hopLabelFontSize * 0.7)
+          .attr("width", hopLabelFontSize * label.length * 0.64)
+          .attr("height", hopLabelFontSize * 1.35)
+          .attr("rx", 2)
+          .attr("fill", "rgba(10, 10, 12, 0.85)")
+          .attr("stroke", "oklch(0.78 0.17 145 / 0.35)")
+          .attr("stroke-width", 0.5);
+
+        hopLabelsGroup
+          .append("text")
+          .attr("x", mx + offsetX)
+          .attr("y", my + offsetY)
+          .attr("text-anchor", "middle")
+          .attr("dominant-baseline", "middle")
+          .attr("fill", "oklch(0.78 0.17 145)")
+          .attr("font-size", hopLabelFontSize)
+          .attr("font-weight", "700")
+          .attr("font-family", "SF Mono, Monaco, monospace")
+          .text(label);
       }
     }
 
@@ -1095,7 +1179,7 @@
         }
       }
 
-      // --- Vertical GPU Bar (right side of icon): load % + temp ---
+      // --- Vertical GPU Bar (right side of icon): load % + temp + tok/s ---
       if (showFullLabels || isMinimized) {
         const gpuBarWidth = isMinimized
           ? Math.max(16, nodeRadius * 0.32)
@@ -1105,6 +1189,7 @@
         const gpuBarX = nodeInfo.x + barXOffset;
         const gpuBarY = nodeInfo.y - gpuBarHeight / 2;
         const hasGpuMetrics = macmon?.gpu_usage != null || !isNaN(gpuTemp);
+        const tokPerSec = nodeTokPerSec[nodeInfo.id];
 
         // GPU Bar Background (grey, no border)
         nodeG
@@ -1137,42 +1222,45 @@
             .attr("rx", 2);
         }
 
-        // Load % + temp centered on the bar
+        // Load % + temp + tok/s centered on the bar
         const gpuTextX = gpuBarX + gpuBarWidth / 2;
         const gpuTextY = gpuBarY + gpuBarHeight / 2;
         const gpuTextFontSize = isMinimized
-          ? Math.max(10, gpuBarWidth * 0.55)
-          : Math.min(15, Math.max(11, gpuBarWidth * 0.5));
-        const lineSpacing = gpuTextFontSize * 1.35;
+          ? Math.max(9, gpuBarWidth * 0.48)
+          : Math.min(13, Math.max(10, gpuBarWidth * 0.42));
+        const lineSpacing = gpuTextFontSize * 1.2;
 
         const gpuUsageText = hasGpuMetrics
           ? `${clampedLoad.toFixed(0)}%`
           : "-";
         const tempText = !isNaN(gpuTemp) ? `${gpuTemp.toFixed(0)}°` : "-";
+        const tpsText =
+          tokPerSec !== undefined
+            ? tokPerSec >= 100
+              ? `${tokPerSec.toFixed(0)}t`
+              : tokPerSec >= 10
+                ? `${tokPerSec.toFixed(1)}t`
+                : `${tokPerSec.toFixed(2)}t`
+            : "-";
 
-        nodeG
-          .append("text")
-          .attr("x", gpuTextX)
-          .attr("y", gpuTextY - lineSpacing * 0.45)
-          .attr("text-anchor", "middle")
-          .attr("dominant-baseline", "middle")
-          .attr("fill", "#FFFFFF")
-          .attr("font-size", gpuTextFontSize)
-          .attr("font-weight", "700")
-          .attr("font-family", "SF Mono, Monaco, monospace")
-          .text(gpuUsageText);
-
-        nodeG
-          .append("text")
-          .attr("x", gpuTextX)
-          .attr("y", gpuTextY + lineSpacing * 0.55)
-          .attr("text-anchor", "middle")
-          .attr("dominant-baseline", "middle")
-          .attr("fill", "#FFFFFF")
-          .attr("font-size", gpuTextFontSize)
-          .attr("font-weight", "700")
-          .attr("font-family", "SF Mono, Monaco, monospace")
-          .text(tempText);
+        const barLines = [
+          { text: gpuUsageText, y: gpuTextY - lineSpacing },
+          { text: tempText, y: gpuTextY },
+          { text: tpsText, y: gpuTextY + lineSpacing },
+        ];
+        for (const line of barLines) {
+          nodeG
+            .append("text")
+            .attr("x", gpuTextX)
+            .attr("y", line.y)
+            .attr("text-anchor", "middle")
+            .attr("dominant-baseline", "middle")
+            .attr("fill", "#FFFFFF")
+            .attr("font-size", gpuTextFontSize)
+            .attr("font-weight", "700")
+            .attr("font-family", "SF Mono, Monaco, monospace")
+            .text(line.text);
+        }
       }
 
       // Labels - adapt based on mode
@@ -1446,11 +1534,15 @@
     const _highlightedNodes = highlightedNodes;
     const _nodeLayerLabels = nodeLayerLabels;
     const _nodeEfficiencyLabels = nodeEfficiencyLabels;
+    const _nodeTokPerSec = nodeTokPerSec;
+    const _nodeStageTiming = nodeStageTiming;
     const _ringRouteHops = ringRouteHops;
     const _ringNodeIds = ringNodeIds;
     if (_data) {
       void _ringRouteHops;
       void _ringNodeIds;
+      void _nodeTokPerSec;
+      void _nodeStageTiming;
       renderGraph();
     }
   });
