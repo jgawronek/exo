@@ -8,6 +8,10 @@ from exo.worker.engines.mlx.auto_parallel import (
     get_active_relay_context,
     relay_sampled_tokens,
 )
+from exo.worker.engines.mlx.generator.speculative import (
+    get_speculative_state,
+    speculative_step,
+)
 
 _PRECOMPUTE_TOP_K = 20
 
@@ -60,6 +64,13 @@ def take_ready_topk(batch: GenerationBatch) -> BatchTopKLogprobs:
 
 
 def _patched_step(self: GenerationBatch) -> tuple[list[int], list[mx.array]]:
+    speculative = get_speculative_state(self)
+    if speculative is not None:
+        # The engine attaches speculative state only for a single-row batch
+        # with no logprobs request and no pending prompts, so the draft/verify
+        # path can fully replace the plain decode step.
+        return speculative_step(self, speculative)
+
     self._current_tokens = self._next_tokens
     self._current_logprobs = self._next_logprobs
     inputs = self._current_tokens

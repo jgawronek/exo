@@ -11,7 +11,7 @@ from mlx_lm.generate import (
 from mlx_lm.generate import (
     generation_stream,
 )
-from mlx_lm.models.cache import RotatingKVCache
+from mlx_lm.models.cache import RotatingKVCache, can_trim_prompt_cache
 from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from mlx_lm.tokenizer_utils import StreamingDetokenizer, TokenizerWrapper
 
@@ -45,6 +45,11 @@ from exo.worker.engines.mlx.generator.generate import (
     prefill,
 )
 from exo.worker.engines.mlx.generator.remote_prefill import remote_prefill
+from exo.worker.engines.mlx.generator.speculative import (
+    SpeculativeState,
+    attach_speculative_state,
+    detach_speculative_state,
+)
 from exo.worker.engines.mlx.patches.opt_batch_gen import (
     set_needs_topk,
     take_ready_topk,
@@ -102,10 +107,12 @@ class ExoBatchGenerator:
     group: mx.distributed.Group | None
     kv_prefix_cache: KVPrefixCache | None
     vision_processor: VisionProcessor | None = None
+    draft_model: Model | None = None
 
     _mlx_gen: MlxBatchGenerator = field(init=False)
     _active_tasks: dict[int, _EngineTask] = field(default_factory=dict, init=False)
     _supports_token_relay: bool = field(init=False)
+    _speculative: SpeculativeState | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self._mlx_gen = MlxBatchGenerator(
@@ -359,6 +366,7 @@ class ExoBatchGenerator:
             t.task_params.logprobs for t in self._active_tasks.values()
         )
         set_needs_topk(gb, needs_logprobs)
+        self._sync_speculative_decoding()
         # Token relay needs every rank's logits path untouched only on the last
         # rank; requests that ask for logprobs need real logits on rank 0, so
         # fall back to the legacy all_gather decode for those. The flag is
@@ -527,9 +535,52 @@ class ExoBatchGenerator:
         return results
 
     def cancel(self, uids: list[int]) -> None:
+        # Restore the plain cache/tokens invariant before rows are removed.
+        detach_speculative_state(self._mlx_gen._generation_batch)
         self._mlx_gen.remove(uids)
         for uid in uids:
             self._active_tasks.pop(uid, None)
+
+    def _sync_speculative_decoding(self) -> None:
+        """Attach or detach draft/verify decoding for the upcoming step.
+
+        Speculation is only sound when the generation batch holds exactly one
+        row, nothing is waiting to be merged in, and the request doesn't need
+        per-token logprobs (queued tokens would desync the top-k buffer).
+        """
+        gb = self._mlx_gen._generation_batch
+        task = self._speculation_candidate()
+        if task is None:
+            detach_speculative_state(gb)
+            return
+        state = self._speculative
+        if state is None or state.uid != task.uid:
+            assert self.draft_model is not None
+            detach_speculative_state(gb)
+            state = SpeculativeState(
+                draft_model=self.draft_model,
+                uid=task.uid,
+                prompt_prefix=cast(list[int], task.all_prompt_tokens[:-2].tolist()),
+            )
+            self._speculative = state
+        attach_speculative_state(gb, state)
+
+    def _speculation_candidate(self) -> _EngineTask | None:
+        if self.draft_model is None or self.group is not None:
+            return None
+        if len(self._active_tasks) != 1:
+            return None
+        if self._mlx_gen._unprocessed_sequences or len(self._mlx_gen._prompt_batch) > 0:
+            return None
+        task = next(iter(self._active_tasks.values()))
+        if task.task_params.logprobs or task.media_regions:
+            return None
+        gb = self._mlx_gen._generation_batch
+        if gb.uids != [task.uid]:
+            return None
+        if not can_trim_prompt_cache(gb.prompt_cache):
+            return None
+        return task
 
     def close(self) -> None:
         self._mlx_gen.close()
