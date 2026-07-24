@@ -1899,6 +1899,9 @@
         if (!r) return null;
         const [kind] = getTagged(r);
         const statusMap: Record<string, string> = {
+          RunnerIdle: "WaitingForInitialization",
+          RunnerConnecting: "InitializingBackend",
+          RunnerConnected: "WaitingForModel",
           RunnerWaitingForInitialization: "WaitingForInitialization",
           RunnerInitializingBackend: "InitializingBackend",
           RunnerWaitingForModel: "WaitingForModel",
@@ -1907,6 +1910,7 @@
           RunnerWarmingUp: "WarmingUp",
           RunnerReady: "Ready",
           RunnerRunning: "Running",
+          RunnerShuttingDown: "Shutdown",
           RunnerShutdown: "Shutdown",
           RunnerFailed: "Failed",
         };
@@ -1968,6 +1972,76 @@
       return { statusText: "INITIALIZING", statusClass: "starting" };
 
     return { statusText: "RUNNING", statusClass: "active" };
+  }
+
+  // Overall startup progress for an instance that is not yet ready.
+  // Each runner walks the ladder: waiting -> backend init -> loading
+  // weights -> warming up -> ready; the fraction blends all runners and
+  // the detail names the least-advanced stage (the current bottleneck).
+  function getPreparationProgress(
+    instanceWrapped: unknown,
+  ): { percent: number; detail: string } | null {
+    const [, instance] = getTagged(instanceWrapped);
+    if (!instance || typeof instance !== "object") return null;
+    const inst = instance as {
+      shardAssignments?: { runnerToShard?: Record<string, unknown> };
+    };
+    const runnerIds = Object.keys(inst.shardAssignments?.runnerToShard || {});
+    if (runnerIds.length === 0) return null;
+
+    const stageOf = (
+      runnerId: string,
+    ): { fraction: number; label: string } => {
+      const wrapped = runnersData[runnerId];
+      if (!wrapped) return { fraction: 0, label: "starting runners" };
+      const [kind, payload] = getTagged(wrapped);
+      switch (kind) {
+        case "RunnerIdle":
+          return { fraction: 0.05, label: "starting runners" };
+        case "RunnerConnecting":
+          return { fraction: 0.1, label: "connecting nodes" };
+        case "RunnerConnected":
+          return { fraction: 0.15, label: "connected, preparing load" };
+        case "RunnerLoading": {
+          const p = (payload ?? {}) as {
+            layersLoaded?: number;
+            totalLayers?: number;
+          };
+          const layerFraction =
+            p.totalLayers && p.totalLayers > 0
+              ? (p.layersLoaded ?? 0) / p.totalLayers
+              : 0;
+          return {
+            fraction: 0.15 + 0.65 * layerFraction,
+            label: "loading weights",
+          };
+        }
+        case "RunnerLoaded":
+          return { fraction: 0.82, label: "weights loaded" };
+        case "RunnerWarmingUp":
+          return { fraction: 0.9, label: "warming up" };
+        case "RunnerReady":
+        case "RunnerRunning":
+          return { fraction: 1, label: "ready" };
+        default:
+          return { fraction: 0, label: "starting runners" };
+      }
+    };
+
+    const stages = runnerIds.map(stageOf);
+    const total = stages.reduce((sum, stage) => sum + stage.fraction, 0);
+    const percent = Math.round((total / stages.length) * 100);
+    if (percent >= 100) return null;
+
+    const bottleneck = stages.reduce((slowest, stage) =>
+      stage.fraction < slowest.fraction ? stage : slowest,
+    );
+    const readyCount = stages.filter((stage) => stage.fraction === 1).length;
+    const detail =
+      stages.length > 1
+        ? `${bottleneck.label} · ${readyCount}/${stages.length} nodes ready`
+        : bottleneck.label;
+    return { percent, detail };
   }
 
   function getBytes(value: unknown): number {
@@ -5262,6 +5336,10 @@
                     id,
                     instance,
                   )}
+                  {@const prepProgress =
+                    !isFailed && !isDownloading
+                      ? getPreparationProgress(instance)
+                      : null}
                   <div
                     class="relative group cursor-pointer"
                     role="button"
@@ -5396,7 +5474,9 @@
                                     ? 'bg-green-500/15 text-green-400'
                                     : 'bg-teal-500/15 text-teal-400'}"
                           >
-                            {statusText}
+                            {statusText}{prepProgress
+                              ? ` ${prepProgress.percent}%`
+                              : ""}
                           </span>
                         </div>
                         {#if instanceModelId && instanceModelId !== "Unknown" && instanceModelId !== "Unknown Model"}
@@ -5741,12 +5821,36 @@
                                   Loading model into memory...
                                 </p>
                               {/if}
-                            {:else if isWarmingUp}
-                              <p
-                                class="text-[11px] text-white/50 leading-relaxed"
-                              >
-                                Warming up...
-                              </p>
+                            {:else if isWarmingUp || statusText === "PREPARING" || statusText === "INITIALIZING"}
+                              {@const prep = getPreparationProgress(instance)}
+                              {#if prep}
+                                <div class="mt-1 space-y-1">
+                                  <div
+                                    class="flex justify-between text-xs font-mono"
+                                  >
+                                    <span class="text-yellow-400"
+                                      >{prep.percent}%</span
+                                    >
+                                    <span class="text-exo-light-gray"
+                                      >{prep.detail}</span
+                                    >
+                                  </div>
+                                  <div
+                                    class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                                  >
+                                    <div
+                                      class="absolute inset-y-0 left-0 bg-gradient-to-r from-yellow-500 to-yellow-400 transition-all duration-300"
+                                      style="width: {prep.percent}%"
+                                    ></div>
+                                  </div>
+                                </div>
+                              {:else}
+                                <p
+                                  class="text-[11px] text-white/50 leading-relaxed"
+                                >
+                                  Preparing...
+                                </p>
+                              {/if}
                             {:else if isReady || isRunning}
                               <p
                                 class="text-[11px] text-green-400/70 leading-relaxed"
@@ -6442,6 +6546,10 @@
                       id,
                       instance,
                     )}
+                    {@const prepProgress =
+                      !isFailed && !isDownloading
+                        ? getPreparationProgress(instance)
+                        : null}
                     <div
                       class="relative group cursor-pointer"
                       role="button"
@@ -6575,7 +6683,9 @@
                                       ? 'bg-green-500/15 text-green-400'
                                       : 'bg-teal-500/15 text-teal-400'}"
                             >
-                              {statusText}
+                              {statusText}{prepProgress
+                                ? ` ${prepProgress.percent}%`
+                                : ""}
                             </span>
                           </div>
                           {#if instanceModelId && instanceModelId !== "Unknown" && instanceModelId !== "Unknown Model"}
@@ -6929,12 +7039,36 @@
                                     Loading model into memory...
                                   </p>
                                 {/if}
-                              {:else if isWarmingUp}
-                                <p
-                                  class="text-[11px] text-white/50 leading-relaxed"
-                                >
-                                  Warming up...
-                                </p>
+                              {:else if isWarmingUp || statusText === "PREPARING" || statusText === "INITIALIZING"}
+                                {@const prep = getPreparationProgress(instance)}
+                                {#if prep}
+                                  <div class="mt-1 space-y-1">
+                                    <div
+                                      class="flex justify-between text-xs font-mono"
+                                    >
+                                      <span class="text-yellow-400"
+                                        >{prep.percent}%</span
+                                      >
+                                      <span class="text-exo-light-gray"
+                                        >{prep.detail}</span
+                                      >
+                                    </div>
+                                    <div
+                                      class="relative h-1.5 bg-exo-black/60 rounded-sm overflow-hidden"
+                                    >
+                                      <div
+                                        class="absolute inset-y-0 left-0 bg-gradient-to-r from-yellow-500 to-yellow-400 transition-all duration-300"
+                                        style="width: {prep.percent}%"
+                                      ></div>
+                                    </div>
+                                  </div>
+                                {:else}
+                                  <p
+                                    class="text-[11px] text-white/50 leading-relaxed"
+                                  >
+                                    Preparing...
+                                  </p>
+                                {/if}
                               {:else if isReady || isRunning}
                                 <p
                                   class="text-[11px] text-green-400/70 leading-relaxed"
