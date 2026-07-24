@@ -68,12 +68,10 @@
 </script>
 
 <header
-  class="relative z-20 flex items-center justify-center px-4 md:px-6 pt-4 md:pt-8 pb-3 md:pb-4 bg-xeo-dark-gray"
+  class="relative z-20 flex items-center px-4 md:px-6 pt-4 md:pt-8 pb-3 md:pb-4 bg-xeo-dark-gray"
 >
-  <!-- Left: Sidebar Toggle (desktop) or Mobile Sidebar Toggle (mobile) -->
-  <div
-    class="absolute left-4 md:left-6 top-1/2 -translate-y-1/2 flex items-center gap-2"
-  >
+  <!-- Left: Sidebar Toggle, positioned after the persistent wordmark -->
+  <div class="order-2 ml-2 md:ml-3 flex items-center gap-2">
     <!-- Mobile sidebar toggle -->
     <button
       onclick={handleToggleMobileMenu}
@@ -144,10 +142,10 @@
     </button>
   </div>
 
-  <!-- Center: Logo (clickable to go home) -->
+  <!-- Persistent top-left wordmark (clickable to go home) -->
   <button
     onclick={handleHome}
-    class="bg-transparent border-none outline-none focus:outline-none transition-opacity duration-200 hover:opacity-90 {showHome
+    class="order-1 bg-transparent border-none outline-none focus:outline-none transition-opacity duration-200 hover:opacity-90 {showHome
       ? 'cursor-pointer'
       : 'cursor-default'}"
     title={showHome ? "Go to home" : ""}
@@ -156,7 +154,7 @@
     <img
       src="/xeo-wordmark.svg"
       alt="XEO"
-      class="h-12 md:h-18 drop-shadow-[0_0_4px_oklch(0.78_0.17_145/0.3)]"
+      class="h-7 md:h-10 drop-shadow-[0_0_4px_oklch(0.78_0.17_145/0.3)]"
     />
   </button>
 
