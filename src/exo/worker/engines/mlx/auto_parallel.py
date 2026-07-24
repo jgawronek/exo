@@ -101,7 +101,9 @@ class PipelineDecodeTimings:
         self.steps += 1
         if self.steps % self.log_every == 0:
             per_step_ms = 1000.0 / self.log_every
-            logger.debug(
+            # INFO so hop attribution is available without restarting the
+            # whole cluster at -vv (DEBUG floods can destabilize ring bring-up).
+            logger.info(
                 "pipeline decode comm (avg over "
                 f"{self.log_every} tokens): "
                 f"recv={self.recv_seconds * per_step_ms:.2f}ms "
