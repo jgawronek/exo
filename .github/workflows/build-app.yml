@@ -1,4 +1,4 @@
-name: Build EXO macOS DMG
+name: Build XEO macOS DMG
 
 # Release workflow:
 # 1. Create a draft GitHub Release with the tag name (e.g. v1.0.0) and write release notes in markdown
@@ -336,6 +336,7 @@ jobs:
           cd app/EXO
           security unlock-keychain -p "$MACOS_CERTIFICATE_PASSWORD" "$BUILD_KEYCHAIN_PATH"
           SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$BUILD_KEYCHAIN_PATH" | awk -F '"' '{print $2}')
+          SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml}"
           xcodebuild clean build \
             -scheme EXO \
             -configuration Release \
@@ -349,13 +350,13 @@ jobs:
             CODE_SIGNING_IDENTITY="$SIGNING_IDENTITY" \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES
           mkdir -p ../../output
-          cp -R build/Build/Products/Release/EXO.app ../../output/EXO.app
+          cp -R build/Build/Products/Release/EXO.app ../../output/XEO.app
 
       - name: Inject PyInstaller runtime
         run: |
-          rm -rf output/EXO.app/Contents/Resources/exo
-          mkdir -p output/EXO.app/Contents/Resources
-          cp -R dist/exo output/EXO.app/Contents/Resources/exo
+          rm -rf output/XEO.app/Contents/Resources/exo
+          mkdir -p output/XEO.app/Contents/Resources
+          cp -R dist/exo output/XEO.app/Contents/Resources/exo
 
       - name: Codesign PyInstaller runtime
         env:
@@ -364,7 +365,7 @@ jobs:
           cd output
           security unlock-keychain -p "$MACOS_CERTIFICATE_PASSWORD" "$BUILD_KEYCHAIN_PATH"
           SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$BUILD_KEYCHAIN_PATH" | awk -F '"' '{print $2}')
-          RUNTIME_DIR="EXO.app/Contents/Resources/exo"
+          RUNTIME_DIR="XEO.app/Contents/Resources/exo"
           find "$RUNTIME_DIR" -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" \) -print0 |
             while IFS= read -r -d '' file; do
               /usr/bin/codesign --force --timestamp --options runtime \
@@ -394,14 +395,14 @@ jobs:
           fi
 
           /usr/bin/codesign --deep --force --timestamp --options runtime \
-            --sign "$SIGNING_IDENTITY" EXO.app
+            --sign "$SIGNING_IDENTITY" XEO.app
 
           # Pre-flight: verify the signed app BEFORE building DMG and submitting to Apple.
           # If this fails, notarization will fail too — cheap way to fail in seconds, not 15 minutes.
-          echo "===== codesign --verify EXO.app ====="
-          if ! /usr/bin/codesign --verify --deep --strict --verbose=2 EXO.app; then
-            echo "ERROR: EXO.app failed codesign verification. Dumping signing status of every executable:"
-            find EXO.app -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0 |
+          echo "===== codesign --verify XEO.app ====="
+          if ! /usr/bin/codesign --verify --deep --strict --verbose=2 XEO.app; then
+            echo "ERROR: XEO.app failed codesign verification. Dumping signing status of every executable:"
+            find XEO.app -type f \( -perm -111 -o -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) -print0 |
               while IFS= read -r -d '' f; do
                 printf -- '--- %s\n' "$f"
                 /usr/bin/codesign -dv --verbose=2 "$f" 2>&1 | sed 's/^/    /' || true
@@ -411,13 +412,13 @@ jobs:
 
           # Gatekeeper assessment. A failure here strongly predicts notarization rejection.
           echo "===== spctl assessment (predicts notarization outcome) ====="
-          /usr/bin/spctl -a -vvv -t install EXO.app || echo "WARNING: spctl assessment failed — notarization is likely to fail too."
+          /usr/bin/spctl -a -vvv -t install XEO.app || echo "WARNING: spctl assessment failed — notarization is likely to fail too."
 
           mkdir -p dmg-root
-          cp -R EXO.app dmg-root/
+          cp -R XEO.app dmg-root/
           ln -s /Applications dmg-root/Applications
-          DMG_NAME="EXO-${RELEASE_VERSION}.dmg"
-          hdiutil create -volname "EXO" -srcfolder dmg-root -ov -format UDZO "$DMG_NAME"
+          DMG_NAME="XEO-${RELEASE_VERSION}.dmg"
+          hdiutil create -volname "XEO" -srcfolder dmg-root -ov -format UDZO "$DMG_NAME"
           /usr/bin/codesign --force --timestamp --options runtime \
             --sign "$SIGNING_IDENTITY" "$DMG_NAME"
 
@@ -467,7 +468,7 @@ jobs:
         run: |
           set -euo pipefail
           cd output
-          DOWNLOAD_PREFIX="${SPARKLE_DOWNLOAD_PREFIX:-https://assets.exolabs.net}"
+          DOWNLOAD_PREFIX="${SPARKLE_DOWNLOAD_PREFIX:-https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}}"
           echo "$SPARKLE_ED25519_PRIVATE" > sparkle_ed25519.key
           chmod 600 sparkle_ed25519.key
 
@@ -512,8 +513,8 @@ jobs:
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: EXO-dmg-${{ env.RELEASE_VERSION }}
-          path: output/EXO-${{ env.RELEASE_VERSION }}.dmg
+          name: XEO-dmg-${{ env.RELEASE_VERSION }}
+          path: output/XEO-${{ env.RELEASE_VERSION }}.dmg
 
       - name: Upload to S3
         if: env.SPARKLE_S3_BUCKET != ''
@@ -531,16 +532,16 @@ jobs:
           if [[ -n "$PREFIX" && "${PREFIX: -1}" != "/" ]]; then
             PREFIX="${PREFIX}/"
           fi
-          DMG_NAME="EXO-${RELEASE_VERSION}.dmg"
+          DMG_NAME="XEO-${RELEASE_VERSION}.dmg"
 
           if [[ "${{ github.ref_type }}" != "tag" ]]; then
-            aws s3 cp "$DMG_NAME" "s3://${SPARKLE_S3_BUCKET}/${PREFIX}EXO-${GITHUB_SHA}.dmg"
+            aws s3 cp "$DMG_NAME" "s3://${SPARKLE_S3_BUCKET}/${PREFIX}XEO-${GITHUB_SHA}.dmg"
             exit 0
           fi
 
           aws s3 cp "$DMG_NAME" "s3://${SPARKLE_S3_BUCKET}/${PREFIX}${DMG_NAME}"
           if [[ "$IS_ALPHA" != "true" ]]; then
-            aws s3 cp "$DMG_NAME" "s3://${SPARKLE_S3_BUCKET}/${PREFIX}EXO-latest.dmg"
+            aws s3 cp "$DMG_NAME" "s3://${SPARKLE_S3_BUCKET}/${PREFIX}XEO-latest.dmg"
             aws s3 cp appcast.xml "s3://${SPARKLE_S3_BUCKET}/${PREFIX}appcast.xml" --content-type application/xml --cache-control no-cache
           fi
 
@@ -549,18 +550,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DMG_PATH="output/EXO-${RELEASE_VERSION}.dmg"
+          DMG_PATH="output/XEO-${RELEASE_VERSION}.dmg"
 
           if [[ "$HAS_RELEASE_NOTES" == "true" ]]; then
             # Update the draft release with the tag and upload DMG
             gh api --method PATCH "repos/${{ github.repository }}/releases/$DRAFT_RELEASE_ID" \
               -f tag_name="$GITHUB_REF_NAME" \
               -F draft=false
-            gh release upload "$GITHUB_REF_NAME" "$DMG_PATH" --clobber
-            echo "Published release $GITHUB_REF_NAME with DMG attached"
+            gh release upload "$GITHUB_REF_NAME" "$DMG_PATH" output/appcast.xml --clobber
+            echo "Published release $GITHUB_REF_NAME with DMG and appcast attached"
           else
             # Alpha without draft release - create one with auto-generated notes
-            gh release create "$GITHUB_REF_NAME" "$DMG_PATH" \
+            gh release create "$GITHUB_REF_NAME" "$DMG_PATH" output/appcast.xml \
               --title "$GITHUB_REF_NAME" \
               --generate-notes \
               --prerelease
