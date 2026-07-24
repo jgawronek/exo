@@ -812,7 +812,8 @@ def test_measured_speed_allocation_moves_layers_to_faster_node() -> None:
     node_a, node_b = NodeId(), NodeId()
     model_card = _pipeline_model_card(storage_bytes=1000)
     # Node A processed 5 layers in 1 ms (5 layers/ms); node B processed
-    # 5 layers in 4 ms (1.25 layers/ms), so A should end up with ~4x B.
+    # 5 layers in 4 ms (1.25 layers/ms). Decode latency is the sum of stage
+    # times, so A is loaded to capacity and B keeps the pipeline minimum.
     allocations = allocate_layers_by_measured_speed(
         model_card=model_card,
         node_ids=[node_a, node_b],
@@ -826,7 +827,28 @@ def test_measured_speed_allocation_moves_layers_to_faster_node() -> None:
             node_b: _stage_timing(layers_held=5, compute_ms_per_token=4.0),
         },
     )
-    assert allocations == {node_a: 8, node_b: 2}
+    assert allocations == {node_a: 9, node_b: 1}
+
+
+def test_measured_speed_allocation_respects_memory_cap_of_fast_node() -> None:
+    node_a, node_b = NodeId(), NodeId()
+    model_card = _pipeline_model_card(storage_bytes=1000)
+    # A is measured faster but only has memory for 6 layers (100 bytes free
+    # + 500 bytes reclaimable = 600 bytes = 6 of the 10 x 100-byte layers).
+    allocations = allocate_layers_by_measured_speed(
+        model_card=model_card,
+        node_ids=[node_a, node_b],
+        node_memory={
+            node_a: create_node_memory(100),
+            node_b: create_node_memory(1000),
+        },
+        current_layers={node_a: 5, node_b: 5},
+        stage_timings={
+            node_a: _stage_timing(layers_held=5, compute_ms_per_token=1.0),
+            node_b: _stage_timing(layers_held=5, compute_ms_per_token=4.0),
+        },
+    )
+    assert allocations == {node_a: 6, node_b: 4}
 
 
 def test_measured_speed_allocation_requires_timing_for_every_node() -> None:

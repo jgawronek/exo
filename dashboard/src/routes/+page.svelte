@@ -2150,7 +2150,10 @@
   }
 
   // Projected fraction of per-token compute time saved by rebalancing
-  // (0..1), or null when timings don't yet cover every node.
+  // (0..1), or null when timings don't yet cover every node. Mirrors the
+  // server's allocator: decode latency is the sum of stage times, so layers
+  // pile onto the nodes with the fastest measured per-layer rate, capped by
+  // each node's memory (its current share counts as reclaimable).
   function getRebalanceProjectedGain(
     instanceId: string,
     instanceWrapped: unknown,
@@ -2159,17 +2162,52 @@
     const info = getInstanceInfo(instanceWrapped);
     if (rows.length < 2 || rows.length !== info.nodeCount) return null;
     if (rows.some((row) => row.computeMs <= 0 || row.layers < 1)) return null;
-    // Decode latency is the sum of stage times. A rebalanced split gives
-    // every stage the same time: totalLayers / totalRate per stage.
-    const totalLayers = rows.reduce((sum, row) => sum + row.layers, 0);
-    const totalRate = rows.reduce(
-      (sum, row) => sum + row.layers / row.computeMs,
+
+    const [, instance] = getTagged(instanceWrapped);
+    const inst = (instance ?? {}) as {
+      shardAssignments?: { runnerToShard?: Record<string, unknown> };
+    };
+    const firstShardWrapped = Object.values(
+      inst.shardAssignments?.runnerToShard || {},
+    )[0];
+    const [, firstShard] = getTagged(firstShardWrapped);
+    const shardInfo = (firstShard ?? {}) as {
+      nLayers?: number;
+      modelCard?: { storageSize?: { inBytes?: number } };
+    };
+    const measuredLayers = rows.reduce((sum, row) => sum + row.layers, 0);
+    const totalLayers = shardInfo.nLayers ?? measuredLayers;
+    const storageBytes = shardInfo.modelCard?.storageSize?.inBytes ?? 0;
+
+    const rates = rows.map((row) => row.layers / row.computeMs);
+    const caps = rows.map((row) => {
+      const memory = data?.nodes?.[row.nodeId]?.macmon_info?.memory;
+      if (!memory || storageBytes <= 0) return totalLayers;
+      const available = Math.max(memory.ram_total - memory.ram_usage, 0);
+      const reclaimable = (storageBytes * row.layers) / totalLayers;
+      return Math.floor(((available + reclaimable) * totalLayers) / storageBytes);
+    });
+    if (caps.some((cap) => cap < 1)) return null;
+
+    const projected = rows.map(() => 1);
+    let remaining = totalLayers - rows.length;
+    if (remaining < 0) return null;
+    const byRate = [...rows.keys()].sort((a, b) => rates[b] - rates[a]);
+    for (const index of byRate) {
+      const take = Math.min(caps[index] - projected[index], remaining);
+      projected[index] += Math.max(0, take);
+      remaining -= Math.max(0, take);
+      if (remaining === 0) break;
+    }
+    if (remaining > 0) return null;
+
+    const currentTotalMs = rows.reduce((sum, row) => sum + row.computeMs, 0);
+    const projectedTotalMs = projected.reduce(
+      (sum, layerCount, index) => sum + layerCount / rates[index],
       0,
     );
-    const currentTotalMs = rows.reduce((sum, row) => sum + row.computeMs, 0);
-    const balancedTotalMs = (rows.length * totalLayers) / totalRate;
     if (currentTotalMs <= 0) return null;
-    return Math.max(0, (currentTotalMs - balancedTotalMs) / currentTotalMs);
+    return Math.max(0, (currentTotalMs - projectedTotalMs) / currentTotalMs);
   }
 
   let rebalancingInstances = $state<Record<string, boolean>>({});

@@ -244,10 +244,14 @@ def allocate_layers_by_measured_speed(
     """Re-split pipeline layers using measured per-stage decode timings.
 
     Pipeline decode latency is the sum of every stage's compute time, so the
-    split that equalises measured stage times gives each node layers in
-    proportion to its measured compute rate (layers per millisecond of
-    decode). Memory caps treat each node's share of the currently loaded
-    instance as reclaimable, because rebalancing relaunches the instance.
+    split that minimises it loads the nodes with the fastest *measured*
+    per-layer rate (layers per millisecond of decode) to capacity first —
+    the same objective as ``allocate_layers_by_throughput``, but driven by
+    live telemetry instead of the static bandwidth table. Equalising stage
+    times would instead spread layers onto slower nodes and increase the
+    per-token sum. Memory caps treat each node's share of the currently
+    loaded instance as reclaimable, because rebalancing relaunches the
+    instance.
 
     Raises ValueError when a node has no measured timing yet or the
     allocation is impossible; handled by the API rebalance endpoint, which
@@ -269,9 +273,6 @@ def allocate_layers_by_measured_speed(
             )
         layer_rates.append(timing.layers_held / timing.compute_ms_per_token)
 
-    total_rate = sum(layer_rates)
-    speed_fractions = [rate / total_rate for rate in layer_rates]
-
     max_layers_per_node: list[int] = []
     for node_id in node_ids:
         reclaimable = (
@@ -283,9 +284,9 @@ def allocate_layers_by_measured_speed(
             // model_card.storage_size.in_bytes
         )
 
-    allocations = allocate_layers_proportionally(
+    allocations = allocate_layers_by_throughput(
         total_layers=model_card.n_layers,
-        memory_fractions=speed_fractions,
+        node_throughputs=layer_rates,
         max_layers_per_node=max_layers_per_node,
     )
     return dict(zip(node_ids, allocations, strict=True))
