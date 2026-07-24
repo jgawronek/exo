@@ -2,18 +2,29 @@ import os
 import resource
 import traceback
 from dataclasses import dataclass
-from typing import Self, cast
+from typing import Literal, Self, cast
 
 import loguru
 
 from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.events import Event
 from exo.shared.types.tasks import Task, TaskId
-from exo.shared.types.worker.instances import BoundInstance
+from exo.shared.types.worker.instances import BoundInstance, Instance, MlxJacclInstance
 from exo.utils.channels import ClosedResourceError, MpReceiver, MpSender
 from exo.worker.engines.base import Builder
 
 logger: "loguru.Logger" = loguru.logger
+
+
+def resolve_metal_fast_synchronization(
+    instance: Instance,
+    override: str | None,
+) -> Literal["0", "1"]:
+    if override == "true":
+        return "1"
+    if override == "false":
+        return "0"
+    return "1" if isinstance(instance, MlxJacclInstance) else "0"
 
 
 @dataclass(frozen=True)
@@ -55,10 +66,10 @@ def entrypoint(
         os.environ,
         "EXO_FAST_SYNCH",
     )
-    if fast_synch_override == "false":
-        os.environ["MLX_METAL_FAST_SYNCH"] = "0"
-    else:
-        os.environ["MLX_METAL_FAST_SYNCH"] = "1"
+    os.environ["MLX_METAL_FAST_SYNCH"] = resolve_metal_fast_synchronization(
+        bound_instance.instance,
+        fast_synch_override,
+    )
 
     logger.info(f"Fast synch flag: {os.environ['MLX_METAL_FAST_SYNCH']}")
 
