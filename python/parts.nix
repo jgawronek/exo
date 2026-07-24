@@ -105,7 +105,7 @@ let
                     --replace-fail "g++" "${lib.getExe' pkgs.stdenv.cc "c++"}"
                 '';
 
-                DEV_RELEASE = 1;
+                PYPI_RELEASE = 1;
                 CMAKE_ARGS = toString ([
                   (lib.cmakeBool "USE_SYSTEM_FMT" true)
                   (lib.cmakeOptionType "filepath" "FETCHCONTENT_SOURCE_DIR_GGUFLIB" "${gguf-tools}")
