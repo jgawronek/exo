@@ -89,6 +89,7 @@ from exo.api.types import (
     PlaceInstanceParams,
     PlacementPreview,
     PlacementPreviewResponse,
+    RebalanceInstanceResponse,
     StartDownloadParams,
     StartDownloadResponse,
     ToolCall,
@@ -125,6 +126,7 @@ from exo.api.types.openai_responses import (
 )
 from exo.master.image_store import ImageStore
 from exo.master.placement import place_instance as get_instance_placements
+from exo.master.placement_utils import allocate_layers_by_measured_speed
 from exo.shared.apply import apply
 from exo.shared.constants import (
     DASHBOARD_DIR,
@@ -199,8 +201,13 @@ from exo.shared.types.text_generation import (
     TextGenerationTaskParams,
 )
 from exo.shared.types.worker.downloads import DownloadCompleted
-from exo.shared.types.worker.instances import Instance, InstanceId, InstanceMeta
-from exo.shared.types.worker.shards import Sharding
+from exo.shared.types.worker.instances import (
+    Instance,
+    InstanceId,
+    InstanceMeta,
+    MlxRingInstance,
+)
+from exo.shared.types.worker.shards import PipelineShardMetadata, Sharding
 from exo.utils.banner import print_startup_banner
 from exo.utils.channels import Receiver, Sender, channel
 from exo.utils.disk_event_log import DiskEventLog
@@ -209,6 +216,10 @@ from exo.utils.task_group import TaskGroup
 
 _API_EVENT_LOG_DIR = EXO_EVENT_LOG_DIR / "api"
 ONBOARDING_COMPLETE_FILE = EXO_CACHE_HOME / "onboarding_complete"
+
+# How long a rebalance waits for the deleted instance's memory to be
+# reported as reclaimed before giving up on the automatic relaunch.
+REBALANCE_MEMORY_WAIT_SECONDS = 60.0
 
 
 def _format_to_content_type(image_format: Literal["png", "jpeg", "webp"] | None) -> str:
@@ -349,6 +360,7 @@ class API:
         self.app.get("/instance/await", response_model=None)(self.await_instance)
         self.app.get("/instance/{instance_id}")(self.get_instance)
         self.app.delete("/instance/{instance_id}")(self.delete_instance)
+        self.app.post("/instance/{instance_id}/rebalance")(self.rebalance_instance)
         self.app.get("/v1/instance-links")(self.list_instance_links)
         self.app.post("/v1/instance-links")(self.create_instance_link)
         self.app.put("/v1/instance-links/{link_id}")(self.update_instance_link)
@@ -693,6 +705,119 @@ class API:
             message="Command received.",
             command_id=command.command_id,
             instance_id=instance_id,
+        )
+
+    async def rebalance_instance(
+        self, instance_id: InstanceId
+    ) -> RebalanceInstanceResponse:
+        """Relaunch an instance with layer counts derived from measured stage timings.
+
+        The existing instance is deleted, and once its memory is reported as
+        reclaimed a new placement is requested on the same nodes with a
+        manual layer split proportional to each node's measured decode speed.
+        """
+        instance = self.state.instances.get(instance_id)
+        if instance is None:
+            raise HTTPException(status_code=404, detail="Instance not found")
+
+        shard_assignments = instance.shard_assignments
+        node_to_shard = {
+            node_id: shard_assignments.runner_to_shard[runner_id]
+            for node_id, runner_id in shard_assignments.node_to_runner.items()
+        }
+        if not all(
+            isinstance(shard, PipelineShardMetadata)
+            for shard in node_to_shard.values()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Rebalancing is only supported for pipeline-sharded instances",
+            )
+        if len(node_to_shard) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="Rebalancing requires an instance spanning at least two nodes",
+            )
+        missing_memory_nodes = [
+            node_id for node_id in node_to_shard if node_id not in self.state.node_memory
+        ]
+        if missing_memory_nodes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No memory report for nodes: {missing_memory_nodes}",
+            )
+
+        node_ids = list(node_to_shard.keys())
+        model_card = next(iter(node_to_shard.values())).model_card
+        current_layers = {
+            node_id: shard.end_layer - shard.start_layer
+            for node_id, shard in node_to_shard.items()
+        }
+        stage_timings = self.state.instance_stage_timings.get(instance_id, {})
+
+        try:
+            node_layers = allocate_layers_by_measured_speed(
+                model_card=model_card,
+                node_ids=node_ids,
+                node_memory=self.state.node_memory,
+                current_layers=current_layers,
+                stage_timings=stage_timings,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if node_layers == current_layers:
+            return RebalanceInstanceResponse(
+                message="Measured allocation already matches the current layer split.",
+                instance_id=instance_id,
+                node_layers=node_layers,
+            )
+
+        instance_meta = (
+            InstanceMeta.MlxRing
+            if isinstance(instance, MlxRingInstance)
+            else InstanceMeta.MlxJaccl
+        )
+        await self._send(DeleteInstance(instance_id=instance_id))
+
+        def _memory_reports_allow_relaunch() -> bool:
+            for node_id, layer_count in node_layers.items():
+                required = (
+                    model_card.storage_size * layer_count
+                ) // model_card.n_layers
+                memory = self.state.node_memory.get(node_id)
+                if memory is None or memory.ram_available < required:
+                    return False
+            return True
+
+        deadline = anyio.current_time() + REBALANCE_MEMORY_WAIT_SECONDS
+        while (
+            instance_id in self.state.instances
+            or not _memory_reports_allow_relaunch()
+        ):
+            if anyio.current_time() > deadline:
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        "The instance was deleted but its memory was not reported "
+                        "as reclaimed in time; relaunch the model manually."
+                    ),
+                )
+            await anyio.sleep(0.5)
+
+        command = PlaceInstance(
+            model_card=model_card,
+            sharding=Sharding.Pipeline,
+            instance_meta=instance_meta,
+            min_nodes=len(node_ids),
+            node_layers=node_layers,
+        )
+        await self._send(command)
+        return RebalanceInstanceResponse(
+            message="Instance relaunching with measured layer split.",
+            instance_id=instance_id,
+            node_layers=node_layers,
+            command_id=command.command_id,
         )
 
     async def get_feature_flags(self) -> dict[str, bool]:

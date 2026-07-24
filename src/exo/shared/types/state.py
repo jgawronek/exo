@@ -17,6 +17,7 @@ from exo.shared.types.profiling import (
     NodeNetworkInfo,
     NodeRdmaCtlStatus,
     NodeThunderboltInfo,
+    StageTiming,
     SystemPerformanceProfile,
     ThunderboltBridgeStatus,
 )
@@ -67,6 +68,10 @@ class State(FrozenModel):
 
     instance_links: Mapping[InstanceLinkId, InstanceLink] = {}
     prefill_server_ports: Mapping[RunnerId, int] = {}
+
+    # Measured per-stage decode timings, reported by each pipeline rank while
+    # it generates. Used to offer usage-based layer rebalancing.
+    instance_stage_timings: Mapping[InstanceId, Mapping[NodeId, StageTiming]] = {}
 
     # User-added model cards. Workers can reconcile their on-disk custom card cache
     custom_model_cards: Mapping[ModelId, ModelCard] = {}

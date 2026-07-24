@@ -64,6 +64,7 @@ from mlx_lm.models.step3p5 import Model as Step35Model
 from mlx_lm.models.step3p5 import Step3p5MLP as Step35MLP
 from mlx_lm.models.step3p5 import Step3p5Model as Step35InnerModel
 
+from exo.shared.types.profiling import DecodeTimingSample
 from exo.shared.types.worker.runner_response import ModelLoadingResponse
 from exo.shared.types.worker.shards import PipelineShardMetadata
 from exo.worker.runner.bootstrap import logger
@@ -74,11 +75,14 @@ if TYPE_CHECKING:
 
 @final
 class PipelineDecodeTimings:
-    """Accumulates per-token pipeline communication timings during decode.
+    """Accumulates per-token pipeline timings during decode.
 
-    Timings are collected inside ``PipelineFirstLayer`` / ``PipelineLastLayer``
-    and logged as a rolling summary every ``log_every`` decode steps, so a
-    ``-vv`` run attributes per-token latency to recv / send / gather phases.
+    Communication timings are collected inside ``PipelineFirstLayer`` /
+    ``PipelineLastLayer`` and logged as a rolling summary every ``log_every``
+    decode steps, so a run attributes per-token latency to recv / send /
+    gather phases. Independently, cumulative compute and communication totals
+    are kept so the runner can drain a :class:`DecodeTimingSample` and publish
+    this stage's measured speed for placement rebalancing.
     """
 
     def __init__(self, log_every: int = 64) -> None:
@@ -87,17 +91,36 @@ class PipelineDecodeTimings:
         self.send_seconds = 0.0
         self.gather_seconds = 0.0
         self.steps = 0
+        self._forward_start: float | None = None
+        self._drain_compute_seconds = 0.0
+        self._drain_communication_seconds = 0.0
+        self._drain_steps = 0
+
+    def mark_forward_start(self) -> None:
+        """Called by the first pipeline layer as the local shard starts."""
+        self._forward_start = time.perf_counter()
+
+    def record_forward_end(self) -> None:
+        """Called by the last pipeline layer once the shard output is evaluated."""
+        if self._forward_start is None:
+            return
+        self._drain_compute_seconds += time.perf_counter() - self._forward_start
+        self._forward_start = None
 
     def record_recv(self, seconds: float) -> None:
         self.recv_seconds += seconds
+        self._drain_communication_seconds += seconds
 
     def record_send(self, seconds: float) -> None:
         self.send_seconds += seconds
+        self._drain_communication_seconds += seconds
 
     def record_gather_and_advance(self, seconds: float) -> None:
         """The gather (or relay) phase runs once per decode step, so it also
         advances the step counter and emits the periodic summary."""
         self.gather_seconds += seconds
+        self._drain_communication_seconds += seconds
+        self._drain_steps += 1
         self.steps += 1
         if self.steps % self.log_every == 0:
             per_step_ms = 1000.0 / self.log_every
@@ -113,6 +136,26 @@ class PipelineDecodeTimings:
             self.recv_seconds = 0.0
             self.send_seconds = 0.0
             self.gather_seconds = 0.0
+
+    def drain_sample(self) -> DecodeTimingSample | None:
+        """Average per-token timings since the last drain, then reset.
+
+        Returns None when no decode steps were recorded, e.g. tensor
+        sharding, single-node instances, or an idle engine.
+        """
+        if self._drain_steps == 0:
+            return None
+        sample = DecodeTimingSample(
+            compute_ms_per_token=1000.0 * self._drain_compute_seconds
+            / self._drain_steps,
+            communication_ms_per_token=1000.0 * self._drain_communication_seconds
+            / self._drain_steps,
+            tokens_measured=self._drain_steps,
+        )
+        self._drain_compute_seconds = 0.0
+        self._drain_communication_seconds = 0.0
+        self._drain_steps = 0
+        return sample
 
 
 decode_timings = PipelineDecodeTimings()
@@ -232,6 +275,8 @@ class PipelineFirstLayer(CustomMlxLayer):
                 mx.eval(x)
             if not self.is_prefill:
                 decode_timings.record_recv(time.perf_counter() - recv_start)
+        if not self.is_prefill:
+            decode_timings.mark_forward_start()
         return self.original_layer(x, *args, **kwargs)
 
 
@@ -262,6 +307,12 @@ class PipelineLastLayer(CustomMlxLayer):
         # Eval layer output to materialize it before send — this splits the graph
         # so the send is isolated and the receiving rank's recv can complete.
         mx.eval(output)
+
+        if not self.is_prefill:
+            # The eval above forces the whole local shard's forward graph, so
+            # the elapsed time since the first layer's mark is this stage's
+            # per-token compute cost.
+            decode_timings.record_forward_end()
 
         if self.r != self.s - 1:
             send_start = time.perf_counter()

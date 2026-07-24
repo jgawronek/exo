@@ -12,6 +12,7 @@ from exo.shared.types.profiling import (
     NetworkInterfaceInfo,
     NodeIdentity,
     NodeNetworkInfo,
+    StageTiming,
 )
 from exo.shared.types.topology import Cycle, RDMAConnection, SocketConnection
 from exo.shared.types.worker.runners import RunnerId, ShardAssignments
@@ -231,6 +232,63 @@ def allocate_layers_proportionally(
             result[i] = 1
 
     return result
+
+
+def allocate_layers_by_measured_speed(
+    model_card: ModelCard,
+    node_ids: list[NodeId],
+    node_memory: Mapping[NodeId, MemoryUsage],
+    current_layers: Mapping[NodeId, int],
+    stage_timings: Mapping[NodeId, StageTiming],
+) -> dict[NodeId, int]:
+    """Re-split pipeline layers using measured per-stage decode timings.
+
+    Pipeline decode latency is the sum of every stage's compute time, so the
+    split that equalises measured stage times gives each node layers in
+    proportion to its measured compute rate (layers per millisecond of
+    decode). Memory caps treat each node's share of the currently loaded
+    instance as reclaimable, because rebalancing relaunches the instance.
+
+    Raises ValueError when a node has no measured timing yet or the
+    allocation is impossible; handled by the API rebalance endpoint, which
+    surfaces it as HTTP 400.
+    """
+    layer_rates: list[float] = []
+    for node_id in node_ids:
+        timing = stage_timings.get(node_id)
+        if timing is None:
+            raise ValueError(
+                f"No measured decode timing for node {node_id}; "
+                "complete at least one generation before rebalancing"
+            )
+        if timing.layers_held < 1 or timing.compute_ms_per_token <= 0.0:
+            raise ValueError(
+                f"Measured decode timing for node {node_id} is unusable "
+                f"(layers_held={timing.layers_held}, "
+                f"compute_ms_per_token={timing.compute_ms_per_token})"
+            )
+        layer_rates.append(timing.layers_held / timing.compute_ms_per_token)
+
+    total_rate = sum(layer_rates)
+    speed_fractions = [rate / total_rate for rate in layer_rates]
+
+    max_layers_per_node: list[int] = []
+    for node_id in node_ids:
+        reclaimable = (
+            model_card.storage_size * current_layers.get(node_id, 0)
+        ) // model_card.n_layers
+        usable = node_memory[node_id].ram_available + reclaimable
+        max_layers_per_node.append(
+            (usable.in_bytes * model_card.n_layers)
+            // model_card.storage_size.in_bytes
+        )
+
+    allocations = allocate_layers_proportionally(
+        total_layers=model_card.n_layers,
+        memory_fractions=speed_fractions,
+        max_layers_per_node=max_layers_per_node,
+    )
+    return dict(zip(node_ids, allocations, strict=True))
 
 
 def _validate_cycle(cycle: Cycle) -> None:

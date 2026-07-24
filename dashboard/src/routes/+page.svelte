@@ -29,6 +29,7 @@
     lastUpdate,
     clearChat,
     instances,
+    instanceStageTimings,
     runners,
     downloads,
     placementPreviews,
@@ -2101,6 +2102,104 @@
       nodeIds,
       nodeCount: nodeIds.length,
     };
+  }
+
+  interface StageTimingRow {
+    nodeId: string;
+    nodeName: string;
+    layers: number;
+    computeMs: number;
+    communicationMs: number;
+  }
+
+  // Measured per-node decode timings for an instance, in pipeline order.
+  function getInstanceStageTimingRows(
+    instanceId: string,
+    instanceWrapped: unknown,
+  ): StageTimingRow[] {
+    const timings = instanceStageTimings()[instanceId];
+    if (!timings) return [];
+    const [, instance] = getTagged(instanceWrapped);
+    if (!instance || typeof instance !== "object") return [];
+    const inst = instance as {
+      shardAssignments?: {
+        nodeToRunner?: Record<string, string>;
+        runnerToShard?: Record<string, unknown>;
+      };
+    };
+    const nodeToRunner = inst.shardAssignments?.nodeToRunner || {};
+    const runnerToShard = inst.shardAssignments?.runnerToShard || {};
+    const rows: Array<StageTimingRow & { rank: number }> = [];
+    for (const [nodeId, runnerId] of Object.entries(nodeToRunner)) {
+      const timing = timings[nodeId];
+      if (!timing) continue;
+      const [, shard] = getTagged(runnerToShard[runnerId]);
+      const shardInfo = (shard ?? {}) as { deviceRank?: number };
+      const node = data?.nodes?.[nodeId];
+      rows.push({
+        nodeId,
+        nodeName: node?.friendly_name || nodeId.slice(0, 8),
+        layers: timing.layersHeld,
+        computeMs: timing.computeMsPerToken,
+        communicationMs: timing.communicationMsPerToken,
+        rank: shardInfo.deviceRank ?? 0,
+      });
+    }
+    rows.sort((a, b) => a.rank - b.rank);
+    return rows;
+  }
+
+  // Projected fraction of per-token compute time saved by rebalancing
+  // (0..1), or null when timings don't yet cover every node.
+  function getRebalanceProjectedGain(
+    instanceId: string,
+    instanceWrapped: unknown,
+  ): number | null {
+    const rows = getInstanceStageTimingRows(instanceId, instanceWrapped);
+    const info = getInstanceInfo(instanceWrapped);
+    if (rows.length < 2 || rows.length !== info.nodeCount) return null;
+    if (rows.some((row) => row.computeMs <= 0 || row.layers < 1)) return null;
+    // Decode latency is the sum of stage times. A rebalanced split gives
+    // every stage the same time: totalLayers / totalRate per stage.
+    const totalLayers = rows.reduce((sum, row) => sum + row.layers, 0);
+    const totalRate = rows.reduce(
+      (sum, row) => sum + row.layers / row.computeMs,
+      0,
+    );
+    const currentTotalMs = rows.reduce((sum, row) => sum + row.computeMs, 0);
+    const balancedTotalMs = (rows.length * totalLayers) / totalRate;
+    if (currentTotalMs <= 0) return null;
+    return Math.max(0, (currentTotalMs - balancedTotalMs) / currentTotalMs);
+  }
+
+  let rebalancingInstances = $state<Record<string, boolean>>({});
+
+  async function rebalanceInstance(instanceId: string) {
+    if (rebalancingInstances[instanceId]) return;
+    rebalancingInstances[instanceId] = true;
+    try {
+      const response = await fetch(`/instance/${instanceId}/rebalance`, {
+        method: "POST",
+      });
+      const result: { message?: string; detail?: string } | null =
+        await response.json().catch(() => null);
+      if (!response.ok) {
+        addToast({
+          type: "error",
+          message: result?.detail || "Failed to rebalance instance",
+        });
+      } else {
+        addToast({
+          type: "info",
+          message: result?.message || "Rebalance started",
+        });
+      }
+    } catch (error) {
+      console.error("Error rebalancing instance:", error);
+      addToast({ type: "error", message: "Failed to rebalance instance" });
+    } finally {
+      delete rebalancingInstances[instanceId];
+    }
   }
 
   // Compute instance statuses by modelId for the model picker
@@ -5117,6 +5216,14 @@
                   {@const instanceInfo = getInstanceInfo(instance)}
                   {@const instanceConnections =
                     getInstanceConnections(instance)}
+                  {@const stageTimingRows = getInstanceStageTimingRows(
+                    id,
+                    instance,
+                  )}
+                  {@const rebalanceGain = getRebalanceProjectedGain(
+                    id,
+                    instance,
+                  )}
                   <div
                     class="relative group cursor-pointer"
                     role="button"
@@ -5283,6 +5390,42 @@
                         {#if instanceInfo.nodeNames.length > 0}
                           <div class="text-white/60 text-xs font-mono">
                             {instanceInfo.nodeNames.join(", ")}
+                          </div>
+                        {/if}
+                        {#if stageTimingRows.length > 0}
+                          <div
+                            class="mt-2 space-y-0.5 border-t border-exo-medium-gray/30 pt-2"
+                          >
+                            {#each stageTimingRows as row (row.nodeId)}
+                              <div
+                                class="flex justify-between text-[11px] leading-snug font-mono text-white/70"
+                              >
+                                <span class="truncate pr-2"
+                                  >{row.nodeName} &middot; {row.layers}L</span
+                                >
+                                <span class="whitespace-nowrap"
+                                  >{row.computeMs.toFixed(1)}ms/tok</span
+                                >
+                              </div>
+                            {/each}
+                            <button
+                              onclick={(event) => {
+                                event.stopPropagation();
+                                rebalanceInstance(id);
+                              }}
+                              disabled={rebalancingInstances[id]}
+                              title="Relaunch this instance with layers split by measured per-node speed (a few seconds of downtime)"
+                              class="mt-1.5 text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
+                                null && rebalanceGain > 0.1
+                                ? 'border-exo-yellow/60 text-exo-yellow shadow-[0_0_8px_rgba(255,215,0,0.35)] hover:bg-exo-yellow/20'
+                                : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
+                            >
+                              {rebalancingInstances[id]
+                                ? "REBALANCING..."
+                                : rebalanceGain !== null && rebalanceGain > 0.1
+                                  ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
+                                  : "REBALANCE"}
+                            </button>
                           </div>
                         {/if}
                         {#if debugEnabled && instanceConnections.length > 0}
@@ -6253,6 +6396,14 @@
                     {@const instanceInfo = getInstanceInfo(instance)}
                     {@const instanceConnections =
                       getInstanceConnections(instance)}
+                    {@const stageTimingRows = getInstanceStageTimingRows(
+                      id,
+                      instance,
+                    )}
+                    {@const rebalanceGain = getRebalanceProjectedGain(
+                      id,
+                      instance,
+                    )}
                     <div
                       class="relative group cursor-pointer"
                       role="button"
@@ -6418,6 +6569,43 @@
                           {#if instanceInfo.nodeNames.length > 0}
                             <div class="text-white/60 text-xs font-mono">
                               {instanceInfo.nodeNames.join(", ")}
+                            </div>
+                          {/if}
+                          {#if stageTimingRows.length > 0}
+                            <div
+                              class="mt-2 space-y-0.5 border-t border-exo-medium-gray/30 pt-2"
+                            >
+                              {#each stageTimingRows as row (row.nodeId)}
+                                <div
+                                  class="flex justify-between text-[11px] leading-snug font-mono text-white/70"
+                                >
+                                  <span class="truncate pr-2"
+                                    >{row.nodeName} &middot; {row.layers}L</span
+                                  >
+                                  <span class="whitespace-nowrap"
+                                    >{row.computeMs.toFixed(1)}ms/tok</span
+                                  >
+                                </div>
+                              {/each}
+                              <button
+                                onclick={(event) => {
+                                  event.stopPropagation();
+                                  rebalanceInstance(id);
+                                }}
+                                disabled={rebalancingInstances[id]}
+                                title="Relaunch this instance with layers split by measured per-node speed (a few seconds of downtime)"
+                                class="mt-1.5 text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
+                                  null && rebalanceGain > 0.1
+                                  ? 'border-exo-yellow/60 text-exo-yellow shadow-[0_0_8px_rgba(255,215,0,0.35)] hover:bg-exo-yellow/20'
+                                  : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
+                              >
+                                {rebalancingInstances[id]
+                                  ? "REBALANCING..."
+                                  : rebalanceGain !== null &&
+                                      rebalanceGain > 0.1
+                                    ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
+                                    : "REBALANCE"}
+                              </button>
                             </div>
                           {/if}
                           {#if debugEnabled && instanceConnections.length > 0}

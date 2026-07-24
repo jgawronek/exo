@@ -8,6 +8,7 @@ from exo.shared.topology import Connection
 from exo.shared.types.chunks import Chunk, InputImageChunk
 from exo.shared.types.common import CommandId, Id, ModelId, NodeId, SessionId, SystemId
 from exo.shared.types.instance_link import InstanceLink, InstanceLinkId
+from exo.shared.types.profiling import StageTiming
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.worker.downloads import DownloadProgress
 from exo.shared.types.worker.instances import Instance, InstanceId
@@ -73,6 +74,14 @@ class InstanceDeleted(BaseEvent):
 class RunnerStatusUpdated(BaseEvent):
     runner_id: RunnerId
     runner_status: RunnerStatus
+
+
+class StageTimingsUpdated(BaseEvent):
+    """Measured decode timing for one node's pipeline stage of an instance."""
+
+    instance_id: InstanceId
+    node_id: NodeId
+    timing: StageTiming
 
 
 class NodeTimedOut(BaseEvent):
@@ -156,6 +165,7 @@ Event = (
     | InstanceCreated
     | InstanceDeleted
     | RunnerStatusUpdated
+    | StageTimingsUpdated
     | NodeTimedOut
     | NodeGatheredInfo
     | NodeDownloadProgress

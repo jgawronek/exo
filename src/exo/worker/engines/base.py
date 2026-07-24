@@ -3,6 +3,7 @@ from collections.abc import Generator, Iterable
 from typing import BinaryIO
 
 from exo.shared.types.chunks import Chunk
+from exo.shared.types.profiling import DecodeTimingSample
 from exo.shared.types.tasks import CANCEL_ALL_TASKS, GenerationTask, TaskId
 from exo.shared.types.worker.instances import BoundInstance
 from exo.shared.types.worker.runner_response import (
@@ -41,6 +42,14 @@ class Engine(ABC):
 
     @abstractmethod
     def serve_prefill(self, request: PrefillRequest, wfile: BinaryIO) -> None: ...
+
+    def poll_decode_timing(self) -> DecodeTimingSample | None:
+        """Drain per-stage decode timing averaged since the last poll.
+
+        Engines that do not measure pipeline stage timings (image engines,
+        tensor sharding, single-node instances) return None.
+        """
+        return None
 
 
 class Builder(ABC):

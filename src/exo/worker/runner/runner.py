@@ -14,9 +14,11 @@ from exo.shared.types.events import (
     ChunkGenerated,
     Event,
     RunnerStatusUpdated,
+    StageTimingsUpdated,
     TaskAcknowledged,
     TaskStatusUpdated,
 )
+from exo.shared.types.profiling import StageTiming
 from exo.shared.types.tasks import (
     ConnectToGroup,
     GenerationTask,
@@ -59,6 +61,10 @@ from exo.worker.runner.bootstrap import logger
 
 PREFILL_PICKUP_TIMEOUT_SECONDS = 3
 PREFILL_FINISH_TIMEOUT_SECONDS = 300
+
+# How many engine steps to wait between stage-timing publications while a
+# generation is running (each step is roughly one decode token).
+DECODE_TIMING_PUBLISH_INTERVAL_STEPS = 64
 
 
 @dataclass
@@ -121,6 +127,7 @@ class Runner:
         self._prefill_server_port: int | None = None
         self._work_queue: queue.Queue[WorkItem] = queue.Queue()
         self._task_reader_thread: threading.Thread | None = None
+        self._steps_since_timing_publish = 0
 
         logger.info("runner created")
         self.update_status(RunnerIdle())
@@ -355,6 +362,14 @@ class Runner:
             for task_id in finished:
                 self.active_tasks.pop(task_id, None)
 
+            self._steps_since_timing_publish += 1
+            if (
+                finished
+                or self._steps_since_timing_publish
+                >= DECODE_TIMING_PUBLISH_INTERVAL_STEPS
+            ):
+                self._publish_stage_timing()
+
             try:
                 item = self._work_queue.get_nowait()
             except queue.Empty:
@@ -392,3 +407,23 @@ class Runner:
     ):
         assert isinstance(self.generator, Engine)
         self.event_sender.send(ChunkGenerated(command_id=command_id, chunk=chunk))
+
+    def _publish_stage_timing(self) -> None:
+        self._steps_since_timing_publish = 0
+        assert isinstance(self.generator, Engine)
+        sample = self.generator.poll_decode_timing()
+        if sample is None:
+            return
+        self.event_sender.send(
+            StageTimingsUpdated(
+                instance_id=self.instance.instance_id,
+                node_id=self.bound_instance.bound_node_id,
+                timing=StageTiming(
+                    layers_held=self.shard_metadata.end_layer
+                    - self.shard_metadata.start_layer,
+                    compute_ms_per_token=sample.compute_ms_per_token,
+                    communication_ms_per_token=sample.communication_ms_per_token,
+                    tokens_measured=sample.tokens_measured,
+                ),
+            )
+        )

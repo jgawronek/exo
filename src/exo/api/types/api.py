@@ -308,6 +308,15 @@ class DeleteInstanceResponse(BaseModel):
     instance_id: InstanceId
 
 
+class RebalanceInstanceResponse(BaseModel):
+    message: str
+    instance_id: InstanceId
+    node_layers: dict[NodeId, int]
+    # PlaceInstance command id when a relaunch was triggered; None when the
+    # measured allocation already matches the current one.
+    command_id: CommandId | None = None
+
+
 class AwaitInstanceReadyMessage(BaseModel):
     type: Literal["ready"] = "ready"
     instance: Instance

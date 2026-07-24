@@ -21,6 +21,7 @@ from exo.shared.types.events import (
     NodeGatheredInfo,
     NodeTimedOut,
     RunnerStatusUpdated,
+    StageTimingsUpdated,
     TaskAcknowledged,
     TaskCreated,
     TaskDeleted,
@@ -38,6 +39,7 @@ from exo.shared.types.profiling import (
     NodeNetworkInfo,
     NodeRdmaCtlStatus,
     NodeThunderboltInfo,
+    StageTiming,
     ThunderboltBridgeStatus,
 )
 from exo.shared.types.state import State
@@ -107,6 +109,8 @@ def event_apply(event: Event, state: State) -> State:
             return apply_node_gathered_info(event, state)
         case RunnerStatusUpdated():
             return apply_runner_status_updated(event, state)
+        case StageTimingsUpdated():
+            return apply_stage_timings_updated(event, state)
         case TaskCreated():
             return apply_task_created(event, state)
         case TaskDeleted():
@@ -236,9 +240,33 @@ def apply_instance_deleted(event: InstanceDeleted, state: State) -> State:
             new_links[link_id] = link.model_copy(
                 update={"prefill_instances": prefill, "decode_instances": decode}
             )
+    new_stage_timings: Mapping[InstanceId, Mapping[NodeId, StageTiming]] = {
+        iid: timings
+        for iid, timings in state.instance_stage_timings.items()
+        if iid != event.instance_id
+    }
     return state.model_copy(
-        update={"instances": new_instances, "instance_links": new_links}
+        update={
+            "instances": new_instances,
+            "instance_links": new_links,
+            "instance_stage_timings": new_stage_timings,
+        }
     )
+
+
+def apply_stage_timings_updated(event: StageTimingsUpdated, state: State) -> State:
+    if event.instance_id not in state.instances:
+        # Stale timing from a runner whose instance was already deleted.
+        return state
+    instance_timings: Mapping[NodeId, StageTiming] = {
+        **state.instance_stage_timings.get(event.instance_id, {}),
+        event.node_id: event.timing,
+    }
+    new_stage_timings: Mapping[InstanceId, Mapping[NodeId, StageTiming]] = {
+        **state.instance_stage_timings,
+        event.instance_id: instance_timings,
+    }
+    return state.model_copy(update={"instance_stage_timings": new_stage_timings})
 
 
 def apply_instance_link_created(event: InstanceLinkCreated, state: State) -> State:

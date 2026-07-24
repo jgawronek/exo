@@ -3,7 +3,7 @@ import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Final, Literal, Self
+from typing import Final, Literal, Self, final
 
 import psutil
 
@@ -215,3 +215,22 @@ class ThunderboltBridgeStatus(FrozenModel):
     enabled: bool
     exists: bool
     service_name: str | None = None
+
+
+@final
+class DecodeTimingSample(FrozenModel):
+    """Average decode timings drained from an engine since the last poll."""
+
+    compute_ms_per_token: float
+    communication_ms_per_token: float
+    tokens_measured: int
+
+
+@final
+class StageTiming(FrozenModel):
+    """Measured decode timing for one node's pipeline stage of an instance."""
+
+    layers_held: int
+    compute_ms_per_token: float
+    communication_ms_per_token: float
+    tokens_measured: int

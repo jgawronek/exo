@@ -80,6 +80,13 @@ export interface RawInstanceLink {
   decodeInstances: string[];
 }
 
+export interface StageTiming {
+  layersHeld: number;
+  computeMsPerToken: number;
+  communicationMsPerToken: number;
+  tokensMeasured: number;
+}
+
 // Granular node state types from the new state structure
 interface RawNodeIdentity {
   modelId?: string;
@@ -230,6 +237,7 @@ interface RawStateResponse {
   >;
   runners?: Record<string, unknown>;
   instanceLinks?: Record<string, RawInstanceLink>;
+  instanceStageTimings?: Record<string, Record<string, StageTiming>>;
   downloads?: Record<string, unknown[]>;
   // New granular node state fields
   nodeIdentities?: Record<string, RawNodeIdentity>;
@@ -549,6 +557,9 @@ class AppStore {
   instances = $state<Record<string, unknown>>({});
   runners = $state<Record<string, unknown>>({});
   instanceLinks = $state<Record<string, RawInstanceLink>>({});
+  instanceStageTimings = $state<Record<string, Record<string, StageTiming>>>(
+    {},
+  );
   featureFlags = $state<Record<string, boolean>>({});
   downloads = $state<Record<string, unknown[]>>({});
   nodeDisk = $state<
@@ -1335,6 +1346,7 @@ class AppStore {
       } else {
         this.instanceLinks = {};
       }
+      this.instanceStageTimings = data.instanceStageTimings ?? {};
       if (data.downloads) {
         this.downloads = data.downloads;
       }
@@ -3491,6 +3503,7 @@ export const topologyData = () => appStore.topologyData;
 export const instances = () => appStore.instances;
 export const runners = () => appStore.runners;
 export const instanceLinks = () => appStore.instanceLinks;
+export const instanceStageTimings = () => appStore.instanceStageTimings;
 export const featureFlags = () => appStore.featureFlags;
 export const createInstanceLink = (
   prefillInstances: string[],

@@ -12,6 +12,7 @@ from exo.shared.constants import EXO_MAX_CONCURRENT_REQUESTS
 from exo.shared.types.chunks import ErrorChunk, GenerationChunk, PrefillProgressChunk
 from exo.shared.types.common import ModelId
 from exo.shared.types.events import ChunkGenerated, Event
+from exo.shared.types.profiling import DecodeTimingSample
 from exo.shared.types.tasks import (
     CANCEL_ALL_TASKS,
     GenerationTask,
@@ -27,6 +28,7 @@ from exo.shared.types.worker.runner_response import (
 from exo.utils.channels import MpReceiver, MpSender
 from exo.worker.disaggregated.server import PrefillRequest
 from exo.worker.engines.base import Engine
+from exo.worker.engines.mlx.auto_parallel import decode_timings
 from exo.worker.engines.mlx.cache import KVPrefixCache
 from exo.worker.engines.mlx.disaggregated.adapter import write_cache_to_wire
 from exo.worker.engines.mlx.disaggregated.serve import run_prefill_for_request
@@ -313,6 +315,9 @@ class SequentialGenerator(Engine):
     def close(self) -> None:
         del self.model, self.tokenizer, self.group
 
+    def poll_decode_timing(self) -> DecodeTimingSample | None:
+        return decode_timings.drain_sample()
+
     def serve_prefill(self, request: PrefillRequest, wfile: BinaryIO) -> None:
         cache = run_prefill_for_request(
             model=self.model,
@@ -596,6 +601,9 @@ class BatchGenerator(Engine):
     def close(self) -> None:
         self._gen.close()
         del self.model, self.tokenizer, self.group
+
+    def poll_decode_timing(self) -> DecodeTimingSample | None:
+        return decode_timings.drain_sample()
 
     def serve_prefill(self, request: PrefillRequest, wfile: BinaryIO) -> None:
         cache = run_prefill_for_request(
