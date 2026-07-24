@@ -2,7 +2,7 @@ use std::{
     io,
     net::{Ipv6Addr, SocketAddr, SocketAddrV6},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -18,6 +18,12 @@ use zenoh::config::ZenohId;
 const GROUP: Ipv6Addr = Ipv6Addr::new(0xff12, 0, 0, 0, 0, 0, 0xe0a1, 0xde89);
 const MAGIC: [u8; 3] = *b"EXO";
 
+/// A multicast join can die silently (an MLD report lost while an interface
+/// was still settling after boot/restart), leaving the node deaf to peers
+/// with no error surfaced. If nothing has been heard from any other exo node
+/// for this long, leave and rejoin the group on every interface.
+const MULTICAST_REJOIN_QUIET_PERIOD: Duration = Duration::from_secs(30);
+
 pub struct Discovery {
     sock: Arc<UdpSocket>,
     ifaces: Arc<Mutex<Vec<SocketAddrV6>>>,
@@ -25,8 +31,11 @@ pub struct Discovery {
     last_nonce: Mutex<[u8; 8]>,
     /// the port of the service we are doing discovery for - transmitted to peers
     listen_port: u16,
+    discovery_port: u16,
     zid: ZenohId,
     tick: Interval,
+    last_peer_datagram: Mutex<Instant>,
+    last_multicast_rejoin: Mutex<Instant>,
     _sync: Mutex<WatchHandle>,
 }
 
@@ -111,8 +120,11 @@ impl Discovery {
             ifaces,
             last_nonce: Mutex::new(rand::random()),
             listen_port,
+            discovery_port,
             zid,
             tick: interval(Duration::from_secs(1)),
+            last_peer_datagram: Mutex::new(Instant::now()),
+            last_multicast_rejoin: Mutex::new(Instant::now()),
             _sync,
         })
     }
@@ -122,6 +134,7 @@ impl Discovery {
         loop {
             tokio::select! {
                 _ = self.tick.tick() => {
+                    self.rejoin_multicast_if_quiet();
                     self.announce().await?;
                 }
                 res = self.sock.recv_from(&mut buf) => {
@@ -131,6 +144,54 @@ impl Discovery {
                     }
                 }
             }
+        }
+    }
+
+    /// Watchdog for a silently dead receive path: when no datagram from
+    /// another exo node has arrived for MULTICAST_REJOIN_QUIET_PERIOD,
+    /// re-issue the multicast group join on every interface and refresh the
+    /// announce address list (which also restores interfaces dropped by a
+    /// transient HostUnreachable in `announce`). Harmlessly periodic on a
+    /// genuinely solo node.
+    fn rejoin_multicast_if_quiet(&self) {
+        if self.last_peer_datagram.lock().elapsed() < MULTICAST_REJOIN_QUIET_PERIOD
+            || self.last_multicast_rejoin.lock().elapsed() < MULTICAST_REJOIN_QUIET_PERIOD
+        {
+            return;
+        }
+        *self.last_multicast_rejoin.lock() = Instant::now();
+
+        let interfaces = match netwatcher::list_interfaces() {
+            Ok(interfaces) => interfaces,
+            Err(e) => {
+                warn!("multicast rejoin: failed to list interfaces: {e:?}");
+                return;
+            }
+        };
+        let mut refreshed: Vec<SocketAddrV6> = Vec::new();
+        for (iface_idx, iface) in interfaces.iter() {
+            if iface
+                .ipv6_ips()
+                .all(|addr| addr.is_loopback() || addr.is_unspecified())
+            {
+                continue;
+            }
+            // Leave first so the join below always sends a fresh MLD report
+            // instead of short-circuiting on AddrInUse.
+            _ = self.sock.leave_multicast_v6(&GROUP, *iface_idx);
+            match self.sock.join_multicast_v6(&GROUP, *iface_idx) {
+                Ok(()) => {
+                    refreshed.push(SocketAddrV6::new(GROUP, self.discovery_port, 0, *iface_idx))
+                }
+                Err(e) => warn!("multicast rejoin failed for interface {}: {e}", iface.name),
+            }
+        }
+        debug!(
+            "no peer datagrams for {MULTICAST_REJOIN_QUIET_PERIOD:?}; rejoined multicast on {} interface(s)",
+            refreshed.len()
+        );
+        if !refreshed.is_empty() {
+            *self.ifaces.lock() = refreshed;
         }
     }
 
@@ -169,6 +230,9 @@ impl Discovery {
                     trace!("dropped: local hello nonce");
                     return Ok(None);
                 }
+                // Any hello that is not our own loopback proves the receive
+                // path is alive, regardless of namespace.
+                *self.last_peer_datagram.lock() = Instant::now();
                 if hello.namespace != self.namespace {
                     trace!("dropped: different namespace");
                     return Ok(None);
@@ -203,6 +267,9 @@ impl Discovery {
                 Ok(None)
             }
             Kind::WhatsUp => {
+                // WhatsUp is only ever sent by other nodes (unicast replies
+                // to our hellos), so any arrival counts as peer activity.
+                *self.last_peer_datagram.lock() = Instant::now();
                 let total = WhatsUp::buf_size();
                 if bytes_read != total {
                     trace!("dropped: whatsup wrong size");
