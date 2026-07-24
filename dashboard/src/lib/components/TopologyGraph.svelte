@@ -1384,6 +1384,9 @@
         });
       }
 
+      // Bottom of stacked under-node labels; debug network lines start below this.
+      let belowContentY = nodeInfo.y + iconBaseHeight / 2 + 16;
+
       // Labels - adapt based on mode
       if (showFullLabels) {
         // FULL MODE: Name above, memory info below (1-4 nodes)
@@ -1434,6 +1437,7 @@
 
         // Memory info below - used in grey, total in yellow
         const infoY = nodeInfo.y + iconBaseHeight / 2 + 16;
+        let labelStackY = infoY;
         const memText = nodeG
           .append("text")
           .attr("x", nodeInfo.x)
@@ -1456,10 +1460,11 @@
 
         const layerLabel = nodeLayerLabels[nodeInfo.id];
         if (layerLabel) {
+          labelStackY = infoY + fontSize * 1.15;
           nodeG
             .append("text")
             .attr("x", nodeInfo.x)
-            .attr("y", infoY + fontSize * 1.15)
+            .attr("y", labelStackY)
             .attr("text-anchor", "middle")
             .attr("fill", "rgba(0,255,170,0.85)")
             .attr("font-size", fontSize * 0.8)
@@ -1467,10 +1472,11 @@
             .text(layerLabel);
           const efficiency = nodeEfficiencyLabels[nodeInfo.id];
           if (efficiency) {
+            labelStackY = infoY + fontSize * 2.25;
             nodeG
               .append("text")
               .attr("x", nodeInfo.x)
-              .attr("y", infoY + fontSize * 2.25)
+              .attr("y", labelStackY)
               .attr("text-anchor", "middle")
               .attr("fill", efficiency.color)
               .attr("font-size", fontSize * 0.75)
@@ -1478,6 +1484,7 @@
               .text(efficiency.text);
           }
         }
+        belowContentY = labelStackY;
       } else if (showCompactLabels) {
         // COMPACT MODE: Just name and basic info (4+ nodes)
         const fontSize = Math.max(7, nodeRadius * 0.11);
@@ -1515,6 +1522,7 @@
 
         // Single line of key stats
         const statsY = nodeTypeY + 9;
+        let labelStackY = statsY;
         nodeG
           .append("text")
           .attr("x", nodeInfo.x)
@@ -1529,10 +1537,11 @@
 
         const layerLabelCompact = nodeLayerLabels[nodeInfo.id];
         if (layerLabelCompact) {
+          labelStackY = statsY + 9;
           nodeG
             .append("text")
             .attr("x", nodeInfo.x)
-            .attr("y", statsY + 9)
+            .attr("y", labelStackY)
             .attr("text-anchor", "middle")
             .attr("fill", "rgba(0,255,170,0.85)")
             .attr("font-size", fontSize * 0.85)
@@ -1540,10 +1549,11 @@
             .text(layerLabelCompact);
           const efficiencyCompact = nodeEfficiencyLabels[nodeInfo.id];
           if (efficiencyCompact) {
+            labelStackY = statsY + 18;
             nodeG
               .append("text")
               .attr("x", nodeInfo.x)
-              .attr("y", statsY + 18)
+              .attr("y", labelStackY)
               .attr("text-anchor", "middle")
               .attr("fill", efficiencyCompact.color)
               .attr("font-size", fontSize * 0.8)
@@ -1551,6 +1561,7 @@
               .text(efficiencyCompact.text);
           }
         }
+        belowContentY = labelStackY;
       } else {
         // MINIMIZED MODE: Show name above and memory info below (like main topology)
         const fontSize = 8;
@@ -1589,6 +1600,7 @@
 
         // Memory info below icon - used in grey, total in yellow (same as main topology)
         const infoY = nodeInfo.y + iconBaseHeight / 2 + 10;
+        let labelStackY = infoY;
         const memTextMini = nodeG
           .append("text")
           .attr("x", nodeInfo.x)
@@ -1611,10 +1623,11 @@
 
         const layerLabelMini = nodeLayerLabels[nodeInfo.id];
         if (layerLabelMini) {
+          labelStackY = infoY + 9;
           nodeG
             .append("text")
             .attr("x", nodeInfo.x)
-            .attr("y", infoY + 9)
+            .attr("y", labelStackY)
             .attr("text-anchor", "middle")
             .attr("fill", "rgba(0,255,170,0.85)")
             .attr("font-size", fontSize * 0.8)
@@ -1622,10 +1635,11 @@
             .text(layerLabelMini);
           const efficiencyMini = nodeEfficiencyLabels[nodeInfo.id];
           if (efficiencyMini) {
+            labelStackY = infoY + 17;
             nodeG
               .append("text")
               .attr("x", nodeInfo.x)
-              .attr("y", infoY + 17)
+              .attr("y", labelStackY)
               .attr("text-anchor", "middle")
               .attr("fill", efficiencyMini.color)
               .attr("font-size", fontSize * 0.75)
@@ -1633,16 +1647,14 @@
               .text(efficiencyMini.text);
           }
         }
+        belowContentY = labelStackY;
       }
 
-      // Debug mode: Show TB bridge and RDMA status
+      // Debug mode: Show TB bridge and RDMA status under existing node text
       if (debugEnabled) {
-        let debugLabelY =
-          nodeInfo.y +
-          iconBaseHeight / 2 +
-          (showFullLabels ? 32 : showCompactLabels ? 26 : 22);
         const debugFontSize = showFullLabels ? 9 : 7;
         const debugLineHeight = showFullLabels ? 11 : 9;
+        let debugLabelY = belowContentY + debugLineHeight + 2;
 
         const tbStatus = tbBridgeData[nodeInfo.id];
         if (tbStatus) {
@@ -1681,6 +1693,14 @@
         }
 
         if (identity?.osVersion) {
+          const osVersion = identity.osVersion.trim();
+          const looksLikeMacOs = /^(\d+[._]\d+|macos)/i.test(osVersion);
+          const osLabel = looksLikeMacOs
+            ? `macOS ${osVersion.replace(/^macos\s*/i, "")}`
+            : osVersion;
+          const buildSuffix = identity.osBuildVersion
+            ? ` (${identity.osBuildVersion})`
+            : "";
           nodeG
             .append("text")
             .attr("x", nodeInfo.x)
@@ -1689,9 +1709,7 @@
             .attr("fill", "rgba(179,179,179,0.7)")
             .attr("font-size", debugFontSize)
             .attr("font-family", "SF Mono, Monaco, monospace")
-            .text(
-              `macOS ${identity.osVersion}${identity.osBuildVersion ? ` (${identity.osBuildVersion})` : ""}`,
-            );
+            .text(`${osLabel}${buildSuffix}`);
         }
       }
     });
