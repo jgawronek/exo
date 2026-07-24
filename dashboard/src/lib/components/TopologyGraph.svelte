@@ -922,6 +922,39 @@
           .attr("fill", fillColor)
           .attr("stroke", wireColor)
           .attr("stroke-width", strokeWidth);
+
+        // Memory fill (fills from bottom up), clipped to the hexagon
+        if (ramUsagePercent > 0) {
+          const hexClipId = `hex-clip-${nodeInfo.id.replace(/[^a-zA-Z0-9]/g, "-")}`;
+          defs
+            .append("clipPath")
+            .attr("id", hexClipId)
+            .append("polygon")
+            .attr("points", hexPoints);
+
+          const memFillTotalHeight = hexRadius * 2;
+          const memFillActualHeight =
+            (ramUsagePercent / 100) * memFillTotalHeight;
+          nodeG
+            .append("rect")
+            .attr("x", nodeInfo.x - hexRadius)
+            .attr(
+              "y",
+              nodeInfo.y + hexRadius - memFillActualHeight,
+            )
+            .attr("width", hexRadius * 2)
+            .attr("height", memFillActualHeight)
+            .attr("fill", "rgba(255,215,0,0.75)")
+            .attr("clip-path", `url(#${hexClipId})`);
+
+          // Redraw the outline so the fill doesn't blur the wireframe edge
+          nodeG
+            .append("polygon")
+            .attr("points", hexPoints)
+            .attr("fill", "none")
+            .attr("stroke", wireColor)
+            .attr("stroke-width", strokeWidth);
+        }
       }
 
       // --- Vertical GPU Bar (right side of icon) ---
