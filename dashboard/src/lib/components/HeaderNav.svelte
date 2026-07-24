@@ -145,7 +145,7 @@
   <!-- Persistent top-left wordmark (clickable to go home) -->
   <button
     onclick={handleHome}
-    class="order-1 bg-transparent border-none outline-none focus:outline-none transition-opacity duration-200 hover:opacity-90 {showHome
+    class="order-1 flex flex-col items-center gap-0.5 bg-transparent border-none outline-none focus:outline-none transition-opacity duration-200 hover:opacity-90 {showHome
       ? 'cursor-pointer'
       : 'cursor-default'}"
     title={showHome ? "Go to home" : ""}
@@ -156,6 +156,11 @@
       alt="XEO"
       class="h-7 md:h-10 drop-shadow-[0_0_4px_oklch(0.78_0.17_145/0.3)]"
     />
+    <span
+      class="text-[9px] md:text-[10px] font-mono tracking-[0.28em] uppercase text-xeo-green/70 leading-none"
+    >
+      Beta
+    </span>
   </button>
 
   <!-- Right: Library + Mobile Right Toggle -->

@@ -3802,22 +3802,29 @@
   <button
     type="button"
     onclick={toggleDebugMode}
-    class="absolute top-4 right-4 z-20 p-2.5 rounded-lg border bg-xeo-black/70 backdrop-blur-sm transition-all cursor-pointer {debugEnabled
-      ? 'border-xeo-green/80 shadow-[0_0_10px_oklch(0.78_0.17_145/0.3)]'
-      : 'border-xeo-medium-gray/50 hover:border-xeo-green/50'}"
-    title="Toggle debug mode"
-    aria-label="Toggle debug mode"
+    class="group absolute left-4 top-1/2 -translate-y-1/2 z-20 p-2.5 rounded-lg border backdrop-blur-sm transition-all cursor-pointer {debugEnabled
+      ? 'border-xeo-green/80 bg-xeo-black/80 shadow-[0_0_10px_oklch(0.78_0.17_145/0.3)]'
+      : 'border-white/35 bg-xeo-black/85 hover:border-xeo-green/60 hover:bg-xeo-black/95'}"
+    title="Toggle network debug"
+    aria-label="Toggle network debug"
     aria-pressed={debugEnabled}
   >
     <svg
-      class="w-5 h-5 {debugEnabled ? 'text-xeo-green' : 'text-xeo-medium-gray'}"
-      fill="currentColor"
+      class="w-5 h-5 transition-colors {debugEnabled
+        ? 'text-xeo-green'
+        : 'text-white/80 group-hover:text-white'}"
+      fill="none"
       viewBox="0 0 24 24"
+      stroke="currentColor"
+      stroke-width="1.75"
+      stroke-linecap="round"
+      stroke-linejoin="round"
       aria-hidden="true"
     >
-      <path
-        d="M19 8h-1.81A6.002 6.002 0 0 0 12 2a6.002 6.002 0 0 0-5.19 3H5a1 1 0 0 0 0 2h1v2H5a1 1 0 0 0 0 2h1v2H5a1 1 0 0 0 0 2h1.81A6.002 6.002 0 0 0 12 22a6.002 6.002 0 0 0 5.19-3H19a1 1 0 0 0 0-2h-1v-2h1a1 1 0 0 0 0-2h-1v-2h1a1 1 0 1 0 0-2Zm-5 10.32V19a1 1 0 1 1-2 0v-.68a3.999 3.999 0 0 1-3-3.83V9.32a3.999 3.999 0 0 1 3-3.83V5a1 1 0 0 1 2 0v.49a3.999 3.999 0 0 1 3 3.83v5.17a3.999 3.999 0 0 1-3 3.83Z"
-      />
+      <circle cx="12" cy="5" r="2.25" />
+      <circle cx="5" cy="19" r="2.25" />
+      <circle cx="19" cy="19" r="2.25" />
+      <path d="M12 7.25v3.25M12 10.5 6.75 16.75M12 10.5l5.25 6.25" />
     </svg>
   </button>
 {/snippet}
