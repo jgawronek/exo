@@ -22,6 +22,8 @@
     showHelperText?: boolean;
     autofocus?: boolean;
     showModelSelector?: boolean;
+    /** Grey out and block the whole chat panel (e.g. no instance selected). */
+    disabled?: boolean;
     modelTasks?: Record<string, string[]>;
     modelCapabilities?: Record<string, string[]>;
     onSend?: () => void;
@@ -35,7 +37,6 @@
         preview?: string;
       }[],
     ) => void;
-    onOpenModelPicker?: () => void;
     modelDisplayOverride?: string;
   }
 
@@ -45,11 +46,11 @@
     showHelperText = false,
     autofocus = true,
     showModelSelector = false,
+    disabled = false,
     modelTasks = {},
     modelCapabilities = {},
     onSend,
     onAutoSend,
-    onOpenModelPicker,
     modelDisplayOverride,
   }: Props = $props();
 
@@ -203,6 +204,7 @@
   }
 
   function handleSubmit() {
+    if (disabled) return;
     if ((!message.trim() && uploadedFiles.length === 0) || loading) return;
     if (isEditOnlyWithoutImage) return;
 
@@ -254,7 +256,11 @@
   });
 
   const canSend = $derived(
-    message.trim().length > 0 || uploadedFiles.length > 0,
+    !disabled && (message.trim().length > 0 || uploadedFiles.length > 0),
+  );
+
+  const resolvedPlaceholder = $derived(
+    disabled ? "Select an instance to start chatting" : placeholder,
   );
 </script>
 
@@ -279,9 +285,12 @@
   ondrop={handleDrop}
 >
   <div
-    class="relative command-panel rounded overflow-hidden transition-all duration-200 {isDragOver
+    class="relative command-panel rounded overflow-hidden transition-all duration-200 {disabled
+      ? 'opacity-45 pointer-events-none grayscale-[0.35]'
+      : ''} {isDragOver && !disabled
       ? 'ring-2 ring-xeo-green ring-opacity-50'
       : ''}"
+    aria-disabled={disabled}
   >
     <!-- Top accent line -->
     <div
@@ -325,51 +334,30 @@
       </div>
     {/if}
 
-    <!-- Model selector (when enabled) -->
+    <!-- Selected instance model label (when enabled) -->
     {#if showModelSelector}
       <div
         class="flex items-center justify-between gap-2 px-3 py-2 border-b border-xeo-medium-gray/30"
       >
-        <div class="flex items-center gap-2 flex-1">
+        <div class="flex items-center gap-2 flex-1 min-w-0">
           <span
             class="text-xs text-xeo-light-gray uppercase tracking-wider flex-shrink-0"
             >MODEL:</span
           >
-          <!-- Model button — opens the full model picker -->
-          <div class="relative flex-1 max-w-xs">
-            <button
-              type="button"
-              onclick={() => onOpenModelPicker?.()}
-              class="w-full bg-xeo-medium-gray/50 border border-xeo-green/30 rounded pl-3 pr-8 py-1.5 text-xs font-mono text-left tracking-wide cursor-pointer transition-all duration-200 hover:border-xeo-green/50 focus:outline-none focus:border-xeo-green/70"
+          {#if currentModelLabel}
+            <span
+              class="text-xs font-mono text-xeo-green truncate tracking-wide"
+              title={currentModel || modelDisplayOverride || currentModelLabel}
+              >{currentModelLabel}</span
             >
-              {#if currentModelLabel}
-                <span class="text-xeo-green truncate">{currentModelLabel}</span
-                >
-              {:else}
-                <span class="text-xeo-light-gray/50">— SELECT MODEL —</span>
-              {/if}
-            </button>
-            <div
-              class="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
+          {:else}
+            <span class="text-xs font-mono text-xeo-light-gray/45 tracking-wide"
+              >— NO INSTANCE SELECTED —</span
             >
-              <svg
-                class="w-3 h-3 text-xeo-green/60"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M19 9l-7 7-7-7"
-                />
-              </svg>
-            </div>
-          </div>
+          {/if}
         </div>
         <!-- Thinking toggle -->
-        {#if modelSupportsThinking()}
+        {#if !disabled && modelSupportsThinking()}
           <button
             type="button"
             onclick={() => setConversationThinking(!thinkingEnabled)}
@@ -398,7 +386,7 @@
         {/if}
 
         <!-- Performance stats -->
-        {#if currentTtft !== null || currentTps !== null}
+        {#if !disabled && (currentTtft !== null || currentTps !== null)}
           <div class="flex items-center gap-4 text-xs font-mono flex-shrink-0">
             {#if currentTtft !== null}
               <span class="text-xeo-light-gray">
@@ -439,7 +427,7 @@
       <button
         type="button"
         onclick={openFilePicker}
-        disabled={loading}
+        disabled={loading || disabled}
         class="flex items-center justify-center w-7 h-7 rounded text-xeo-light-gray hover:text-xeo-green transition-all disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 cursor-pointer"
         title="Attach file"
       >
@@ -469,15 +457,18 @@
         onkeydown={handleKeydown}
         oninput={handleInput}
         onpaste={handlePaste}
-        placeholder={isEditOnlyWithoutImage
-          ? "Attach an image to edit..."
-          : isEditMode
-            ? "Describe how to edit this image..."
-            : isImageModel()
-              ? "Describe the image you want to generate..."
-              : placeholder}
+        disabled={disabled}
+        placeholder={disabled
+          ? resolvedPlaceholder
+          : isEditOnlyWithoutImage
+            ? "Attach an image to edit..."
+            : isEditMode
+              ? "Describe how to edit this image..."
+              : isImageModel()
+                ? "Describe the image you want to generate..."
+                : placeholder}
         rows={1}
-        class="flex-1 resize-none bg-transparent text-foreground placeholder:text-xeo-light-gray/60 placeholder:text-sm placeholder:tracking-[0.15em] placeholder:leading-7 focus:outline-none focus:ring-0 focus:border-none text-sm leading-7 font-mono"
+        class="flex-1 resize-none bg-transparent text-foreground placeholder:text-xeo-light-gray/60 placeholder:text-sm placeholder:tracking-[0.15em] placeholder:leading-7 focus:outline-none focus:ring-0 focus:border-none text-sm leading-7 font-mono disabled:cursor-not-allowed"
         style="min-height: 28px; max-height: 150px;"
       ></textarea>
 

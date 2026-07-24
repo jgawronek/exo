@@ -1066,7 +1066,12 @@
   }
 
   function selectInstance(instanceId: string, modelId: string | null): void {
-    selectedInstanceId = selectedInstanceId === instanceId ? null : instanceId;
+    if (selectedInstanceId === instanceId) {
+      selectedInstanceId = null;
+      setSelectedChatModel("");
+      return;
+    }
+    selectedInstanceId = instanceId;
     if (modelId && modelId !== "Unknown" && modelId !== "Unknown Model") {
       userForcedIdle = false;
       setSelectedChatModel(modelId);
@@ -1076,7 +1081,25 @@
   $effect(() => {
     if (selectedInstanceId && !instanceData[selectedInstanceId]) {
       selectedInstanceId = null;
+      setSelectedChatModel("");
     }
+  });
+
+  const selectedInstanceModelId = $derived.by(() => {
+    if (!selectedInstanceId) return null;
+    const wrapped = instanceData[selectedInstanceId];
+    if (!wrapped) return null;
+    const modelId = getInstanceModelId(wrapped);
+    if (!modelId || modelId === "Unknown" || modelId === "Unknown Model") {
+      return null;
+    }
+    return modelId;
+  });
+
+  /** Chat requires a selected running instance. */
+  const chatInputDisabled = $derived.by(() => {
+    const count = Object.keys(instanceData).length;
+    return count === 0 || selectedInstanceModelId === null;
   });
 
   // Compute highlighted nodes from hovered instance, selected instance, or preview
@@ -4979,9 +5002,10 @@
               autofocus={true}
               showHelperText={false}
               showModelSelector={true}
+              disabled={chatInputDisabled}
+              modelDisplayOverride={selectedInstanceModelId ?? undefined}
               modelTasks={modelTasks()}
               modelCapabilities={modelCapabilities()}
-              onOpenModelPicker={openChatModelPicker}
               onAutoSend={handleChatSend}
             />
           </div>
@@ -5436,22 +5460,23 @@
           <!-- Chat Input - Below topology, never overlaps -->
           <div class="px-4 pt-4 pb-6 flex-shrink-0">
             <div class="max-w-3xl mx-auto">
-              {#if instanceCount === 0}
+              {#if chatInputDisabled}
                 <div class="text-center mb-4">
                   <p class="text-sm text-white/50 font-sans">
-                    Select a model to get started.
+                    {instanceCount === 0
+                      ? "Create an instance to get started."
+                      : "Select an instance to start chatting."}
                   </p>
                 </div>
               {/if}
               <ChatForm
-                placeholder={instanceCount === 0
-                  ? "Choose a model to start chatting"
-                  : "Ask anything"}
+                placeholder="Ask anything"
                 showHelperText={false}
                 showModelSelector={true}
+                disabled={chatInputDisabled}
+                modelDisplayOverride={selectedInstanceModelId ?? undefined}
                 modelTasks={modelTasks()}
                 modelCapabilities={modelCapabilities()}
-                onOpenModelPicker={openChatModelPicker}
                 onAutoSend={handleChatSend}
               />
             </div>
@@ -6622,10 +6647,11 @@
                 <ChatForm
                   placeholder="Ask anything"
                   showModelSelector={true}
+                  disabled={chatInputDisabled}
+                  modelDisplayOverride={selectedInstanceModelId ?? undefined}
                   modelTasks={modelTasks()}
                   modelCapabilities={modelCapabilities()}
                   onAutoSend={handleChatSend}
-                  onOpenModelPicker={openChatModelPicker}
                 />
               </div>
             </div>
@@ -6679,10 +6705,11 @@
                 <ChatForm
                   placeholder="Ask anything"
                   showModelSelector={true}
+                  disabled={chatInputDisabled}
+                  modelDisplayOverride={selectedInstanceModelId ?? undefined}
                   modelTasks={modelTasks()}
                   modelCapabilities={modelCapabilities()}
                   onAutoSend={handleChatSend}
-                  onOpenModelPicker={openChatModelPicker}
                 />
               </div>
             </div>
@@ -6712,13 +6739,13 @@
             >
               <div class="max-w-7xl mx-auto">
                 <ChatForm
-                  placeholder="Ask anything — we'll pick the best model automatically"
-                  showModelSelector={!!bestRunningModelId}
-                  modelDisplayOverride={bestRunningModelId ?? undefined}
+                  placeholder="Ask anything"
+                  showModelSelector={true}
+                  disabled={chatInputDisabled}
+                  modelDisplayOverride={selectedInstanceModelId ?? undefined}
                   modelTasks={modelTasks()}
                   modelCapabilities={modelCapabilities()}
                   onAutoSend={handleAutoSend}
-                  onOpenModelPicker={openChatModelPicker}
                 />
               </div>
             </div>
