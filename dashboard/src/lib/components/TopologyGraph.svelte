@@ -344,6 +344,12 @@
     return `rgb(${r}, ${g}, ${b})`;
   }
 
+  /** Keep dash flow continuous across SVG redraws (seek into the loop). */
+  const FLOW_ANIMATION_MS = 750;
+  function flowAnimationDelayMs(): string {
+    return `${-(performance.now() % FLOW_ANIMATION_MS)}ms`;
+  }
+
   function renderGraph() {
     if (!svgContainer || !data) return;
 
@@ -599,13 +605,17 @@
 
       // Physical mesh: dim non-route edges when a ring route is shown
       if (!(hasRingRoute && onRoute)) {
-        linksGroup
+        const meshLink = linksGroup
           .append("line")
           .attr("x1", posA.x)
           .attr("y1", posA.y)
           .attr("x2", posB.x)
           .attr("y2", posB.y)
           .attr("class", hasRingRoute ? "graph-link-mesh-dim" : "graph-link");
+        // Phase-lock so full redraws don't snap dash animation back to 0
+        if (!hasRingRoute) {
+          meshLink.style("animation-delay", flowAnimationDelayMs());
+        }
       }
 
       // Mesh arrows only when no placement route (route layer draws its own)
@@ -647,7 +657,8 @@
           .attr("y1", from.y)
           .attr("x2", to.x)
           .attr("y2", to.y)
-          .attr("class", "graph-link-route");
+          .attr("class", "graph-link-route")
+          .style("animation-delay", flowAnimationDelayMs());
 
         drawDirectedArrow(from, to, "arrowhead-route");
 
@@ -1777,29 +1788,34 @@
   :global(.graph-link) {
     stroke: var(--xeo-light-gray, #b3b3b3);
     stroke-width: 1px;
-    stroke-dasharray: 4, 4;
+    /* period 8 — must match flowAnimationMesh offset */
+    stroke-dasharray: 4 4;
     opacity: 0.8;
-    animation: flowAnimation 0.75s linear infinite;
+    animation: flowAnimationMesh 0.75s linear infinite;
   }
   :global(.graph-link-mesh-dim) {
     stroke: var(--xeo-light-gray, #b3b3b3);
     stroke-width: 1px;
-    stroke-dasharray: 4, 4;
+    stroke-dasharray: 4 4;
     opacity: 0.2;
   }
   :global(.graph-link-route) {
     stroke: var(--xeo-green, oklch(0.78 0.17 145));
     stroke-width: 2px;
-    stroke-dasharray: 6, 4;
+    /* period 12 — must match flowAnimationRoute offset */
+    stroke-dasharray: 8 4;
     opacity: 0.95;
-    animation: flowAnimation 0.75s linear infinite;
+    animation: flowAnimationRoute 0.75s linear infinite;
   }
-  @keyframes flowAnimation {
-    from {
-      stroke-dashoffset: 0;
-    }
+  /* Dashoffset distance == dasharray period so the loop has no hitch */
+  @keyframes flowAnimationMesh {
     to {
-      stroke-dashoffset: -10;
+      stroke-dashoffset: -8;
+    }
+  }
+  @keyframes flowAnimationRoute {
+    to {
+      stroke-dashoffset: -12;
     }
   }
 </style>
