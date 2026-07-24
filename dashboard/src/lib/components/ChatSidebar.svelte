@@ -8,8 +8,6 @@
     renameConversation,
     clearChat,
     instances,
-    topologyOnlyMode,
-    toggleTopologyOnlyMode,
   } from "$lib/stores/app.svelte";
 
   interface Props {
@@ -33,8 +31,6 @@
   const conversationList = $derived(conversations());
   const activeId = $derived(activeConversationId());
   const instanceData = $derived(instances());
-  const topologyOnlyEnabled = $derived(topologyOnlyMode());
-
   let searchQuery = $state("");
   let editingId = $state<string | null>(null);
   let editingName = $state("");
@@ -499,82 +495,51 @@
   </div>
 
   <!-- Footer -->
-  <div class="p-3 border-t border-xeo-green/10">
-    {#if showDeleteAllConfirm}
-      <div class="bg-red-500/10 border border-red-500/30 rounded p-2 mb-2">
-        <p class="text-xs text-red-400 text-center mb-2">
-          Delete all {conversationList.length} conversations?
-        </p>
-        <div class="flex gap-2">
-          <button
-            onclick={handleConfirmDeleteAll}
-            class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-red-500/20 text-red-400 border border-red-500/30 rounded hover:bg-red-500/30 transition-colors cursor-pointer"
-          >
-            DELETE ALL
-          </button>
-          <button
-            onclick={handleCancelDeleteAll}
-            class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-xeo-medium-gray/20 text-xeo-light-gray border border-xeo-medium-gray/30 rounded hover:bg-xeo-medium-gray/30 transition-colors cursor-pointer"
-          >
-            CANCEL
-          </button>
+  {#if showDeleteAllConfirm || conversationList.length > 0}
+    <div class="p-3 border-t border-xeo-green/10">
+      {#if showDeleteAllConfirm}
+        <div class="bg-red-500/10 border border-red-500/30 rounded p-2">
+          <p class="text-xs text-red-400 text-center mb-2">
+            Delete all {conversationList.length} conversations?
+          </p>
+          <div class="flex gap-2">
+            <button
+              onclick={handleConfirmDeleteAll}
+              class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-red-500/20 text-red-400 border border-red-500/30 rounded hover:bg-red-500/30 transition-colors cursor-pointer"
+            >
+              DELETE ALL
+            </button>
+            <button
+              onclick={handleCancelDeleteAll}
+              class="flex-1 py-1.5 text-xs font-mono tracking-wider uppercase bg-xeo-medium-gray/20 text-xeo-light-gray border border-xeo-medium-gray/30 rounded hover:bg-xeo-medium-gray/30 transition-colors cursor-pointer"
+            >
+              CANCEL
+            </button>
+          </div>
         </div>
-      </div>
-    {:else if conversationList.length > 0}
-      <button
-        onclick={handleDeleteAllClick}
-        class="w-full flex items-center justify-center gap-2 py-1.5 text-sm font-mono tracking-wider uppercase text-white/70 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 rounded transition-all cursor-pointer"
-      >
-        <svg
-          class="w-3.5 h-3.5"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
+      {:else if conversationList.length > 0}
+        <button
+          onclick={handleDeleteAllClick}
+          class="w-full flex items-center justify-center gap-2 py-1.5 text-sm font-mono tracking-wider uppercase text-white/70 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 rounded transition-all cursor-pointer"
         >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-          />
-        </svg>
-        DELETE ALL CHATS
-      </button>
-    {/if}
-    <div
-      class="flex items-center justify-center gap-3 {conversationList.length >
-        0 && !showDeleteAllConfirm
-        ? 'mt-2'
-        : ''}"
-    >
-      <div class="text-xs text-white/60 font-mono tracking-wider text-center">
-        {conversationList.length} CONVERSATION{conversationList.length !== 1
-          ? "S"
-          : ""}
-      </div>
-      <button
-        type="button"
-        onclick={toggleTopologyOnlyMode}
-        class="p-1.5 rounded border border-xeo-medium-gray/40 hover:border-xeo-green/50 transition-colors cursor-pointer"
-        title="Toggle topology only mode"
-      >
-        <svg
-          class="w-4 h-4 {topologyOnlyEnabled
-            ? 'text-xeo-green'
-            : 'text-xeo-medium-gray'}"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <circle cx="12" cy="5" r="2" fill="currentColor" />
-          <circle cx="5" cy="19" r="2" fill="currentColor" />
-          <circle cx="19" cy="19" r="2" fill="currentColor" />
-          <path stroke-linecap="round" d="M12 7v5m0 0l-5 5m5-5l5 5" />
-        </svg>
-      </button>
+          <svg
+            class="w-3.5 h-3.5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+            />
+          </svg>
+          DELETE ALL CHATS
+        </button>
+      {/if}
     </div>
-  </div>
+  {/if}
 {/snippet}
 
 {#if isMobileDrawer}
