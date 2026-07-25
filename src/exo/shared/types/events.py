@@ -9,6 +9,7 @@ from exo.shared.types.chunks import Chunk, InputImageChunk
 from exo.shared.types.common import CommandId, Id, ModelId, NodeId, SessionId, SystemId
 from exo.shared.types.instance_link import InstanceLink, InstanceLinkId
 from exo.shared.types.profiling import StageTiming
+from exo.shared.types.storage import SharedDirectoryStatus
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.worker.downloads import DownloadProgress
 from exo.shared.types.worker.instances import Instance, InstanceId
@@ -141,6 +142,23 @@ class CustomModelCardDeleted(BaseEvent):
     model_id: ModelId
 
 
+class SharedModelsDirectorySet(BaseEvent):
+    """The cluster-wide shared models directory changed (``None`` clears it).
+
+    Indexed by the master; every node validates the path locally and answers
+    with :class:`NodeSharedDirectoryStatusUpdated`.
+    """
+
+    path: str | None
+
+
+class NodeSharedDirectoryStatusUpdated(BaseEvent):
+    """One node's local validation result for the shared models directory."""
+
+    node_id: NodeId
+    status: SharedDirectoryStatus
+
+
 @final
 class TraceEventData(FrozenModel):
     name: str
@@ -195,6 +213,8 @@ Event = (
     | TracesMerged
     | CustomModelCardAdded
     | CustomModelCardDeleted
+    | SharedModelsDirectorySet
+    | NodeSharedDirectoryStatusUpdated
     | InstanceLinkCreated
     | InstanceLinkDeleted
 )

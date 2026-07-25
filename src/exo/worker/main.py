@@ -1,6 +1,7 @@
 import hashlib
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 import anyio
 from anyio import fail_after, to_thread
@@ -8,6 +9,12 @@ from loguru import logger
 
 from exo.api.types import ImageEditsTaskParams
 from exo.download.download_utils import is_read_only_model_dir, resolve_existing_model
+from exo.download.shared_models_dir import (
+    load_persisted_shared_models_dir,
+    persist_shared_models_dir,
+    set_shared_models_dir,
+    validate_shared_models_directory,
+)
 from exo.routing.event_router import (
     EventRouterBrokenResourceError,
     EventRouterClosedResourceError,
@@ -30,6 +37,7 @@ from exo.shared.types.events import (
     InstanceDeleted,
     NodeDownloadProgress,
     NodeGatheredInfo,
+    NodeSharedDirectoryStatusUpdated,
     TaskCreated,
     TaskStatusUpdated,
     TopologyEdgeCreated,
@@ -122,6 +130,7 @@ class Worker:
                 tg.start_soon(self._event_applier)
                 tg.start_soon(self._poll_connection_updates)
                 tg.start_soon(self._reconcile_custom_cards)
+                tg.start_soon(self._reconcile_shared_models_dir)
         except* (EventRouterBrokenResourceError, EventRouterClosedResourceError):
             # Event router has been closed (try-star syntax handles error groups)
             pass
@@ -186,6 +195,61 @@ class Worker:
                                     hashlib.sha256(img.encode("ascii")).hexdigest()
                                 )
                             ] = img
+
+    async def _reconcile_shared_models_dir(self) -> None:
+        """Track the cluster's shared models directory setting.
+
+        Validates the configured path locally, installs it as the preferred
+        models directory when usable, reports the outcome to the cluster, and
+        persists the setting so it survives restarts (any node can become
+        master and re-announce it).
+        """
+        # Preload the locally persisted value so models on the share resolve
+        # before the master re-announces the setting after a restart.
+        persisted = load_persisted_shared_models_dir()
+        if persisted is not None:
+            preload_status = await to_thread.run_sync(
+                validate_shared_models_directory, persisted
+            )
+            if preload_status.valid:
+                set_shared_models_dir(Path(persisted).expanduser())
+
+        applied: str | None = persisted
+        reported: str | None = None
+        while True:
+            await anyio.sleep(1)
+            target = self.state.shared_models_dir
+            if target is not None and target != reported:
+                status = await to_thread.run_sync(
+                    validate_shared_models_directory, target
+                )
+                set_shared_models_dir(
+                    Path(target).expanduser() if status.valid else None
+                )
+                await to_thread.run_sync(persist_shared_models_dir, target)
+                applied = target
+                reported = target
+                logger.info(
+                    f"Shared models directory '{target}': "
+                    f"{'valid' if status.valid else f'invalid ({status.error})'}"
+                )
+                await self.event_sender.send(
+                    NodeSharedDirectoryStatusUpdated(
+                        node_id=self.node_id, status=status
+                    )
+                )
+            elif (
+                target is None
+                and applied is not None
+                # Only treat None as an explicit clear once a master has
+                # announced itself; before that, state is still recovering.
+                and self.state.master_node_id is not None
+            ):
+                set_shared_models_dir(None)
+                await to_thread.run_sync(persist_shared_models_dir, None)
+                applied = None
+                reported = None
+                logger.info("Shared models directory cleared")
 
     async def _reconcile_custom_cards(self) -> None:
         while True:

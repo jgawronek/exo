@@ -121,6 +121,9 @@ EXO_PID_FILE = EXO_CACHE_HOME / "exo.pid"
 EXO_NODE_ZID = EXO_CACHE_HOME / "node_zid"
 EXO_CONFIG_FILE = EXO_CONFIG_HOME / "config.toml"
 
+# Persisted cluster-wide shared models directory (set from the dashboard).
+EXO_SHARED_MODELS_DIR_FILE = EXO_CONFIG_HOME / "shared_models_dir"
+
 # libp2p topics for event forwarding
 LIBP2P_LOCAL_EVENTS_TOPIC = "worker_events"
 LIBP2P_GLOBAL_EVENTS_TOPIC = "global_events"

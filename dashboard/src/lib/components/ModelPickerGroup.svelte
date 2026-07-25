@@ -25,6 +25,8 @@
     available: boolean;
     nodeNames: string[];
     nodeIds: string[];
+    sharedNodeNames: string[];
+    sharedDirectories: string[];
   };
   type ModelFitStatus = "fits_now" | "fits_cluster_capacity" | "too_large";
 
@@ -65,11 +67,22 @@
   // Group-level download status: show if any variant is downloaded
   const groupDownloadStatus = $derived.by(() => {
     if (!downloadStatusMap || downloadStatusMap.size === 0) return undefined;
-    // Return the first available entry (prefer "available" ones)
-    for (const avail of downloadStatusMap.values()) {
-      if (avail.available) return avail;
-    }
-    return downloadStatusMap.values().next().value;
+    const statuses = Array.from(downloadStatusMap.values());
+    return {
+      available: statuses.some((status) => status.available),
+      nodeNames: Array.from(
+        new Set(statuses.flatMap((status) => status.nodeNames)),
+      ),
+      nodeIds: Array.from(
+        new Set(statuses.flatMap((status) => status.nodeIds)),
+      ),
+      sharedNodeNames: Array.from(
+        new Set(statuses.flatMap((status) => status.sharedNodeNames)),
+      ),
+      sharedDirectories: Array.from(
+        new Set(statuses.flatMap((status) => status.sharedDirectories)),
+      ),
+    };
   });
 
   // Format storage size
@@ -350,6 +363,15 @@
       </span>
     {/if}
 
+    {#if groupDownloadStatus?.sharedNodeNames.length}
+      <span
+        class="flex-shrink-0 rounded-sm border border-cyan-400/30 bg-cyan-400/10 px-1 py-0.5 text-[9px] font-mono tracking-wider text-cyan-300"
+        title={`Configured read-only/shared storage on ${groupDownloadStatus.sharedNodeNames.join(", ")}${groupDownloadStatus.sharedDirectories.length ? ` — ${groupDownloadStatus.sharedDirectories.join(", ")}` : ""}`}
+      >
+        SHARED/RO
+      </span>
+    {/if}
+
     <!-- Download availability indicator -->
     {#if groupDownloadStatus && groupDownloadStatus.nodeIds.length > 0}
       <span
@@ -536,6 +558,14 @@
           {#if downloadStatusMap?.get(variant.id)}
             {@const variantDl = downloadStatusMap.get(variant.id)}
             {#if variantDl}
+              {#if variantDl.sharedNodeNames.length}
+                <span
+                  class="flex-shrink-0 rounded-sm border border-cyan-400/30 bg-cyan-400/10 px-1 py-0.5 text-[9px] font-mono tracking-wider text-cyan-300"
+                  title={`Configured read-only/shared storage on ${variantDl.sharedNodeNames.join(", ")}${variantDl.sharedDirectories.length ? ` — ${variantDl.sharedDirectories.join(", ")}` : ""}`}
+                >
+                  SHARED/RO
+                </span>
+              {/if}
               <span
                 class="flex-shrink-0"
                 title={`Downloaded on ${variantDl.nodeNames.join(", ")}`}

@@ -31,6 +31,7 @@
     instances,
     instanceStageTimings,
     runners,
+    tasks,
     downloads,
     placementPreviews,
     selectedPreviewModelId,
@@ -77,6 +78,11 @@
     type DownloadProgress,
     type PlacementPreview,
   } from "$lib/stores/app.svelte";
+  import {
+    formatRebalanceProgress,
+    getActiveRebalances,
+    type RebalanceProgress,
+  } from "$lib/utils/rebalance";
   import { addToast, dismissByMessage } from "$lib/stores/toast.svelte";
   import HeaderNav from "$lib/components/HeaderNav.svelte";
   import DeviceIcon from "$lib/components/DeviceIcon.svelte";
@@ -91,6 +97,8 @@
   const update = $derived(lastUpdate());
   const instanceData = $derived(instances());
   const runnersData = $derived(runners());
+  const tasksData = $derived(tasks());
+  const activeRebalances = $derived(getActiveRebalances(tasksData));
   const downloadsData = $derived(downloads());
   const previewsData = $derived(placementPreviews());
   const selectedModelId = $derived(selectedPreviewModelId());
@@ -1105,10 +1113,31 @@
     return modelId;
   });
 
-  /** Chat requires a selected running instance. */
+  /** True while the selected instance exists but is not yet ready to serve chat. */
+  const selectedInstanceNotReady = $derived.by(() => {
+    if (!selectedInstanceId) return false;
+    const wrapped = instanceData[selectedInstanceId];
+    if (!wrapped) return false;
+    const statusText = getInstanceDownloadStatus(
+      selectedInstanceId,
+      wrapped,
+    ).statusText;
+    return !["READY", "LOADED", "RUNNING"].includes(statusText);
+  });
+
+  const selectedInstanceRebalance = $derived.by(() => {
+    if (!selectedInstanceId) return null;
+    return getDisplayedRebalance(
+      selectedInstanceId,
+      instanceData[selectedInstanceId],
+    );
+  });
+
+  /** Chat requires a selected instance that is ready to serve. */
   const chatInputDisabled = $derived.by(() => {
     const count = Object.keys(instanceData).length;
-    return count === 0 || selectedInstanceModelId === null;
+    if (count === 0 || selectedInstanceModelId === null) return true;
+    return selectedInstanceNotReady || selectedInstanceRebalance !== null;
   });
 
   // When an instance is selected, restrict the topology map to its nodes.
@@ -1118,7 +1147,9 @@
   });
 
   const selectedInstanceShortId = $derived(
-    selectedInstanceId ? selectedInstanceId.slice(0, 8).toUpperCase() : undefined,
+    selectedInstanceId
+      ? selectedInstanceId.slice(0, 8).toUpperCase()
+      : undefined,
   );
 
   // Compute highlighted nodes from hovered instance, selected instance, or preview
@@ -2225,6 +2256,65 @@
     return inst.shardAssignments?.modelId || "Unknown Model";
   }
 
+  function getInstanceMemoryFootprint(instanceWrapped: unknown): {
+    fileBytes: number;
+    vramBytes: number;
+  } | null {
+    const [, instance] = getTagged(instanceWrapped);
+    if (!instance || typeof instance !== "object") return null;
+    const assignments = (
+      instance as {
+        shardAssignments?: { runnerToShard?: Record<string, unknown> };
+      }
+    ).shardAssignments;
+    const shards = Object.values(assignments?.runnerToShard ?? {})
+      .map((wrapped) => {
+        const [tag, shard] = getTagged(wrapped);
+        return { tag, shard };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is { tag: string | null; shard: Record<string, unknown> } =>
+          typeof entry.shard === "object" && entry.shard !== null,
+      );
+    if (shards.length === 0) return null;
+
+    const firstModelCard = shards[0].shard.modelCard;
+    if (typeof firstModelCard !== "object" || firstModelCard === null) {
+      return null;
+    }
+    const storageSize = Reflect.get(firstModelCard, "storageSize");
+    if (typeof storageSize !== "object" || storageSize === null) return null;
+    const fileBytes = Reflect.get(storageSize, "inBytes");
+    if (typeof fileBytes !== "number" || fileBytes <= 0) return null;
+
+    const isTensorSharded = shards.every(
+      ({ tag }) => tag === "TensorShardMetadata",
+    );
+    const vramBytes = isTensorSharded
+      ? fileBytes
+      : shards.reduce((total, { shard }) => {
+          const startLayer = shard.startLayer;
+          const endLayer = shard.endLayer;
+          const totalLayers = shard.nLayers;
+          if (
+            typeof startLayer !== "number" ||
+            typeof endLayer !== "number" ||
+            typeof totalLayers !== "number" ||
+            totalLayers <= 0
+          ) {
+            return total;
+          }
+          return total + (fileBytes * (endLayer - startLayer)) / totalLayers;
+        }, 0);
+
+    return {
+      fileBytes,
+      vramBytes: vramBytes > 0 ? Math.round(vramBytes) : fileBytes,
+    };
+  }
+
   // Get instance details: type (MLX Ring/IBV), sharding (Pipeline/Tensor), and node names
   function getInstanceInfo(instanceWrapped: unknown): {
     instanceType: string;
@@ -2406,6 +2496,7 @@
         startedAt: number;
         nodeLayers: Record<string, number>;
         totalSteps: number;
+        replicatedTaskObserved: boolean;
       }
     >
   >({});
@@ -2478,11 +2569,27 @@
     };
   }
 
+  function getDisplayedRebalance(
+    instanceId: string,
+    instanceWrapped: unknown,
+  ): RebalanceProgress | null {
+    return (
+      activeRebalances[instanceId] ??
+      getRebalanceMigration(instanceId, instanceWrapped)
+    );
+  }
+
   // Drop finished migrations so the REBALANCE button returns.
   $effect(() => {
     for (const [id, transition] of Object.entries(rebalanceTransitions)) {
       const wrapped = instanceData[id];
-      if (!wrapped) continue; // instance vanished; the safety timeout cleans up
+      if (!wrapped) {
+        if (!activeRebalances[id]) delete rebalanceTransitions[id];
+        continue;
+      }
+      if (activeRebalances[id]) {
+        transition.replicatedTaskObserved = true;
+      }
       const migration = getRebalanceMigration(id, wrapped);
       if (migration !== null && migration.done >= migration.total) {
         delete rebalanceTransitions[id];
@@ -2490,12 +2597,23 @@
           type: "info",
           message: `Layer migration complete for ${transition.modelId}`,
         });
+      } else if (transition.replicatedTaskObserved && !activeRebalances[id]) {
+        delete rebalanceTransitions[id];
+        addToast({
+          type: "warning",
+          message: `Layer migration ended before reaching its target for ${transition.modelId}`,
+        });
       }
     }
   });
 
   async function rebalanceInstance(instanceId: string) {
-    if (rebalancingInstances[instanceId]) return;
+    if (
+      rebalancingInstances[instanceId] ||
+      getDisplayedRebalance(instanceId, instanceData[instanceId]) !== null
+    ) {
+      return;
+    }
     rebalancingInstances[instanceId] = true;
     try {
       const response = await fetch(`/instance/${instanceId}/rebalance`, {
@@ -2515,16 +2633,25 @@
         });
       } else if (result?.command_id && result.node_layers) {
         const modelId = getInstanceModelId(instanceData[instanceId]);
+        const startedAt = Date.now();
         rebalanceTransitions[instanceId] = {
           modelId,
-          startedAt: Date.now(),
+          startedAt,
           nodeLayers: result.node_layers,
           totalSteps: result.steps ?? 0,
+          replicatedTaskObserved: false,
         };
-        // Failure safety: never track a migration forever.
+        // The replicated task normally appears on the next one-second poll.
+        // If it never appears, release the optimistic lock promptly.
         setTimeout(() => {
-          delete rebalanceTransitions[instanceId];
-        }, 600_000);
+          const transition = rebalanceTransitions[instanceId];
+          if (
+            transition?.startedAt === startedAt &&
+            !transition.replicatedTaskObserved
+          ) {
+            delete rebalanceTransitions[instanceId];
+          }
+        }, 10_000);
         addToast({
           type: "info",
           message: result.message || "Live layer migration started",
@@ -2844,6 +2971,12 @@
   onDestroy(finishRightSidebarResize);
 
   const nodeCount = $derived(data ? Object.keys(data.nodes).length : 0);
+  // Count shown next to TOPOLOGY: matches the filtered map when an instance is selected.
+  const visibleNodeCount = $derived(
+    selectedInstanceVisibleNodes.size > 0
+      ? selectedInstanceVisibleNodes.size
+      : nodeCount,
+  );
   const instanceCount = $derived(Object.keys(instanceData).length);
 
   // ── Instance status transition toasts ──
@@ -3502,6 +3635,13 @@
       preview?: string;
     }[],
   ) {
+    if (selectedInstanceRebalance !== null) {
+      addToast({
+        type: "info",
+        message: `Rebalancing, wait... ${formatRebalanceProgress(selectedInstanceRebalance)}`,
+      });
+      return;
+    }
     const model = selectedChatModel();
 
     // Model is selected and running — send directly
@@ -4251,27 +4391,6 @@
       ? 0
       : 0.2};"
   ></div>
-
-  <!-- Shooting Stars Background -->
-  <div
-    class="shooting-stars"
-    style="transition: opacity 0.5s ease; opacity: {showOnboardingOverlay
-      ? 0.4
-      : 1};"
-  >
-    <div
-      class="shooting-star"
-      style="top: 10%; left: 20%; --duration: 45s; --delay: 0s;"
-    ></div>
-    <div
-      class="shooting-star"
-      style="top: 30%; left: 65%; --duration: 45s; --delay: 15s;"
-    ></div>
-    <div
-      class="shooting-star"
-      style="top: 50%; left: 40%; --duration: 45s; --delay: 30s;"
-    ></div>
-  </div>
 
   {#if showOnboardingOverlay}
     <!-- ═══════════════════════════════════════════════════════ -->
@@ -5487,7 +5606,11 @@
                   <p class="text-sm text-white/50 font-sans">
                     {instanceCount === 0
                       ? "Create an instance to get started."
-                      : "Select an instance to start chatting."}
+                      : selectedInstanceRebalance
+                        ? `Rebalancing, wait... ${formatRebalanceProgress(selectedInstanceRebalance)}`
+                        : selectedInstanceNotReady
+                          ? "Instance is preparing — chat unlocks when it's ready."
+                          : "Select an instance to start chatting."}
                   </p>
                 </div>
               {/if}
@@ -5597,6 +5720,8 @@
                   <!-- Instance Card -->
                   {@const instanceModelId = getInstanceModelId(instance)}
                   {@const instanceInfo = getInstanceInfo(instance)}
+                  {@const memoryFootprint =
+                    getInstanceMemoryFootprint(instance)}
                   {@const stageTimingRows = getInstanceStageTimingRows(
                     id,
                     instance,
@@ -5605,7 +5730,7 @@
                     id,
                     instance,
                   )}
-                  {@const migration = getRebalanceMigration(id, instance)}
+                  {@const migration = getDisplayedRebalance(id, instance)}
                   {@const prepProgress =
                     !isFailed && !isDownloading
                       ? getPreparationProgress(instance)
@@ -5734,6 +5859,26 @@
                             class="text-xeo-green text-xs font-mono tracking-wide truncate"
                           >
                             {getInstanceModelId(instance)}
+                          </div>
+                        {/if}
+                        {#if memoryFootprint}
+                          <div
+                            class="mt-0.5 flex items-center gap-2 text-[10px] font-mono tracking-wider text-white/45"
+                            title="Model weight file size and estimated weight memory across assigned runners"
+                          >
+                            <span
+                              >FILE {formatBytes(
+                                memoryFootprint.fileBytes,
+                                1,
+                              )}</span
+                            >
+                            <span class="text-white/20">&middot;</span>
+                            <span
+                              >VRAM {formatBytes(
+                                memoryFootprint.vramBytes,
+                                1,
+                              )}</span
+                            >
                           </div>
                         {/if}
                         <div
@@ -6109,6 +6254,14 @@
                                   Preparing...
                                 </p>
                               {/if}
+                            {:else if migration}
+                              <p
+                                class="text-[11px] text-teal-400/80 leading-relaxed"
+                              >
+                                Rebalancing, wait... {formatRebalanceProgress(
+                                  migration,
+                                )}
+                              </p>
                             {:else if isReady || isRunning}
                               <p
                                 class="text-[11px] text-green-400/70 leading-relaxed"
@@ -6677,7 +6830,10 @@
               aria-label="Chat messages"
             >
               <div class="max-w-7xl mx-auto">
-                <ChatMessages scrollParent={chatScrollRef} />
+                <ChatMessages
+                  scrollParent={chatScrollRef}
+                  disabled={chatInputDisabled}
+                />
                 {#if chatLaunchState === "ready" && selectedChatCategory}
                   {@const prompts =
                     categorySuggestedPrompts[selectedChatCategory] ??
@@ -6815,7 +6971,8 @@
                   TOPOLOGY
                 </div>
                 <span class="text-xs text-white/70 tabular-nums"
-                  >{nodeCount} {nodeCount === 1 ? "NODE" : "NODES"}</span
+                  >{visibleNodeCount}
+                  {visibleNodeCount === 1 ? "NODE" : "NODES"}</span
                 >
               </div>
 
@@ -6869,6 +7026,8 @@
                     <!-- Instance Card -->
                     {@const instanceModelId = getInstanceModelId(instance)}
                     {@const instanceInfo = getInstanceInfo(instance)}
+                    {@const memoryFootprint =
+                      getInstanceMemoryFootprint(instance)}
                     {@const stageTimingRows = getInstanceStageTimingRows(
                       id,
                       instance,
@@ -6877,7 +7036,7 @@
                       id,
                       instance,
                     )}
-                    {@const migration = getRebalanceMigration(id, instance)}
+                    {@const migration = getDisplayedRebalance(id, instance)}
                     {@const prepProgress =
                       !isFailed && !isDownloading
                         ? getPreparationProgress(instance)
@@ -7006,6 +7165,26 @@
                               class="text-xeo-green text-xs font-mono tracking-wide truncate"
                             >
                               {getInstanceModelId(instance)}
+                            </div>
+                          {/if}
+                          {#if memoryFootprint}
+                            <div
+                              class="mt-0.5 flex items-center gap-2 text-[10px] font-mono tracking-wider text-white/45"
+                              title="Model weight file size and estimated weight memory across assigned runners"
+                            >
+                              <span
+                                >FILE {formatBytes(
+                                  memoryFootprint.fileBytes,
+                                  1,
+                                )}</span
+                              >
+                              <span class="text-white/20">&middot;</span>
+                              <span
+                                >VRAM {formatBytes(
+                                  memoryFootprint.vramBytes,
+                                  1,
+                                )}</span
+                              >
                             </div>
                           {/if}
                           <div
@@ -7388,6 +7567,14 @@
                                     Preparing...
                                   </p>
                                 {/if}
+                              {:else if migration}
+                                <p
+                                  class="text-[11px] text-teal-400/80 leading-relaxed"
+                                >
+                                  Rebalancing, wait... {formatRebalanceProgress(
+                                    migration,
+                                  )}
+                                </p>
                               {:else if isReady || isRunning}
                                 <p
                                   class="text-[11px] text-green-400/70 leading-relaxed"

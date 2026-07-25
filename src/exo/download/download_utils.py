@@ -2,7 +2,9 @@ import asyncio
 import hashlib
 import os
 import random
+import re
 import shutil
+import socket
 import ssl
 import time
 import traceback
@@ -31,6 +33,7 @@ from exo.download.huggingface_utils import (
     get_hf_endpoint,
     get_hf_token,
 )
+from exo.download.shared_models_dir import get_shared_models_dir
 from exo.shared.constants import (
     EXO_DEFAULT_MODELS_DIR,
     EXO_MODELS_DIRS,
@@ -149,17 +152,60 @@ class InsufficientDiskSpaceError(Exception):
     """Raised when no writable model directory has enough free space."""
 
 
+# Stable per-machine token so several nodes downloading overlapping files of
+# one model into the same shared mount never write the same temp file.
+_NODE_PARTIAL_TOKEN = re.sub(r"[^A-Za-z0-9-]", "-", socket.gethostname()) or "node"
+
+
+def _partial_file_path(target_dir: Path, relative_path: str) -> Path:
+    """Temp-file path for an in-progress download of ``relative_path``.
+
+    Inside the shared models directory the name carries a per-machine token
+    (concurrent writers); local directories keep the plain ``.partial`` name
+    so existing partial downloads still resume.
+    """
+    shared_dir = get_shared_models_dir()
+    if shared_dir is not None and target_dir.is_relative_to(shared_dir):
+        return target_dir / f"{relative_path}.partial-{_NODE_PARTIAL_TOKEN}"
+    return target_dir / f"{relative_path}.partial"
+
+
+def model_search_dirs() -> tuple[Path, ...]:
+    """All model directories to search, in priority order.
+
+    The runtime-configured shared directory (when valid on this node) comes
+    first, then read-only directories, then writable directories.
+    """
+    base = (*EXO_MODELS_READ_ONLY_DIRS, *EXO_MODELS_DIRS)
+    shared_dir = get_shared_models_dir()
+    if shared_dir is None:
+        return base
+    return (shared_dir, *(d for d in base if d != shared_dir))
+
+
+def writable_model_dirs() -> tuple[Path, ...]:
+    """Writable model directories in download-preference order.
+
+    The runtime-configured shared directory (when valid on this node) is
+    preferred over the local per-node directories.
+    """
+    shared_dir = get_shared_models_dir()
+    if shared_dir is None:
+        return EXO_MODELS_DIRS
+    return (shared_dir, *(d for d in EXO_MODELS_DIRS if d != shared_dir))
+
+
 def resolve_existing_model(
     model_id: ModelId, card: ModelCard | None = None
 ) -> Path | None:
     """Search all model directories for a complete, pre-existing model.
 
-    Checks read-only directories first, then writable directories.
-    A candidate is only returned if ``is_model_directory_complete`` confirms
-    all weight files are present.
+    Checks the shared directory first, then read-only directories, then
+    writable directories. A candidate is only returned if
+    ``is_model_directory_complete`` confirms all weight files are present.
     """
     normalized = model_id.normalize()
-    for search_dir in (*EXO_MODELS_READ_ONLY_DIRS, *EXO_MODELS_DIRS):
+    for search_dir in model_search_dirs():
         candidate = search_dir / normalized
         if candidate.is_dir() and is_model_directory_complete(candidate, card):
             return candidate
@@ -175,6 +221,9 @@ def build_model_path(model_id: ModelId) -> Path:
     found = resolve_existing_model(model_id)
     if found is not None:
         return found
+    shared_dir = get_shared_models_dir()
+    if shared_dir is not None:
+        return shared_dir / model_id.normalize()
     return EXO_DEFAULT_MODELS_DIR / model_id.normalize()
 
 
@@ -183,7 +232,8 @@ def select_download_dir(required_bytes: int) -> Path:
 
     Raises ``InsufficientDiskSpaceError`` if none have enough space.
     """
-    for candidate_dir in EXO_MODELS_DIRS:
+    candidates = writable_model_dirs()
+    for candidate_dir in candidates:
         if not candidate_dir.exists():
             continue
         try:
@@ -194,7 +244,7 @@ def select_download_dir(required_bytes: int) -> Path:
             continue
     raise InsufficientDiskSpaceError(
         f"No writable model directory has {required_bytes / (1024**3):.1f} GiB free. "
-        f"Checked: {[str(d) for d in EXO_MODELS_DIRS]}"
+        f"Checked: {[str(d) for d in candidates]}"
     )
 
 
@@ -203,7 +253,7 @@ async def select_download_dir_for_shard(
     filtered_file_list: list[FileListEntry],
     total_size: int,
 ) -> Path:
-    for candidate_dir in EXO_MODELS_DIRS:
+    for candidate_dir in writable_model_dirs():
         if not candidate_dir.exists():
             continue
         sub = candidate_dir / model_id.normalize()
@@ -240,10 +290,11 @@ async def ensure_cache_dir(model_id: ModelId) -> Path:
 
 
 async def delete_model(model_id: ModelId) -> bool:
-    """Delete a model from writable directories. Skips read-only dirs."""
+    """Delete a model from writable directories (including the shared
+    directory when configured). Skips read-only dirs."""
     normalized = model_id.normalize()
     deleted = False
-    for models_dir in EXO_MODELS_DIRS:
+    for models_dir in writable_model_dirs():
         model_dir = models_dir / normalized
         if await aios.path.exists(model_dir):
             await asyncio.to_thread(shutil.rmtree, model_dir, ignore_errors=False)
@@ -292,7 +343,7 @@ def _scan_model_directory(
     if recursive:
         for dirpath, _, filenames in os.walk(model_dir):
             for filename in filenames:
-                if filename.endswith(".partial"):
+                if ".partial" in filename:
                     continue
                 full_path = Path(dirpath) / filename
                 rel_path = str(full_path.relative_to(model_dir))
@@ -303,7 +354,7 @@ def _scan_model_directory(
                 )
     else:
         for item in model_dir.iterdir():
-            if item.is_file() and not item.name.endswith(".partial"):
+            if item.is_file() and ".partial" not in item.name:
                 entries_by_path[item.name] = FileListEntry(
                     type="file",
                     path=item.name,
@@ -703,7 +754,7 @@ async def _download_file(
     await aios.makedirs((target_dir / path).parent, exist_ok=True)
     length, etag = await file_meta(model_id, revision, path)
     remote_hash = etag[:-5] if etag.endswith("-gzip") else etag
-    partial_path = target_dir / f"{path}.partial"
+    partial_path = _partial_file_path(target_dir, path)
     resume_byte_pos = (
         (await aios.stat(partial_path)).st_size
         if (await aios.path.exists(partial_path))
@@ -857,11 +908,14 @@ def is_image_model(shard: ShardMetadata) -> bool:
 
 
 async def get_downloaded_size(path: Path) -> int:
-    partial_path = path.with_suffix(path.suffix + ".partial")
     if await aios.path.exists(path):
         return (await aios.stat(path)).st_size
-    if await aios.path.exists(partial_path):
-        return (await aios.stat(partial_path)).st_size
+    for partial_path in (
+        path.with_suffix(path.suffix + ".partial"),
+        path.with_suffix(path.suffix + f".partial-{_NODE_PARTIAL_TOKEN}"),
+    ):
+        if await aios.path.exists(partial_path):
+            return (await aios.stat(partial_path)).st_size
     return 0
 
 

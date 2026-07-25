@@ -11,6 +11,8 @@
     startDownload,
     cancelDownload,
     deleteDownload,
+    sharedModelsDir,
+    sharedModelsDirStatuses,
   } from "$lib/stores/app.svelte";
   import {
     getDownloadTag,
@@ -345,6 +347,50 @@
   const lastUpdateTs = $derived(lastUpdateStore());
   const downloadKeys = $derived(Object.keys(downloadsData || {}));
 
+  // --- Shared model storage ---
+  const sharedDir = $derived(sharedModelsDir());
+  const sharedDirStatuses = $derived(sharedModelsDirStatuses());
+  const clusterNodeIds = $derived(Object.keys(data?.nodes ?? {}));
+  const sharedDirValidCount = $derived(
+    Object.values(sharedDirStatuses).filter((status) => status.valid).length,
+  );
+  const sharedDirReportedCount = $derived(
+    Object.keys(sharedDirStatuses).length,
+  );
+
+  let editingSharedDir = $state(false);
+  let sharedDirInput = $state("");
+  let sharedDirSaving = $state(false);
+  let sharedDirError = $state<string | null>(null);
+
+  function beginEditSharedDir() {
+    sharedDirInput = sharedDir ?? "";
+    sharedDirError = null;
+    editingSharedDir = true;
+  }
+
+  async function saveSharedDir(path: string | null) {
+    sharedDirSaving = true;
+    sharedDirError = null;
+    try {
+      const response = await fetch("/models/storage", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      if (!response.ok) {
+        throw new Error(`Request failed (HTTP ${response.status})`);
+      }
+      editingSharedDir = false;
+      await refreshState();
+    } catch (err) {
+      sharedDirError =
+        err instanceof Error ? err.message : "Failed to update location";
+    } finally {
+      sharedDirSaving = false;
+    }
+  }
+
   onMount(() => {
     refreshState();
   });
@@ -432,6 +478,149 @@
             : "n/a"}
         </div>
       </div>
+    </div>
+
+    <!-- Shared model storage -->
+    <div
+      class="rounded border border-xeo-medium-gray/30 bg-xeo-black/30 p-4 space-y-3"
+    >
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div
+          class="text-xs font-mono tracking-[0.2em] uppercase text-xeo-green flex items-center gap-2"
+        >
+          <span class="w-1.5 h-1.5 bg-xeo-green rounded-full"></span>
+          Shared Model Storage
+        </div>
+        {#if sharedDir && sharedDirReportedCount > 0}
+          <div
+            class="text-[11px] font-mono {sharedDirValidCount ===
+            sharedDirReportedCount
+              ? 'text-green-400'
+              : 'text-yellow-400'}"
+          >
+            valid on {sharedDirValidCount}/{Math.max(
+              sharedDirReportedCount,
+              clusterNodeIds.length,
+            )} nodes
+          </div>
+        {/if}
+      </div>
+
+      {#if editingSharedDir}
+        <form
+          class="flex items-center gap-2 flex-wrap"
+          onsubmit={(event) => {
+            event.preventDefault();
+            saveSharedDir(sharedDirInput.trim() || null);
+          }}
+        >
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            type="text"
+            bind:value={sharedDirInput}
+            placeholder="/mnt/models (same mount path on every node)"
+            autofocus
+            class="flex-1 min-w-[260px] bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-3 py-1.5 text-xs font-mono text-white placeholder:text-white/30 focus:outline-none focus:border-xeo-green/60"
+          />
+          <button
+            type="submit"
+            disabled={sharedDirSaving}
+            class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded bg-xeo-green text-xeo-black hover:bg-xeo-green-darker transition-colors disabled:opacity-50 cursor-pointer"
+          >
+            {sharedDirSaving ? "Saving..." : "Save"}
+          </button>
+          <button
+            type="button"
+            disabled={sharedDirSaving}
+            onclick={() => (editingSharedDir = false)}
+            class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded border border-xeo-medium-gray/50 text-xeo-light-gray hover:text-white transition-colors cursor-pointer"
+          >
+            Cancel
+          </button>
+        </form>
+      {:else}
+        <div class="flex items-center gap-3 flex-wrap">
+          {#if sharedDir}
+            <span class="text-sm font-mono text-white">{sharedDir}</span>
+          {:else}
+            <span class="text-sm font-mono text-white/40"
+              >Not set &mdash; each node uses its local directory</span
+            >
+          {/if}
+          <button
+            type="button"
+            onclick={beginEditSharedDir}
+            class="text-xs font-mono uppercase tracking-wider px-2 py-1 rounded border border-xeo-medium-gray/40 text-xeo-light-gray hover:text-xeo-green hover:border-xeo-green/50 transition-colors cursor-pointer"
+          >
+            Edit
+          </button>
+          {#if sharedDir}
+            <button
+              type="button"
+              disabled={sharedDirSaving}
+              onclick={() => saveSharedDir(null)}
+              class="text-xs font-mono uppercase tracking-wider px-2 py-1 rounded border border-red-500/30 text-red-400/80 hover:text-red-400 hover:border-red-500/50 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              Clear
+            </button>
+          {/if}
+        </div>
+      {/if}
+
+      {#if sharedDirError}
+        <div class="text-[11px] font-mono text-red-400">{sharedDirError}</div>
+      {/if}
+
+      {#if sharedDir}
+        {#if sharedDirReportedCount === 0}
+          <div class="text-[11px] font-mono text-white/50">
+            Waiting for nodes to verify the location&hellip;
+          </div>
+        {:else}
+          <div class="flex flex-wrap gap-2">
+            {#each Object.entries(sharedDirStatuses) as [nodeId, status] (nodeId)}
+              <div
+                class="flex items-center gap-1.5 px-2 py-1 rounded border text-[11px] font-mono {status.valid
+                  ? 'border-green-500/30 text-green-400 bg-green-500/5'
+                  : 'border-red-500/30 text-red-400 bg-red-500/5'}"
+                title={status.valid
+                  ? `Valid${status.freeBytes != null ? ` · ${formatBytes(status.freeBytes)} free` : ""}`
+                  : (status.error ?? "Invalid")}
+              >
+                <span
+                  class="w-1.5 h-1.5 rounded-full {status.valid
+                    ? 'bg-green-400'
+                    : 'bg-red-400'}"
+                ></span>
+                <span class="text-white/80">{getNodeLabel(nodeId)}</span>
+                {#if status.valid}
+                  <span>
+                    VALID{status.freeBytes != null
+                      ? ` · ${formatBytes(status.freeBytes)} free`
+                      : ""}
+                  </span>
+                {:else}
+                  <span>INVALID{status.error ? ` · ${status.error}` : ""}</span>
+                {/if}
+              </div>
+            {/each}
+            {#each clusterNodeIds.filter((nodeId) => !(nodeId in sharedDirStatuses)) as nodeId (nodeId)}
+              <div
+                class="flex items-center gap-1.5 px-2 py-1 rounded border border-xeo-medium-gray/40 text-[11px] font-mono text-white/50"
+              >
+                <span class="w-1.5 h-1.5 rounded-full bg-white/30"></span>
+                <span>{getNodeLabel(nodeId)}</span>
+                <span>CHECKING&hellip;</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        <div class="text-[10px] font-mono text-white/40">
+          Models load from and download to this location when it is valid on a
+          node; otherwise that node falls back to its local directory. The
+          path must be the same mount point on every node.
+        </div>
+      {/if}
     </div>
 
     {#if !hasDownloads}

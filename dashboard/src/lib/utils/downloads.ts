@@ -102,6 +102,40 @@ export function getNodesWithModelDownloaded(
   return result;
 }
 
+export interface DownloadedModelLocation {
+  nodeId: string;
+  readOnly: boolean;
+  modelDirectory: string | null;
+}
+
+/** Locate completed model copies and identify read-only shared storage. */
+export function getDownloadedModelLocations(
+  downloadsData: Record<string, unknown[]>,
+  modelId: string,
+): DownloadedModelLocation[] {
+  const locations: DownloadedModelLocation[] = [];
+  for (const [nodeId, nodeDownloads] of Object.entries(downloadsData)) {
+    if (!Array.isArray(nodeDownloads)) continue;
+    for (const [tag, payload, entryModelId] of iterNodeDownloads(
+      nodeDownloads,
+    )) {
+      if (tag !== "DownloadCompleted" || entryModelId !== modelId) continue;
+      const modelDirectory =
+        payload.model_directory ?? payload.modelDirectory ?? null;
+      locations.push({
+        nodeId,
+        readOnly: payload.read_only === true || payload.readOnly === true,
+        modelDirectory:
+          typeof modelDirectory === "string" && modelDirectory.length > 0
+            ? modelDirectory
+            : null,
+      });
+      break;
+    }
+  }
+  return locations;
+}
+
 /**
  * Find shard metadata for a model from any download entry across all nodes.
  * Returns the first match found (completed entries are preferred).

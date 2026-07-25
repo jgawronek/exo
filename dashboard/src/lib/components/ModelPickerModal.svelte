@@ -6,7 +6,10 @@
   import ModelPickerGroup from "./ModelPickerGroup.svelte";
   import ModelFilterPopover from "./ModelFilterPopover.svelte";
   import HuggingFaceResultItem from "./HuggingFaceResultItem.svelte";
-  import { getNodesWithModelDownloaded } from "$lib/utils/downloads";
+  import {
+    getDownloadedModelLocations,
+    getNodesWithModelDownloaded,
+  } from "$lib/utils/downloads";
   import { getRecentEntries } from "$lib/stores/recents.svelte";
   import { addToast } from "$lib/stores/toast.svelte";
 
@@ -126,6 +129,8 @@
     available: boolean;
     nodeNames: string[];
     nodeIds: string[];
+    sharedNodeNames: string[];
+    sharedDirectories: string[];
   };
 
   function getNodeName(nodeId: string): string {
@@ -140,7 +145,8 @@
     if (!downloadsData || !topologyNodes) return result;
 
     for (const model of models) {
-      const nodeIds = getNodesWithModelDownloaded(downloadsData, model.id);
+      const locations = getDownloadedModelLocations(downloadsData, model.id);
+      const nodeIds = locations.map((location) => location.nodeId);
       if (nodeIds.length === 0) continue;
 
       // Sum total RAM across nodes that have the model
@@ -155,6 +161,18 @@
         available: modelSizeBytes > 0 && totalRamBytes >= modelSizeBytes,
         nodeNames: nodeIds.map(getNodeName),
         nodeIds,
+        sharedNodeNames: locations
+          .filter((location) => location.readOnly)
+          .map((location) => getNodeName(location.nodeId)),
+        sharedDirectories: Array.from(
+          new Set(
+            locations
+              .filter((location) => location.readOnly)
+              .flatMap((location) =>
+                location.modelDirectory ? [location.modelDirectory] : [],
+              ),
+          ),
+        ),
       });
     }
     return result;
@@ -479,6 +497,28 @@
     // Filter by family
     if (selectedFamily === "favorites") {
       result = result.filter((g) => favorites.has(g.id));
+    } else if (selectedFamily === "downloaded") {
+      result = result.flatMap((group) => {
+        const downloadedVariants = group.variants.filter((variant) =>
+          modelDownloadAvailability.has(variant.id),
+        );
+        if (downloadedVariants.length === 0) return [];
+        const smallestVariant = downloadedVariants.reduce(
+          (smallest, variant) =>
+            (variant.storage_size_megabytes ?? Number.POSITIVE_INFINITY) <
+            (smallest.storage_size_megabytes ?? Number.POSITIVE_INFINITY)
+              ? variant
+              : smallest,
+        );
+        return [
+          {
+            ...group,
+            variants: downloadedVariants,
+            smallestVariant,
+            hasMultipleVariants: downloadedVariants.length > 1,
+          },
+        ];
+      });
     } else if (
       selectedFamily &&
       selectedFamily !== "huggingface" &&
@@ -734,8 +774,8 @@
         <span
           class="text-xs font-mono flex-shrink-0"
           title="Cluster memory usage"
-          ><span class="text-xeo-green">{Math.round(usedMemoryGB)}GB</span
-          ><span class="text-white/40">/{Math.round(totalMemoryGB)}GB</span
+          ><span class="text-xeo-green">{Math.round(usedMemoryGB)}GB</span><span
+            class="text-white/40">/{Math.round(totalMemoryGB)}GB</span
           ></span
         >
         <!-- Filter button -->

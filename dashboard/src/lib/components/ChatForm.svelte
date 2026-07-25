@@ -544,33 +544,42 @@
       {/if}
     </div>
 
-    <!-- Bottom accent line -->
-    <div
-      class="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-xeo-green/30 to-transparent"
-    ></div>
-
-    <!-- Performance stats centered on the bottom frame line -->
+    <!-- Bottom frame line, interrupted by performance stats when present -->
     {#if showModelSelector && !disabled && (currentTtft !== null || currentTps !== null)}
       <div
-        class="absolute bottom-0 left-1/2 -translate-x-1/2 z-10 px-3 pb-px flex items-center gap-4 text-[11px] font-mono whitespace-nowrap pointer-events-none bg-[oklch(0.12_0_0)] rounded-t"
+        class="absolute bottom-0 left-0 right-0 z-10 flex items-center pointer-events-none"
       >
-        {#if currentTtft !== null}
-          <span class="text-xeo-light-gray">
-            <span class="text-white/70">TTFT</span>
-            <span class="text-xeo-green">{currentTtft.toFixed(1)}ms</span>
-          </span>
-        {/if}
-        {#if currentTps !== null}
-          <span class="text-xeo-light-gray">
-            <span class="text-white/70">TPS</span>
-            <span class="text-xeo-green">{currentTps.toFixed(1)}</span>
-            <span class="text-white/60">tok/s</span>
-            <span class="text-white/50"
-              >({(1000 / currentTps).toFixed(1)} ms/tok)</span
-            >
-          </span>
-        {/if}
+        <div
+          class="flex-1 h-px bg-gradient-to-r from-transparent to-xeo-green/30"
+        ></div>
+        <div
+          class="px-3 flex items-center gap-4 text-[11px] leading-none font-mono whitespace-nowrap"
+        >
+          {#if currentTtft !== null}
+            <span class="text-xeo-light-gray">
+              <span class="text-white/70">TTFT</span>
+              <span class="text-xeo-green">{currentTtft.toFixed(1)}ms</span>
+            </span>
+          {/if}
+          {#if currentTps !== null}
+            <span class="text-xeo-light-gray">
+              <span class="text-white/70">TPS</span>
+              <span class="text-xeo-green">{currentTps.toFixed(1)}</span>
+              <span class="text-white/60">tok/s</span>
+              <span class="text-white/50"
+                >({(1000 / currentTps).toFixed(1)} ms/tok)</span
+              >
+            </span>
+          {/if}
+        </div>
+        <div
+          class="flex-1 h-px bg-gradient-to-l from-transparent to-xeo-green/30"
+        ></div>
       </div>
+    {:else}
+      <div
+        class="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-xeo-green/30 to-transparent"
+      ></div>
     {/if}
   </div>
 

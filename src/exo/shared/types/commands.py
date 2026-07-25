@@ -98,6 +98,12 @@ class CancelDownload(BaseCommand):
     model_id: ModelId
 
 
+class SetSharedModelsDirectory(BaseCommand):
+    """Set (or clear, with ``None``) the cluster-wide shared models directory."""
+
+    path: str | None
+
+
 class AddCustomModelCard(BaseCommand):
     model_card: ModelCard
 
@@ -132,6 +138,7 @@ Command = (
     | TaskCancelled
     | TaskFinished
     | SendInputChunk
+    | SetSharedModelsDirectory
     | AddCustomModelCard
     | DeleteCustomModelCard
     | SetInstanceLink

@@ -62,6 +62,39 @@
     >
   </button>
 
+  <!-- Models already available on at least one node -->
+  <button
+    type="button"
+    onclick={() => onSelect("downloaded")}
+    class="group flex flex-col items-center justify-center p-2 rounded transition-all duration-200 cursor-pointer {selectedFamily ===
+    'downloaded'
+      ? 'bg-xeo-green/20 border-l-2 border-xeo-green'
+      : 'hover:bg-white/5 border-l-2 border-transparent'}"
+    title="Show downloaded models"
+  >
+    <svg
+      class="w-5 h-5 {selectedFamily === 'downloaded'
+        ? 'text-xeo-green'
+        : 'text-white/50 group-hover:text-xeo-green/70'}"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3v11" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M5 18h14" />
+    </svg>
+    <span
+      class="text-[11px] font-mono mt-0.5 {selectedFamily === 'downloaded'
+        ? 'text-xeo-green'
+        : 'text-white/40 group-hover:text-white/60'}">Saved</span
+    >
+  </button>
+
   <!-- Favorites (only show if has favorites) -->
   {#if hasFavorites}
     <button

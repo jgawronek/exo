@@ -237,6 +237,7 @@ interface RawStateResponse {
     }
   >;
   runners?: Record<string, unknown>;
+  tasks?: Record<string, unknown>;
   instanceLinks?: Record<string, RawInstanceLink>;
   instanceStageTimings?: Record<string, Record<string, StageTiming>>;
   downloads?: Record<string, unknown[]>;
@@ -272,6 +273,15 @@ interface RawStateResponse {
   >;
   // Node currently coordinating the cluster (elected master)
   masterNodeId?: string | null;
+  // Cluster-wide shared models directory + per-node validation results
+  sharedModelsDir?: string | null;
+  sharedModelsDirStatuses?: Record<string, RawSharedDirectoryStatus>;
+}
+
+export interface RawSharedDirectoryStatus {
+  valid: boolean;
+  error?: string | null;
+  freeBytes?: number | null;
 }
 
 export interface MessageAttachment {
@@ -584,6 +594,7 @@ class AppStore {
   topologyData = $state<TopologyData | null>(null);
   instances = $state<Record<string, unknown>>({});
   runners = $state<Record<string, unknown>>({});
+  tasks = $state<Record<string, unknown>>({});
   instanceLinks = $state<Record<string, RawInstanceLink>>({});
   instanceStageTimings = $state<Record<string, Record<string, StageTiming>>>(
     {},
@@ -604,6 +615,10 @@ class AppStore {
   nodeIdentities = $state<Record<string, RawNodeIdentity>>({});
   nodeNetwork = $state<Record<string, RawNodeNetworkInfo>>({});
   masterNodeId = $state<string | null>(null);
+  sharedModelsDir = $state<string | null>(null);
+  sharedModelsDirStatuses = $state<Record<string, RawSharedDirectoryStatus>>(
+    {},
+  );
   thunderboltBridgeCycles = $state<string[][]>([]);
   nodeThunderbolt = $state<
     Record<
@@ -1462,6 +1477,7 @@ class AppStore {
       if (data.runners) {
         this.runners = data.runners;
       }
+      this.tasks = data.tasks ?? {};
       if (data.instanceLinks) {
         this.instanceLinks = data.instanceLinks;
       } else {
@@ -1478,6 +1494,8 @@ class AppStore {
       this.nodeIdentities = data.nodeIdentities ?? {};
       this.nodeNetwork = data.nodeNetwork ?? {};
       this.masterNodeId = data.masterNodeId ?? null;
+      this.sharedModelsDir = data.sharedModelsDir ?? null;
+      this.sharedModelsDirStatuses = data.sharedModelsDirStatuses ?? {};
       // Thunderbolt identifiers per node
       this.nodeThunderbolt = data.nodeThunderbolt ?? {};
       // RDMA ctl status per node
@@ -1621,10 +1639,7 @@ class AppStore {
    * Nodes already used by a running instance cannot be selected.
    */
   togglePreviewNodeFilter(nodeId: string) {
-    if (
-      this.selectedPreviewModelId &&
-      this.getOccupiedNodeIds().has(nodeId)
-    ) {
+    if (this.selectedPreviewModelId && this.getOccupiedNodeIds().has(nodeId)) {
       return;
     }
     const next = new Set(this.previewNodeFilter);
@@ -3702,6 +3717,7 @@ export const prefillProgress = () => appStore.prefillProgress;
 export const topologyData = () => appStore.topologyData;
 export const instances = () => appStore.instances;
 export const runners = () => appStore.runners;
+export const tasks = () => appStore.tasks;
 export const instanceLinks = () => appStore.instanceLinks;
 export const instanceStageTimings = () => appStore.instanceStageTimings;
 export const featureFlags = () => appStore.featureFlags;
@@ -3837,6 +3853,10 @@ export const nodeIdentities = () => appStore.nodeIdentities;
 // Master node + per-node network info (for advertising the API base URL)
 export const masterNodeId = () => appStore.masterNodeId;
 export const nodeNetwork = () => appStore.nodeNetwork;
+
+// Shared models directory (configured from the Library screen)
+export const sharedModelsDir = () => appStore.sharedModelsDir;
+export const sharedModelsDirStatuses = () => appStore.sharedModelsDirStatuses;
 
 // Thunderbolt & RDMA status
 export const nodeThunderbolt = () => appStore.nodeThunderbolt;

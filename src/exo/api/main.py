@@ -88,8 +88,12 @@ from exo.api.types import (
     ModelListModel,
     PlaceInstanceParams,
     PlacementPreview,
+    ModelsStorageNodeStatus,
+    ModelsStorageResponse,
     PlacementPreviewResponse,
     RebalanceInstanceResponse,
+    SetModelsStorageParams,
+    SetModelsStorageResponse,
     StartDownloadParams,
     StartDownloadResponse,
     ToolCall,
@@ -175,6 +179,7 @@ from exo.shared.types.commands import (
     PlaceInstance,
     SendInputChunk,
     SetInstanceLink,
+    SetSharedModelsDirectory,
     ShiftInstanceLayers,
     StartDownload,
     TaskCancelled,
@@ -197,6 +202,8 @@ from exo.shared.types.tasks import (
 from exo.shared.types.tasks import (
     ImageGeneration as ImageGenerationTask,
 )
+from exo.shared.types.tasks import ShiftLayers as ShiftLayersTask
+from exo.shared.types.tasks import TaskStatus
 from exo.shared.types.tasks import (
     TextGeneration as TextGenerationTask,
 )
@@ -399,6 +406,8 @@ class API:
         self.app.post("/models/add")(self.add_custom_model)
         self.app.delete("/models/custom/{model_id:path}")(self.delete_custom_model)
         self.app.get("/models/search")(self.search_models)
+        self.app.get("/models/storage")(self.get_models_storage)
+        self.app.put("/models/storage")(self.set_models_storage)
         self.app.post("/v1/chat/completions", response_model=None)(
             self.chat_completions
         )
@@ -748,6 +757,17 @@ class API:
         instance = self.state.instances.get(instance_id)
         if instance is None:
             raise HTTPException(status_code=404, detail="Instance not found")
+        if any(
+            isinstance(task, ShiftLayersTask)
+            and task.instance_id == instance_id
+            and task.task_status
+            in {TaskStatus.Pending, TaskStatus.Running, TaskStatus.Complete}
+            for task in self.state.tasks.values()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Instance already has a layer rebalance in progress",
+            )
 
         shard_assignments = instance.shard_assignments
         node_to_shard = {
@@ -2281,6 +2301,30 @@ class API:
         await self.download_command_sender.send(
             ForwarderDownloadCommand(origin=self._system_id, command=command)
         )
+
+    async def get_models_storage(self) -> ModelsStorageResponse:
+        return ModelsStorageResponse(
+            path=self.state.shared_models_dir,
+            per_node=[
+                ModelsStorageNodeStatus(
+                    node_id=node_id,
+                    valid=status.valid,
+                    error=status.error,
+                    free_bytes=status.free_bytes,
+                )
+                for node_id, status in self.state.shared_models_dir_statuses.items()
+            ],
+        )
+
+    async def set_models_storage(
+        self, payload: SetModelsStorageParams
+    ) -> SetModelsStorageResponse:
+        path_text = payload.path.strip() if payload.path is not None else None
+        if path_text == "":
+            path_text = None
+        command = SetSharedModelsDirectory(path=path_text)
+        await self._send(command)
+        return SetModelsStorageResponse(command_id=command.command_id, path=path_text)
 
     async def start_download(
         self, payload: StartDownloadParams

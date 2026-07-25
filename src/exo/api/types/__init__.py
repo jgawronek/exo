@@ -42,6 +42,8 @@ from .api import Logprobs as Logprobs
 from .api import LogprobsContentItem as LogprobsContentItem
 from .api import ModelList as ModelList
 from .api import ModelListModel as ModelListModel
+from .api import ModelsStorageNodeStatus as ModelsStorageNodeStatus
+from .api import ModelsStorageResponse as ModelsStorageResponse
 from .api import NodePowerStats as NodePowerStats
 from .api import PlaceInstanceParams as PlaceInstanceParams
 from .api import PlacementPreview as PlacementPreview
@@ -49,6 +51,8 @@ from .api import PlacementPreviewResponse as PlacementPreviewResponse
 from .api import PowerUsage as PowerUsage
 from .api import PromptTokensDetails as PromptTokensDetails
 from .api import RebalanceInstanceResponse as RebalanceInstanceResponse
+from .api import SetModelsStorageParams as SetModelsStorageParams
+from .api import SetModelsStorageResponse as SetModelsStorageResponse
 from .api import StartDownloadParams as StartDownloadParams
 from .api import StartDownloadResponse as StartDownloadResponse
 from .api import StreamingChoiceResponse as StreamingChoiceResponse

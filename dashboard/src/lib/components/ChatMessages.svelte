@@ -19,9 +19,14 @@
   interface Props {
     class?: string;
     scrollParent?: HTMLElement | null;
+    disabled?: boolean;
   }
 
-  let { class: className = "", scrollParent = null }: Props = $props();
+  let {
+    class: className = "",
+    scrollParent = null,
+    disabled = false,
+  }: Props = $props();
 
   const messageList = $derived(messages());
   const response = $derived(currentResponse());
@@ -181,6 +186,7 @@
   }
 
   function handleStartEdit(messageId: string, content: string) {
+    if (disabled) return;
     editingMessageId = messageId;
     editContent = content;
     setTimeout(() => {
@@ -204,6 +210,7 @@
   }
 
   function handleSaveEdit() {
+    if (disabled) return;
     if (editingMessageId && editContent.trim()) {
       editAndRegenerate(editingMessageId, editContent.trim());
     }
@@ -245,6 +252,7 @@
   }
 
   function handleRegenerate() {
+    if (disabled) return;
     regenerateLastResponse();
   }
 
@@ -363,7 +371,7 @@
               </button>
               <button
                 onclick={handleSaveEdit}
-                disabled={!editContent.trim()}
+                disabled={disabled || !editContent.trim()}
                 class="px-3 py-1.5 text-sm font-mono tracking-wider uppercase bg-transparent text-xeo-green border border-xeo-green/30 rounded hover:border-xeo-green/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
               >
                 <svg
@@ -633,8 +641,10 @@
                         tokens={message.tokens}
                         isGenerating={loading &&
                           isLastAssistantMessage(message.id)}
-                        onRegenerateFrom={(tokenIndex) =>
-                          regenerateFromToken(message.id, tokenIndex)}
+                        onRegenerateFrom={disabled
+                          ? undefined
+                          : (tokenIndex) =>
+                              regenerateFromToken(message.id, tokenIndex)}
                       />
                     {:else}
                       <MarkdownContent
@@ -700,7 +710,8 @@
             {#if message.role === "user"}
               <button
                 onclick={() => handleStartEdit(message.id, message.content)}
-                class="p-1.5 text-xeo-light-gray hover:text-xeo-green transition-colors rounded cursor-pointer"
+                {disabled}
+                class="p-1.5 text-xeo-light-gray hover:text-xeo-green transition-colors rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Edit message"
               >
                 <svg
@@ -752,7 +763,8 @@
             {#if message.role === "assistant" && isLastAssistantMessage(message.id) && !loading}
               <button
                 onclick={handleRegenerate}
-                class="p-1.5 text-xeo-light-gray hover:text-xeo-green transition-colors rounded cursor-pointer"
+                {disabled}
+                class="p-1.5 text-xeo-light-gray hover:text-xeo-green transition-colors rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Regenerate response"
               >
                 <svg

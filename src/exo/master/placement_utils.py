@@ -309,6 +309,8 @@ def plan_pipeline_layer_shift_steps(
     summing to the model's layer count, or a rank left without layers);
     handled by the master's ShiftInstanceLayers command handler.
     """
+    if not current_shards:
+        raise ValueError("Cannot shift layers for an empty pipeline")
     if set(current_shards) != set(target_layer_counts):
         raise ValueError(
             "Target layer counts must cover exactly the instance's runners"
@@ -321,6 +323,27 @@ def plan_pipeline_layer_shift_steps(
     )
     reference_shard = current_shards[ranked_runners[0]]
     total_layers = reference_shard.n_layers
+    expected_ranks = list(range(len(ranked_runners)))
+    actual_ranks = [
+        current_shards[runner_id].device_rank for runner_id in ranked_runners
+    ]
+    if actual_ranks != expected_ranks:
+        raise ValueError("Pipeline shard ranks must be contiguous and start at zero")
+    if any(
+        shard.n_layers != total_layers
+        or shard.world_size != len(ranked_runners)
+        or shard.model_card.model_id != reference_shard.model_card.model_id
+        for shard in current_shards.values()
+    ):
+        raise ValueError("Pipeline shards must describe the same complete model")
+    previous_end = 0
+    for runner_id in ranked_runners:
+        shard = current_shards[runner_id]
+        if shard.start_layer != previous_end or shard.end_layer <= shard.start_layer:
+            raise ValueError("Pipeline shard boundaries must be contiguous and nonempty")
+        previous_end = shard.end_layer
+    if previous_end != total_layers:
+        raise ValueError("Pipeline shard boundaries must cover the complete model")
     if sum(target_layer_counts.values()) != total_layers:
         raise ValueError(
             f"Target layer counts sum to {sum(target_layer_counts.values())}, "
@@ -377,8 +400,10 @@ def plan_pipeline_layer_shift_steps(
             steps.append(snapshot(current_boundaries))
             moved = True
             break
-        assert moved, "Layer shift planning stalled; boundaries are inconsistent"
-    assert current_boundaries == target_boundaries
+        if not moved:
+            raise ValueError("Layer shift planning stalled on inconsistent boundaries")
+    if current_boundaries != target_boundaries:
+        raise ValueError("Layer shift planning did not reach the requested target")
     return steps
 
 

@@ -21,8 +21,10 @@ from exo.shared.types.events import (
     MasterAnnounced,
     NodeDownloadProgress,
     NodeGatheredInfo,
+    NodeSharedDirectoryStatusUpdated,
     NodeTimedOut,
     RunnerStatusUpdated,
+    SharedModelsDirectorySet,
     StageTimingsUpdated,
     TaskAcknowledged,
     TaskCreated,
@@ -45,6 +47,7 @@ from exo.shared.types.profiling import (
     ThunderboltBridgeStatus,
 )
 from exo.shared.types.state import State
+from exo.shared.types.storage import SharedDirectoryStatus
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.topology import Connection, RDMAConnection
 from exo.shared.types.worker.downloads import DownloadProgress
@@ -100,6 +103,10 @@ def event_apply(event: Event, state: State) -> State:
             return apply_custom_model_card_added(event, state)
         case CustomModelCardDeleted():
             return apply_custom_model_card_deleted(event, state)
+        case SharedModelsDirectorySet():
+            return apply_shared_models_directory_set(event, state)
+        case NodeSharedDirectoryStatusUpdated():
+            return apply_node_shared_directory_status_updated(event, state)
         case InstanceCreated():
             return apply_instance_created(event, state)
         case InstanceDeleted():
@@ -388,6 +395,11 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
     node_rdma_ctl = {
         key: value for key, value in state.node_rdma_ctl.items() if key != event.node_id
     }
+    shared_models_dir_statuses = {
+        key: value
+        for key, value in state.shared_models_dir_statuses.items()
+        if key != event.node_id
+    }
     # Only recompute cycles if the leaving node had TB bridge enabled
     leaving_node_status = state.node_thunderbolt_bridge.get(event.node_id)
     leaving_node_had_tb_enabled = (
@@ -411,6 +423,7 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
             "node_thunderbolt_bridge": node_thunderbolt_bridge,
             "node_rdma_ctl": node_rdma_ctl,
             "thunderbolt_bridge_cycles": thunderbolt_bridge_cycles,
+            "shared_models_dir_statuses": shared_models_dir_statuses,
         }
     )
 
@@ -575,3 +588,33 @@ def apply_custom_model_card_deleted(
         if model_id != event.model_id
     }
     return state.model_copy(update={"custom_model_cards": new_cards})
+
+
+def apply_shared_models_directory_set(
+    event: SharedModelsDirectorySet, state: State
+) -> State:
+    if event.path == state.shared_models_dir:
+        # Re-announcement of the current value (e.g. after a master restart);
+        # keep the statuses nodes already reported.
+        return state
+    # Old validation results describe the previous path, so drop them and let
+    # every node re-validate the new one.
+    return state.model_copy(
+        update={
+            "shared_models_dir": event.path,
+            "shared_models_dir_statuses": {},
+        }
+    )
+
+
+def apply_node_shared_directory_status_updated(
+    event: NodeSharedDirectoryStatusUpdated, state: State
+) -> State:
+    if state.shared_models_dir is None:
+        # Stale report from before the setting was cleared.
+        return state
+    new_statuses: Mapping[NodeId, SharedDirectoryStatus] = {
+        **state.shared_models_dir_statuses,
+        event.node_id: event.status,
+    }
+    return state.model_copy(update={"shared_models_dir_statuses": new_statuses})

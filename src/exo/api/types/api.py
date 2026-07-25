@@ -470,6 +470,27 @@ class ImageListResponse(BaseModel, frozen=True):
     data: list[ImageListItem]
 
 
+class ModelsStorageNodeStatus(FrozenModel):
+    node_id: NodeId
+    valid: bool
+    error: str | None = None
+    free_bytes: int | None = None
+
+
+class ModelsStorageResponse(FrozenModel):
+    path: str | None
+    per_node: list[ModelsStorageNodeStatus]
+
+
+class SetModelsStorageParams(FrozenModel):
+    path: str | None = None
+
+
+class SetModelsStorageResponse(FrozenModel):
+    command_id: CommandId
+    path: str | None
+
+
 class StartDownloadParams(FrozenModel):
     target_node_id: NodeId
     shard_metadata: ShardMetadata

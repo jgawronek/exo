@@ -839,14 +839,19 @@
       const clipPathId = `clip-${nodeInfo.id.replace(/[^a-zA-Z0-9]/g, "-")}`;
 
       const modelLower = modelId.toLowerCase();
+      const chipLower = (
+        identity?.chipId ??
+        node.system_info?.chip ??
+        ""
+      ).toLowerCase();
+      const isDgxSpark =
+        modelLower.includes("dgx spark") || /\bgb10\b/i.test(chipLower);
 
       // Check node states for styling
       const isDisabled = disabledNodes.has(nodeInfo.id);
       const isHighlighted = highlightedNodes.has(nodeInfo.id);
       const isInFilter =
-        !isDisabled &&
-        filteredNodes.size > 0 &&
-        filteredNodes.has(nodeInfo.id);
+        !isDisabled && filteredNodes.size > 0 && filteredNodes.has(nodeInfo.id);
       const isFilteredOut =
         filteredNodes.size > 0 && !filteredNodes.has(nodeInfo.id);
       const isHovered =
@@ -920,7 +925,62 @@
             : `${friendlyName}\nID: ${nodeInfo.id.slice(-8)}\nMemory: ${formatBytes(ramUsed)}/${formatBytes(ramTotal)}`,
         );
 
-      if (modelLower === "mac studio") {
+      if (isDgxSpark) {
+        const outerRadius = nodeRadius * 0.72;
+        const innerRadius = outerRadius * 0.45;
+        iconBaseWidth = outerRadius * 2;
+        iconBaseHeight = outerRadius * 2;
+        const starVertices = Array.from({ length: 10 }, (_, index) => {
+          const radius = index % 2 === 0 ? outerRadius : innerRadius;
+          const angle = -Math.PI / 2 + (index * Math.PI) / 5;
+          return {
+            x: nodeInfo.x + radius * Math.cos(angle),
+            y: nodeInfo.y + radius * Math.sin(angle),
+          };
+        });
+        const starPoints = starVertices
+          .map((vertex) => `${vertex.x},${vertex.y}`)
+          .join(" ");
+        const starMinY = Math.min(...starVertices.map((vertex) => vertex.y));
+        const starMaxY = Math.max(...starVertices.map((vertex) => vertex.y));
+        const starHeight = starMaxY - starMinY;
+        const starClipId = `star-clip-${nodeInfo.id.replace(/[^a-zA-Z0-9]/g, "-")}`;
+
+        nodeG
+          .append("polygon")
+          .attr("class", "node-outline")
+          .attr("points", starPoints)
+          .attr("fill", fillColor)
+          .attr("stroke", wireColor)
+          .attr("stroke-width", strokeWidth)
+          .attr("stroke-linejoin", "round");
+
+        if (ramUsagePercent > 0) {
+          defs
+            .append("clipPath")
+            .attr("id", starClipId)
+            .append("polygon")
+            .attr("points", starPoints);
+
+          const fillHeight = (ramUsagePercent / 100) * starHeight;
+          nodeG
+            .append("rect")
+            .attr("x", nodeInfo.x - outerRadius)
+            .attr("y", starMaxY - fillHeight)
+            .attr("width", outerRadius * 2)
+            .attr("height", fillHeight)
+            .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
+            .attr("clip-path", `url(#${starClipId})`);
+
+          nodeG
+            .append("polygon")
+            .attr("points", starPoints)
+            .attr("fill", "none")
+            .attr("stroke", wireColor)
+            .attr("stroke-width", strokeWidth)
+            .attr("stroke-linejoin", "round");
+        }
+      } else if (modelLower === "mac studio") {
         // Mac Studio - classic cube with memory fill
         iconBaseWidth = nodeRadius * 1.25;
         iconBaseHeight = nodeRadius * 0.85;

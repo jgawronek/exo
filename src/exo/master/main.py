@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import anyio
 from loguru import logger
 
+from exo.download.shared_models_dir import load_persisted_shared_models_dir
 from exo.master.placement import (
     add_instance_to_placements,
     cancel_unnecessary_downloads,
@@ -38,6 +39,7 @@ from exo.shared.types.commands import (
     RequestEventLog,
     SendInputChunk,
     SetInstanceLink,
+    SetSharedModelsDirectory,
     ShiftInstanceLayers,
     TaskCancelled,
     TaskFinished,
@@ -61,6 +63,7 @@ from exo.shared.types.events import (
     MasterAnnounced,
     NodeGatheredInfo,
     NodeTimedOut,
+    SharedModelsDirectorySet,
     TaskCreated,
     TaskDeleted,
     TaskStatusUpdated,
@@ -179,6 +182,44 @@ def _prefill_endpoint_for(state: State, decode_instance_id: InstanceId) -> str |
     return None
 
 
+def recover_pipeline_layer_shift_steps(
+    current_shards: Mapping[RunnerId, PipelineShardMetadata],
+    task: ShiftLayersTask,
+) -> list[dict[RunnerId, PipelineShardMetadata]]:
+    """Rebuild a replicated layer-shift plan after master failover.
+
+    Raises ``ValueError`` when persisted progress is missing or inconsistent;
+    ``Master._restore_layer_shift_plans`` handles it by leaving that malformed
+    migration inactive rather than advancing an unsafe boundary sequence.
+    """
+    target_layer_counts = task.target_layer_counts
+    if target_layer_counts is None:
+        raise ValueError("Replicated layer-shift task has no final target")
+    if (
+        task.task_status == TaskStatus.Complete
+        and dict(current_shards) == task.new_shards
+    ):
+        remaining_steps = plan_pipeline_layer_shift_steps(
+            current_shards,
+            target_layer_counts,
+        )
+        expected_remaining_steps = task.total_steps - task.current_step
+        if len(remaining_steps) != expected_remaining_steps:
+            raise ValueError(
+                "Replicated layer-shift progress does not match the committed plan"
+            )
+        return [dict(current_shards), *remaining_steps]
+    steps = plan_pipeline_layer_shift_steps(current_shards, target_layer_counts)
+    expected_remaining_steps = task.total_steps - task.current_step + 1
+    if len(steps) != expected_remaining_steps:
+        raise ValueError(
+            "Replicated layer-shift progress does not match the remaining plan"
+        )
+    if not steps or steps[0] != task.new_shards:
+        raise ValueError("Replicated task is not the next replicated step")
+    return steps
+
+
 class Master:
     def __init__(
         self,
@@ -223,10 +264,151 @@ class Master:
             InstanceId, deque[dict[RunnerId, PipelineShardMetadata]]
         ] = {}
         self._shift_task_instance: dict[TaskId, InstanceId] = {}
+        self._recovered_shift_updates: list[TaskStatusUpdated] = []
+        self._recovered_shift_deletions: set[TaskId] = set()
+        self._recovered_instance_deletions: set[InstanceId] = set()
+        self._restore_layer_shift_plans()
 
     @property
     def state(self) -> State:
         return self.state_replica.state
+
+    def _restore_layer_shift_plans(self) -> None:
+        tasks_by_instance: dict[InstanceId, list[tuple[TaskId, ShiftLayersTask]]] = {}
+        for task_id, task in self.state.tasks.items():
+            if not isinstance(task, ShiftLayersTask):
+                continue
+            tasks_by_instance.setdefault(task.instance_id, []).append((task_id, task))
+
+        active_statuses = {TaskStatus.Pending, TaskStatus.Running}
+        for instance_id, instance_tasks in tasks_by_instance.items():
+            active_plan_ids = {
+                task.plan_id or task_id
+                for task_id, task in instance_tasks
+                if task.task_status in active_statuses
+            }
+            if len(active_plan_ids) > 1:
+                self._quarantine_shift_instance(instance_id, instance_tasks)
+                continue
+            if active_plan_ids:
+                selected_plan_id = next(iter(active_plan_ids))
+                selected_tasks = [
+                    (task_id, task)
+                    for task_id, task in instance_tasks
+                    if (task.plan_id or task_id) == selected_plan_id
+                ]
+            else:
+                selected_tasks = [
+                    (task_id, task)
+                    for task_id, task in instance_tasks
+                    if task.task_status == TaskStatus.Complete
+                ]
+                if not selected_tasks:
+                    self._recovered_shift_deletions.update(
+                        task_id for task_id, _ in instance_tasks
+                    )
+                    continue
+                completed_plan_ids = {
+                    task.plan_id or task_id for task_id, task in selected_tasks
+                }
+                if len(completed_plan_ids) != 1:
+                    self._quarantine_shift_instance(instance_id, instance_tasks)
+                    continue
+            selected_tasks.sort(key=lambda item: item[1].current_step, reverse=True)
+            task_id, task = selected_tasks[0]
+            stale_tasks = [
+                (stale_task_id, stale_task)
+                for stale_task_id, stale_task in instance_tasks
+                if stale_task_id != task_id
+            ]
+            if any(
+                stale_task.task_status in active_statuses
+                for _, stale_task in stale_tasks
+            ):
+                self._quarantine_shift_instance(instance_id, instance_tasks)
+                continue
+            self._recovered_shift_deletions.update(
+                stale_task_id for stale_task_id, _ in stale_tasks
+            )
+            instance = self.state.instances.get(task.instance_id)
+            if instance is None:
+                self._quarantine_shift_instance(instance_id, instance_tasks)
+                continue
+            if task.task_status not in active_statuses | {TaskStatus.Complete}:
+                self._shift_task_instance[task_id] = instance_id
+                self._recovered_shift_updates.append(
+                    TaskStatusUpdated(
+                        task_id=task_id,
+                        task_status=task.task_status,
+                    )
+                )
+                continue
+            current_shards = {
+                runner_id: shard
+                for runner_id, shard in instance.shard_assignments.runner_to_shard.items()
+                if isinstance(shard, PipelineShardMetadata)
+            }
+            if len(current_shards) != len(
+                instance.shard_assignments.runner_to_shard
+            ):
+                self._quarantine_shift_instance(instance_id, instance_tasks)
+                continue
+            try:
+                remaining_steps = recover_pipeline_layer_shift_steps(
+                    current_shards,
+                    task,
+                )
+            except ValueError as error:
+                logger.warning(
+                    f"Cannot restore layer shift for instance {task.instance_id}: "
+                    f"{error}"
+                )
+                self._quarantine_shift_instance(instance_id, instance_tasks)
+                continue
+            self._layer_shift_plans[task.instance_id] = deque(remaining_steps)
+            self._shift_task_instance[task_id] = task.instance_id
+            if task.task_status == TaskStatus.Complete:
+                self._recovered_shift_updates.append(
+                    TaskStatusUpdated(
+                        task_id=task_id,
+                        task_status=task.task_status,
+                    )
+                )
+            logger.info(
+                f"Restored live layer shift for instance {task.instance_id}: "
+                f"step {task.current_step}/{task.total_steps}"
+            )
+
+    def _quarantine_shift_instance(
+        self,
+        instance_id: InstanceId,
+        instance_tasks: list[tuple[TaskId, ShiftLayersTask]],
+    ) -> None:
+        logger.error(
+            f"Deleting instance {instance_id} because its replicated layer-shift "
+            "plan cannot be recovered safely"
+        )
+        self._recovered_instance_deletions.add(instance_id)
+        self._recovered_shift_deletions.update(
+            task_id for task_id, _ in instance_tasks
+        )
+        self._layer_shift_plans.pop(instance_id, None)
+        self._shift_task_instance = {
+            task_id: mapped_instance_id
+            for task_id, mapped_instance_id in self._shift_task_instance.items()
+            if mapped_instance_id != instance_id
+        }
+
+    async def _wait_for_shift_recovery_reconciliation(self) -> None:
+        recovered_task_ids = self._recovered_shift_deletions | {
+            update.task_id for update in self._recovered_shift_updates
+        }
+        with anyio.fail_after(10):
+            while any(
+                instance_id in self.state.instances
+                for instance_id in self._recovered_instance_deletions
+            ) or any(task_id in self.state.tasks for task_id in recovered_task_ids):
+                await anyio.sleep(0.01)
 
     async def run(self):
         logger.info("Starting Master")
@@ -234,9 +416,21 @@ class Master:
         try:
             async with self._tg as tg:
                 tg.start_soon(self._event_processor)
+                await self.event_sender.send(MasterAnnounced(node_id=self.node_id))
+                persisted_shared_dir = load_persisted_shared_models_dir()
+                if persisted_shared_dir is not None:
+                    await self.event_sender.send(
+                        SharedModelsDirectorySet(path=persisted_shared_dir)
+                    )
+                for instance_id in sorted(self._recovered_instance_deletions):
+                    await self.event_sender.send(InstanceDeleted(instance_id=instance_id))
+                for task_id in sorted(self._recovered_shift_deletions):
+                    await self.event_sender.send(TaskDeleted(task_id=task_id))
+                for update in self._recovered_shift_updates:
+                    await self._advance_layer_shift(update)
+                await self._wait_for_shift_recovery_reconciliation()
                 tg.start_soon(self._command_processor)
                 tg.start_soon(self._plan)
-                await self.event_sender.send(MasterAnnounced(node_id=self.node_id))
         except* (EventRouterBrokenResourceError, EventRouterClosedResourceError):
             # Event router has been closed (try-star syntax handles error groups)
             pass
@@ -522,6 +716,10 @@ class Master:
                                     f"Finished command {command.finished_command_id} finished"
                                 )
 
+                        case SetSharedModelsDirectory():
+                            generated_events.append(
+                                SharedModelsDirectorySet(path=command.path)
+                            )
                         case AddCustomModelCard():
                             generated_events.append(
                                 CustomModelCardAdded(model_card=command.model_card)
@@ -601,12 +799,27 @@ class Master:
             f"{len(steps)} single-layer steps"
         )
         self._layer_shift_plans[command.instance_id] = deque(steps)
-        return [self._create_shift_task(command.instance_id, steps[0])]
+        plan_id = TaskId()
+        return [
+            self._create_shift_task(
+                command.instance_id,
+                steps[0],
+                target_layer_counts,
+                plan_id=plan_id,
+                current_step=1,
+                total_steps=len(steps),
+            )
+        ]
 
     def _create_shift_task(
         self,
         instance_id: InstanceId,
         new_shards: dict[RunnerId, PipelineShardMetadata],
+        target_layer_counts: dict[RunnerId, int],
+        *,
+        plan_id: TaskId,
+        current_step: int,
+        total_steps: int,
     ) -> TaskCreated:
         task_id = TaskId()
         self._shift_task_instance[task_id] = instance_id
@@ -617,6 +830,10 @@ class Master:
                 instance_id=instance_id,
                 task_status=TaskStatus.Pending,
                 new_shards=new_shards,
+                plan_id=plan_id,
+                target_layer_counts=target_layer_counts,
+                current_step=current_step,
+                total_steps=total_steps,
             ),
         )
 
@@ -635,10 +852,19 @@ class Master:
             return
         del self._shift_task_instance[event.task_id]
 
-        follow_up_events: list[Event] = [TaskDeleted(task_id=event.task_id)]
+        follow_up_events: list[Event] = []
         plan = self._layer_shift_plans.get(instance_id)
         instance = self.state.instances.get(instance_id)
+        shift_task = self.state.tasks.get(event.task_id)
         if event.task_status == TaskStatus.Complete and plan and instance is not None:
+            if not isinstance(shift_task, ShiftLayersTask):
+                self._layer_shift_plans.pop(instance_id, None)
+                logger.warning(
+                    f"Layer shift task {event.task_id} is missing; "
+                    "aborting the remaining plan"
+                )
+                await self.event_sender.send(TaskDeleted(task_id=event.task_id))
+                return
             committed_shards = plan.popleft()
             new_assignments = instance.shard_assignments.model_copy(
                 update={"runner_to_shard": committed_shards}
@@ -649,7 +875,24 @@ class Master:
                 )
             )
             if plan:
-                follow_up_events.append(self._create_shift_task(instance_id, plan[0]))
+                target_layer_counts = shift_task.target_layer_counts
+                if target_layer_counts is None:
+                    self._layer_shift_plans.pop(instance_id, None)
+                    logger.warning(
+                        f"Layer shift task {event.task_id} has no final target; "
+                        "aborting the remaining plan"
+                    )
+                else:
+                    follow_up_events.append(
+                        self._create_shift_task(
+                            instance_id,
+                            plan[0],
+                            target_layer_counts,
+                            plan_id=shift_task.plan_id or shift_task.task_id,
+                            current_step=shift_task.current_step + 1,
+                            total_steps=shift_task.total_steps,
+                        )
+                    )
             else:
                 del self._layer_shift_plans[instance_id]
                 logger.info(f"Live layer shift for instance {instance_id} complete")
@@ -659,6 +902,7 @@ class Master:
                 f"Live layer shift step for instance {instance_id} ended with "
                 f"{event.task_status}; aborting the remaining plan"
             )
+        follow_up_events.append(TaskDeleted(task_id=event.task_id))
         for follow_up in follow_up_events:
             await self.event_sender.send(follow_up)
 
