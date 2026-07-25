@@ -133,6 +133,7 @@ from exo.master.placement import place_instance as get_instance_placements
 from exo.master.placement_utils import (
     allocate_layers_by_measured_speed,
     plan_pipeline_layer_shift_steps,
+    validate_live_rebalance_steps,
 )
 from exo.routing.event_router import ReplicatedEventDelivery
 from exo.shared.apply import apply
@@ -832,11 +833,20 @@ class API:
             shard_assignments.node_to_runner[node_id]: layer_count
             for node_id, layer_count in node_layers.items()
         }
-        steps = len(
-            plan_pipeline_layer_shift_steps(
+        try:
+            planned_steps = plan_pipeline_layer_shift_steps(
                 current_pipeline_shards, target_layer_counts
             )
-        )
+            validate_live_rebalance_steps(
+                model_card=model_card,
+                node_ids=node_ids,
+                node_to_runner=shard_assignments.node_to_runner,
+                node_memory=self.state.node_memory,
+                current_layers=current_layers,
+                steps=planned_steps,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         command = ShiftInstanceLayers(
             instance_id=instance_id,
             node_layers=node_layers,
@@ -847,7 +857,7 @@ class API:
             instance_id=instance_id,
             node_layers=node_layers,
             command_id=command.command_id,
-            steps=steps,
+            steps=len(planned_steps),
         )
 
     async def get_feature_flags(self) -> dict[str, bool]:

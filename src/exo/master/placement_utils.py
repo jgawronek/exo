@@ -1,5 +1,6 @@
 import itertools
 from collections.abc import Generator, Mapping
+from typing import Final
 
 from loguru import logger
 
@@ -107,6 +108,9 @@ _FALLBACK_MEMORY_BANDWIDTH_GBPS = 100.0
 # (Qwen3-30B-A3B: true 0.108 vs estimated 0.109; GLM-4.5-355B-A32B: true
 # ~0.09 vs estimated ~0.10).
 _MOE_DENSE_WEIGHT_SHARE = 0.05
+_LIVE_SHIFT_MEMORY_NUMERATOR: Final = 3
+_LIVE_SHIFT_MEMORY_DENOMINATOR: Final = 4
+_LIVE_SHIFT_TRANSIENT_LAYER_RESERVE: Final = 1
 
 
 def estimate_decode_bytes_read_per_token(model_card: ModelCard) -> float:
@@ -249,9 +253,9 @@ def allocate_layers_by_measured_speed(
     the same objective as ``allocate_layers_by_throughput``, but driven by
     live telemetry instead of the static bandwidth table. Equalising stage
     times would instead spread layers onto slower nodes and increase the
-    per-token sum. Memory caps treat each node's share of the currently
-    loaded instance as reclaimable, because rebalancing relaunches the
-    instance.
+    per-token sum. Memory caps preserve enough physical memory for runtime
+    state and one transient layer load, because a live shift loads the gaining
+    layer before the old layout has been fully released.
 
     Raises ValueError when a node has no measured timing yet or the
     allocation is impossible; handled by the API rebalance endpoint, which
@@ -273,16 +277,14 @@ def allocate_layers_by_measured_speed(
             )
         layer_rates.append(timing.layers_held / timing.compute_ms_per_token)
 
-    max_layers_per_node: list[int] = []
-    for node_id in node_ids:
-        reclaimable = (
-            model_card.storage_size * current_layers.get(node_id, 0)
-        ) // model_card.n_layers
-        usable = node_memory[node_id].ram_available + reclaimable
-        max_layers_per_node.append(
-            (usable.in_bytes * model_card.n_layers)
-            // model_card.storage_size.in_bytes
+    max_layers_per_node = [
+        live_rebalance_max_layers(
+            model_card=model_card,
+            memory_usage=node_memory[node_id],
+            current_layer_count=current_layers.get(node_id, 0),
         )
+        for node_id in node_ids
+    ]
 
     allocations = allocate_layers_by_throughput(
         total_layers=model_card.n_layers,
@@ -290,6 +292,118 @@ def allocate_layers_by_measured_speed(
         max_layers_per_node=max_layers_per_node,
     )
     return dict(zip(node_ids, allocations, strict=True))
+
+
+def live_rebalance_max_layers(
+    *,
+    model_card: ModelCard,
+    memory_usage: MemoryUsage,
+    current_layer_count: int,
+) -> int:
+    """Return a safe live-shift layer ceiling for one node.
+
+    The current model weights are reclaimable for the final layout, but live
+    migration also needs runtime memory and enough transient space to load the
+    next layer. A node already above the conservative ceiling may keep its
+    current layers, but the rebalance cannot increase that pressure.
+
+    Raises ``ValueError`` for invalid model metadata; the API converts it to
+    HTTP 400, while master recovery quarantines an unsafe persisted instance.
+    """
+    if model_card.storage_size.in_bytes <= 0:
+        raise ValueError("Model storage size must be positive for live rebalance")
+    layer_bytes = (
+        model_card.storage_size.in_bytes + model_card.n_layers - 1
+    ) // model_card.n_layers
+    reclaimable_bytes = (
+        model_card.storage_size.in_bytes * current_layer_count
+    ) // model_card.n_layers
+    reported_weight_budget = (
+        memory_usage.ram_available.in_bytes + reclaimable_bytes
+    )
+    physical_weight_budget = (
+        memory_usage.ram_total.in_bytes * _LIVE_SHIFT_MEMORY_NUMERATOR
+    ) // _LIVE_SHIFT_MEMORY_DENOMINATOR
+    transient_reserve_bytes = layer_bytes * _LIVE_SHIFT_TRANSIENT_LAYER_RESERVE
+    safe_weight_budget = min(
+        reported_weight_budget,
+        max(0, physical_weight_budget - transient_reserve_bytes),
+    )
+    calculated_layer_count = (
+        safe_weight_budget * model_card.n_layers
+    ) // model_card.storage_size.in_bytes
+    return min(
+        model_card.n_layers,
+        max(current_layer_count, calculated_layer_count),
+    )
+
+
+def validate_live_rebalance_target(
+    *,
+    model_card: ModelCard,
+    node_ids: list[NodeId],
+    node_memory: Mapping[NodeId, MemoryUsage],
+    current_layers: Mapping[NodeId, int],
+    target_layers: Mapping[NodeId, int],
+) -> None:
+    """Reject a target that would exceed any node's live-shift ceiling.
+
+    Raises ``ValueError`` for incomplete or unsafe targets; the API converts
+    it to HTTP 400, and the master command/recovery paths log or quarantine it.
+    """
+    if set(node_ids) != set(current_layers) or set(node_ids) != set(target_layers):
+        raise ValueError("Live rebalance layers must cover exactly the instance nodes")
+    for node_id in node_ids:
+        memory_usage = node_memory.get(node_id)
+        if memory_usage is None:
+            raise ValueError(f"No memory report for rebalance node {node_id}")
+        maximum_layers = live_rebalance_max_layers(
+            model_card=model_card,
+            memory_usage=memory_usage,
+            current_layer_count=current_layers[node_id],
+        )
+        if target_layers[node_id] > maximum_layers:
+            raise ValueError(
+                f"Live rebalance target for node {node_id} requires "
+                f"{target_layers[node_id]} layers but its safe limit is "
+                f"{maximum_layers}"
+            )
+
+
+def validate_live_rebalance_steps(
+    *,
+    model_card: ModelCard,
+    node_ids: list[NodeId],
+    node_to_runner: Mapping[NodeId, RunnerId],
+    node_memory: Mapping[NodeId, MemoryUsage],
+    current_layers: Mapping[NodeId, int],
+    steps: list[dict[RunnerId, PipelineShardMetadata]],
+) -> None:
+    """Reject a plan containing an unsafe intermediate layer layout.
+
+    Raises ``ValueError`` with the unsafe step number; the API converts it to
+    HTTP 400, while master recovery quarantines the potentially divergent
+    instance.
+    """
+    for step_number, step in enumerate(steps, start=1):
+        try:
+            validate_live_rebalance_target(
+                model_card=model_card,
+                node_ids=node_ids,
+                node_memory=node_memory,
+                current_layers=current_layers,
+                target_layers={
+                    node_id: (
+                        step[node_to_runner[node_id]].end_layer
+                        - step[node_to_runner[node_id]].start_layer
+                    )
+                    for node_id in node_ids
+                },
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"Live rebalance step {step_number} is unsafe: {error}"
+            ) from error
 
 
 def plan_pipeline_layer_shift_steps(

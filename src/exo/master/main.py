@@ -17,6 +17,7 @@ from exo.master.placement import (
 from exo.master.placement_utils import (
     find_ip_prioritised,
     plan_pipeline_layer_shift_steps,
+    validate_live_rebalance_steps,
 )
 from exo.routing.event_router import (
     EventRouterBrokenResourceError,
@@ -354,6 +355,9 @@ class Master:
                 self._quarantine_shift_instance(instance_id, instance_tasks)
                 continue
             try:
+                target_layer_counts = task.target_layer_counts
+                if target_layer_counts is None:
+                    raise ValueError("Replicated layer-shift task has no final target")
                 remaining_steps = recover_pipeline_layer_shift_steps(
                     current_shards,
                     task,
@@ -362,6 +366,29 @@ class Master:
                 logger.warning(
                     f"Cannot restore layer shift for instance {task.instance_id}: "
                     f"{error}"
+                )
+                self._quarantine_shift_instance(instance_id, instance_tasks)
+                continue
+            try:
+                runner_to_node = {
+                    runner_id: node_id
+                    for node_id, runner_id in instance.shard_assignments.node_to_runner.items()
+                }
+                validate_live_rebalance_steps(
+                    model_card=next(iter(current_shards.values())).model_card,
+                    node_ids=list(instance.shard_assignments.node_to_runner),
+                    node_to_runner=instance.shard_assignments.node_to_runner,
+                    node_memory=self.state.node_memory,
+                    current_layers={
+                        runner_to_node[runner_id]: shard.end_layer - shard.start_layer
+                        for runner_id, shard in current_shards.items()
+                    },
+                    steps=remaining_steps,
+                )
+            except ValueError as error:
+                logger.warning(
+                    f"Cannot safely restore layer shift for instance "
+                    f"{task.instance_id}: {error}"
                 )
                 self._quarantine_shift_instance(instance_id, instance_tasks)
                 continue
@@ -789,6 +816,23 @@ class Master:
             target_layer_counts[runner_id] = layer_count
 
         steps = plan_pipeline_layer_shift_steps(current_shards, target_layer_counts)
+        ranked_shards = sorted(
+            current_shards.values(), key=lambda shard: shard.device_rank
+        )
+        validate_live_rebalance_steps(
+            model_card=ranked_shards[0].model_card,
+            node_ids=list(assignments.node_to_runner),
+            node_to_runner=assignments.node_to_runner,
+            node_memory=self.state.node_memory,
+            current_layers={
+                node_id: (
+                    current_shards[runner_id].end_layer
+                    - current_shards[runner_id].start_layer
+                )
+                for node_id, runner_id in assignments.node_to_runner.items()
+            },
+            steps=steps,
+        )
         if not steps:
             logger.info(
                 f"Instance {command.instance_id} already matches the requested layout"

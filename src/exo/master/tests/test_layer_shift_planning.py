@@ -8,6 +8,7 @@ from exo.shared.types.backends import Backend
 from exo.shared.types.common import NodeId, SessionId
 from exo.shared.types.events import IndexedEvent, InstanceDeleted, TaskDeleted
 from exo.shared.types.memory import Memory
+from exo.shared.types.profiling import MemoryUsage
 from exo.shared.types.state import State
 from exo.shared.types.tasks import ShiftLayers, TaskId, TaskStatus
 from exo.shared.types.worker.instances import InstanceId, MlxRingInstance
@@ -65,12 +66,22 @@ def _restore_master(
     current_shards: dict[RunnerId, PipelineShardMetadata],
     task: ShiftLayers,
     additional_tasks: tuple[ShiftLayers, ...] = (),
+    node_memory_by_rank: tuple[MemoryUsage, ...] = (),
 ) -> Master:
     instance_id = task.instance_id
     node_to_runner = {
         NodeId(f"node-{index}"): runner_id
         for index, runner_id in enumerate(current_shards)
     }
+    effective_node_memory = node_memory_by_rank or tuple(
+        MemoryUsage.from_bytes(
+            ram_total=10_000_000_000,
+            ram_available=10_000_000_000,
+            swap_total=0,
+            swap_available=0,
+        )
+        for _ in node_to_runner
+    )
     instance = MlxRingInstance(
         instance_id=instance_id,
         shard_assignments=ShardAssignments(
@@ -87,6 +98,9 @@ def _restore_master(
         session=session,
         initial_state=State(
             instances={instance_id: instance},
+            node_memory=dict(
+                zip(node_to_runner, effective_node_memory, strict=True)
+            ),
             tasks={
                 replicated_task.task_id: replicated_task
                 for replicated_task in (task, *additional_tasks)
@@ -101,6 +115,49 @@ def _restore_master(
     master._recovered_instance_deletions = set()  # pyright: ignore[reportPrivateUsage]
     master._restore_layer_shift_plans()  # pyright: ignore[reportPrivateUsage]
     return master
+
+
+def test_master_quarantines_recovered_shift_that_exceeds_live_memory() -> None:
+    current = _shards([4, 2])
+    ranked = sorted(current, key=lambda runner_id: current[runner_id].device_rank)
+    target = dict(zip(ranked, [5, 1], strict=True))
+    steps = plan_pipeline_layer_shift_steps(current, target)
+    task = ShiftLayers(
+        instance_id=InstanceId("instance"),
+        task_status=TaskStatus.Running,
+        new_shards=steps[0],
+        target_layer_counts=target,
+        current_step=1,
+        total_steps=len(steps),
+    )
+    memory = (
+        MemoryUsage.from_bytes(
+            ram_total=1000,
+            ram_available=240,
+            swap_total=0,
+            swap_available=0,
+        ),
+        MemoryUsage.from_bytes(
+            ram_total=1000,
+            ram_available=500,
+            swap_total=0,
+            swap_available=0,
+        ),
+    )
+
+    master = _restore_master(
+        current_shards=current,
+        task=task,
+        node_memory_by_rank=memory,
+    )
+
+    assert master._recovered_instance_deletions == {  # pyright: ignore[reportPrivateUsage]
+        task.instance_id
+    }
+    assert master._recovered_shift_deletions == {  # pyright: ignore[reportPrivateUsage]
+        task.task_id
+    }
+    assert task.instance_id not in master._layer_shift_plans  # pyright: ignore[reportPrivateUsage]
 
 
 def test_single_boundary_move_is_one_step() -> None:

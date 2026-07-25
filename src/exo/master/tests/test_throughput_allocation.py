@@ -6,6 +6,9 @@ from exo.master.placement_utils import (
     allocate_layers_by_throughput,
     estimate_memory_bandwidth_gigabytes_per_second,
     find_ip_prioritised,
+    live_rebalance_max_layers,
+    plan_pipeline_layer_shift_steps,
+    validate_live_rebalance_steps,
 )
 from exo.master.tests.conftest import (
     create_node_memory,
@@ -28,7 +31,8 @@ from exo.shared.types.profiling import (
 )
 from exo.shared.types.topology import Connection, SocketConnection
 from exo.shared.types.worker.instances import InstanceMeta
-from exo.shared.types.worker.shards import Sharding
+from exo.shared.types.worker.runners import RunnerId
+from exo.shared.types.worker.shards import PipelineShardMetadata, Sharding
 
 
 def test_allocate_layers_by_throughput_fills_fastest_first() -> None:
@@ -808,6 +812,110 @@ def _stage_timing(layers_held: int, compute_ms_per_token: float) -> StageTiming:
     )
 
 
+def _memory_usage(*, total_bytes: int, available_bytes: int) -> MemoryUsage:
+    return MemoryUsage.from_bytes(
+        ram_total=total_bytes,
+        ram_available=available_bytes,
+        swap_total=0,
+        swap_available=0,
+    )
+
+
+def test_measured_speed_allocation_reserves_live_shift_memory() -> None:
+    fast_node, slow_node = NodeId(), NodeId()
+    model_card = _pipeline_model_card(storage_bytes=1000)
+
+    allocations = allocate_layers_by_measured_speed(
+        model_card=model_card,
+        node_ids=[fast_node, slow_node],
+        node_memory={
+            fast_node: _memory_usage(total_bytes=1000, available_bytes=240),
+            slow_node: _memory_usage(total_bytes=1000, available_bytes=500),
+        },
+        current_layers={fast_node: 7, slow_node: 3},
+        stage_timings={
+            fast_node: _stage_timing(layers_held=7, compute_ms_per_token=1.0),
+            slow_node: _stage_timing(layers_held=3, compute_ms_per_token=4.0),
+        },
+    )
+
+    assert allocations == {fast_node: 7, slow_node: 3}
+
+
+def test_live_rebalance_reserves_one_transient_layer() -> None:
+    assert (
+        live_rebalance_max_layers(
+            model_card=_pipeline_model_card(storage_bytes=1000),
+            memory_usage=_memory_usage(total_bytes=1000, available_bytes=300),
+            current_layer_count=5,
+        )
+        == 6
+    )
+
+
+def test_live_rebalance_rejects_zero_sized_model() -> None:
+    with pytest.raises(ValueError, match="storage size must be positive"):
+        _ = live_rebalance_max_layers(
+            model_card=_pipeline_model_card(storage_bytes=0),
+            memory_usage=_memory_usage(total_bytes=1000, available_bytes=1000),
+            current_layer_count=1,
+        )
+
+
+def test_live_rebalance_rejects_unsafe_intermediate_step() -> None:
+    node_a, node_b, node_c = NodeId(), NodeId(), NodeId()
+    runner_a, runner_b, runner_c = RunnerId(), RunnerId(), RunnerId()
+    model_card = _pipeline_model_card(storage_bytes=600)
+    current_shards = {
+        runner_a: PipelineShardMetadata(
+            model_card=model_card,
+            device_rank=0,
+            world_size=3,
+            start_layer=0,
+            end_layer=4,
+            n_layers=10,
+        ),
+        runner_b: PipelineShardMetadata(
+            model_card=model_card,
+            device_rank=1,
+            world_size=3,
+            start_layer=4,
+            end_layer=5,
+            n_layers=10,
+        ),
+        runner_c: PipelineShardMetadata(
+            model_card=model_card,
+            device_rank=2,
+            world_size=3,
+            start_layer=5,
+            end_layer=10,
+            n_layers=10,
+        ),
+    }
+    steps = plan_pipeline_layer_shift_steps(
+        current_shards,
+        {runner_a: 1, runner_b: 1, runner_c: 8},
+    )
+
+    with pytest.raises(ValueError, match="step 3"):
+        validate_live_rebalance_steps(
+            model_card=model_card,
+            node_ids=[node_a, node_b, node_c],
+            node_to_runner={
+                node_a: runner_a,
+                node_b: runner_b,
+                node_c: runner_c,
+            },
+            node_memory={
+                node_a: _memory_usage(total_bytes=1000, available_bytes=1000),
+                node_b: _memory_usage(total_bytes=320, available_bytes=300),
+                node_c: _memory_usage(total_bytes=1000, available_bytes=1000),
+            },
+            current_layers={node_a: 4, node_b: 1, node_c: 5},
+            steps=steps,
+        )
+
+
 def test_measured_speed_allocation_moves_layers_to_faster_node() -> None:
     node_a, node_b = NodeId(), NodeId()
     model_card = _pipeline_model_card(storage_bytes=1000)
@@ -818,8 +926,8 @@ def test_measured_speed_allocation_moves_layers_to_faster_node() -> None:
         model_card=model_card,
         node_ids=[node_a, node_b],
         node_memory={
-            node_a: create_node_memory(1000),
-            node_b: create_node_memory(1000),
+            node_a: _memory_usage(total_bytes=2000, available_bytes=1000),
+            node_b: _memory_usage(total_bytes=2000, available_bytes=1000),
         },
         current_layers={node_a: 5, node_b: 5},
         stage_timings={
@@ -872,8 +980,8 @@ def test_measured_speed_allocation_counts_current_layers_as_reclaimable() -> Non
     node_a, node_b = NodeId(), NodeId()
     model_card = _pipeline_model_card(storage_bytes=1000)
     # Both nodes report 0 bytes free because the running instance holds all
-    # the weights; the allocator must treat each node's current share as
-    # available again after the relaunch.
+    # the weights; the allocator may preserve each node's current share but
+    # must not increase either node during a live shift.
     allocations = allocate_layers_by_measured_speed(
         model_card=model_card,
         node_ids=[node_a, node_b],
