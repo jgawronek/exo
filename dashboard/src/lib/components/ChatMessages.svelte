@@ -436,12 +436,19 @@
                   <PrefillProgressBar progress={prefill} class="mb-3" />
                 {/if}
                 {#if message.thinking && message.thinking.trim().length > 0}
+                  {@const isActivelyThinking =
+                    loading &&
+                    isLastAssistantMessage(message.id) &&
+                    !message.content}
                   <div
-                    class="mb-3 rounded border border-xeo-green/20 bg-xeo-black/40"
+                    class="mb-3 rounded border border-xeo-green/20 bg-xeo-black/40 relative overflow-hidden"
                   >
+                    {#if isActivelyThinking}
+                      <div class="thinking-sweep" aria-hidden="true"></div>
+                    {/if}
                     <button
                       type="button"
-                      class="w-full flex items-center justify-between px-3 py-2 text-xs font-mono uppercase tracking-[0.2em] text-xeo-light-gray/80 hover:text-xeo-green transition-colors cursor-pointer"
+                      class="relative w-full flex items-center justify-between px-3 py-2 text-xs font-mono uppercase tracking-[0.2em] text-xeo-light-gray/80 hover:text-xeo-green transition-colors cursor-pointer"
                       onclick={() => toggleThinkingVisibility(message.id)}
                       aria-expanded={isThinkingExpanded(message.id)}
                       aria-controls={`thinking-panel-${message.id}`}
@@ -854,3 +861,33 @@
   src={expandedImageSrc}
   onclose={() => (expandedImageSrc = null)}
 />
+
+<style>
+  /* Knight Rider sweep shown while the model is actively thinking:
+     a fading bar that bounces left <-> right across the header. */
+  .thinking-sweep {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 110px;
+    pointer-events: none;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      oklch(0.78 0.17 145 / 0.24) 50%,
+      transparent
+    );
+    animation: thinking-sweep-bounce 1.5s ease-in-out infinite;
+  }
+
+  @keyframes thinking-sweep-bounce {
+    0%,
+    100% {
+      left: 0;
+    }
+    50% {
+      left: calc(100% - 110px);
+    }
+  }
+</style>

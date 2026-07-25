@@ -5718,11 +5718,24 @@
                         </button>
                       </div>
                       <div class="pl-2">
-                        <div
-                          class="text-xeo-green text-xs font-mono tracking-wide truncate"
-                        >
-                          {getInstanceModelId(instance)}
-                        </div>
+                        {#if instanceModelId && instanceModelId !== "Unknown" && instanceModelId !== "Unknown Model"}
+                          <a
+                            class="block text-xeo-green text-xs font-mono tracking-wide truncate hover:underline"
+                            href={`https://huggingface.co/${instanceModelId}`}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            title="View model on Hugging Face"
+                            onclick={(event) => event.stopPropagation()}
+                          >
+                            {getInstanceModelId(instance)}
+                          </a>
+                        {:else}
+                          <div
+                            class="text-xeo-green text-xs font-mono tracking-wide truncate"
+                          >
+                            {getInstanceModelId(instance)}
+                          </div>
+                        {/if}
                         <div
                           class="flex items-center gap-2 text-white/60 text-xs font-mono"
                         >
@@ -5745,33 +5758,6 @@
                               : ""}
                           </span>
                         </div>
-                        {#if instanceModelId && instanceModelId !== "Unknown" && instanceModelId !== "Unknown Model"}
-                          <a
-                            class="inline-flex items-center gap-1 text-[11px] text-white/60 hover:text-xeo-green transition-colors mt-1"
-                            href={`https://huggingface.co/${instanceModelId}`}
-                            target="_blank"
-                            rel="noreferrer noopener"
-                            aria-label="View model on Hugging Face"
-                            onclick={(event) => event.stopPropagation()}
-                          >
-                            <span>Hugging Face</span>
-                            <svg
-                              class="w-3.5 h-3.5"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              stroke-width="2"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                            >
-                              <path d="M14 3h7v7" />
-                              <path d="M10 14l11-11" />
-                              <path
-                                d="M21 14v6a1 1 0 0 1-1 1h-16a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1h6"
-                              />
-                            </svg>
-                          </a>
-                        {/if}
                         {#if instanceInfo.nodeNames.length > 0}
                           <div class="text-white/60 text-xs font-mono">
                             {instanceInfo.nodeNames.join(", ")}
@@ -7004,11 +6990,24 @@
                           </button>
                         </div>
                         <div class="pl-2">
-                          <div
-                            class="text-xeo-green text-xs font-mono tracking-wide truncate"
-                          >
-                            {getInstanceModelId(instance)}
-                          </div>
+                          {#if instanceModelId && instanceModelId !== "Unknown" && instanceModelId !== "Unknown Model"}
+                            <a
+                              class="block text-xeo-green text-xs font-mono tracking-wide truncate hover:underline"
+                              href={`https://huggingface.co/${instanceModelId}`}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              title="View model on Hugging Face"
+                              onclick={(event) => event.stopPropagation()}
+                            >
+                              {getInstanceModelId(instance)}
+                            </a>
+                          {:else}
+                            <div
+                              class="text-xeo-green text-xs font-mono tracking-wide truncate"
+                            >
+                              {getInstanceModelId(instance)}
+                            </div>
+                          {/if}
                           <div
                             class="flex items-center gap-2 text-white/60 text-xs font-mono"
                           >
@@ -7031,33 +7030,6 @@
                                 : ""}
                             </span>
                           </div>
-                          {#if instanceModelId && instanceModelId !== "Unknown" && instanceModelId !== "Unknown Model"}
-                            <a
-                              class="inline-flex items-center gap-1 text-[11px] text-white/60 hover:text-xeo-green transition-colors mt-1"
-                              href={`https://huggingface.co/${instanceModelId}`}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              aria-label="View model on Hugging Face"
-                              onclick={(event) => event.stopPropagation()}
-                            >
-                              <span>Hugging Face</span>
-                              <svg
-                                class="w-3.5 h-3.5"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                              >
-                                <path d="M14 3h7v7" />
-                                <path d="M10 14l11-11" />
-                                <path
-                                  d="M21 14v6a1 1 0 0 1-1 1h-16a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1h6"
-                                />
-                              </svg>
-                            </a>
-                          {/if}
                           {#if instanceInfo.nodeNames.length > 0}
                             <div class="text-white/60 text-xs font-mono">
                               {instanceInfo.nodeNames.join(", ")}

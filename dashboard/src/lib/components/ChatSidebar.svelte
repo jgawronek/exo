@@ -8,6 +8,7 @@
     renameConversation,
     clearChat,
     instances,
+    nodeIdentities,
   } from "$lib/stores/app.svelte";
 
   interface Props {
@@ -213,6 +214,23 @@
     return { sharding, instanceType };
   }
 
+  /**
+   * Friendly names of the nodes hosting the conversation's instance,
+   * or null when that instance no longer exists (deleted).
+   */
+  function instanceNodeNames(instanceId: string): string[] | null {
+    const wrapped = instanceData[instanceId];
+    if (!wrapped) return null;
+    const [, instance] = getTaggedValue(wrapped);
+    const inst = instance as {
+      shardAssignments?: { nodeToRunner?: Record<string, string> };
+    } | null;
+    const identities = nodeIdentities();
+    return Object.keys(inst?.shardAssignments?.nodeToRunner ?? {}).map(
+      (nodeId) => identities[nodeId]?.friendlyName || nodeId.slice(0, 8),
+    );
+  }
+
   function resolveConversationInfo(
     conversation: (typeof conversationList)[0],
   ): { modelLabel: string; strategyLabel: string } {
@@ -363,6 +381,9 @@
             {:else}
               <!-- Normal view -->
               {@const stats = getLastAssistantStats(conversation)}
+              {@const liveNodeNames = conversation.instanceId
+                ? instanceNodeNames(conversation.instanceId)
+                : null}
               <div
                 role="button"
                 tabindex="0"
@@ -394,15 +415,22 @@
                     class="text-[11px] text-white/45 font-mono truncate"
                     title={conversation.instanceId ?? info.strategyLabel}
                   >
-                    {#if conversation.instanceId}
+                    {#if conversation.instanceId && liveNodeNames}
                       <span class="text-xeo-green/70"
                         >{conversation.instanceId.slice(0, 8).toUpperCase()}</span
                       >
+                    {:else if conversation.instanceId}
+                      <span class="text-white/35 italic">Valhalla</span>
                     {:else}
                       Instance
                     {/if}
                     · {info.strategyLabel}
                   </div>
+                  {#if liveNodeNames && liveNodeNames.length > 0}
+                    <div class="text-[11px] text-white/40 truncate">
+                      {liveNodeNames.join(", ")}
+                    </div>
+                  {/if}
                   {#if stats}
                     <div class="text-xs text-white/70 font-mono mt-1">
                       {#if stats.ttftMs}<span class="text-white/50">TTFT</span>

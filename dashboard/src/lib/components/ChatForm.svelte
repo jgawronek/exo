@@ -348,12 +348,8 @@
               class="text-xs font-mono text-xeo-green/80 uppercase tracking-wider flex-shrink-0"
               title="Selected instance">{instanceIdLabel}</span
             >
-            <span class="text-xs text-xeo-light-gray/40 flex-shrink-0">·</span>
+            <span class="text-xs text-xeo-light-gray/50 flex-shrink-0">:</span>
           {/if}
-          <span
-            class="text-xs text-xeo-light-gray uppercase tracking-wider flex-shrink-0"
-            >MODEL:</span
-          >
           {#if currentModelLabel}
             <span
               class="text-xs font-mono text-xeo-green truncate tracking-wide"
@@ -393,28 +389,6 @@
             </svg>
             <span>{thinkingEnabled ? "THINK" : "NO THINK"}</span>
           </button>
-        {/if}
-
-        <!-- Performance stats -->
-        {#if !disabled && (currentTtft !== null || currentTps !== null)}
-          <div class="flex items-center gap-4 text-xs font-mono flex-shrink-0">
-            {#if currentTtft !== null}
-              <span class="text-xeo-light-gray">
-                <span class="text-white/70">TTFT</span>
-                <span class="text-xeo-green">{currentTtft.toFixed(1)}ms</span>
-              </span>
-            {/if}
-            {#if currentTps !== null}
-              <span class="text-xeo-light-gray">
-                <span class="text-white/70">TPS</span>
-                <span class="text-xeo-green">{currentTps.toFixed(1)}</span>
-                <span class="text-white/60">tok/s</span>
-                <span class="text-white/50"
-                  >({(1000 / currentTps).toFixed(1)} ms/tok)</span
-                >
-              </span>
-            {/if}
-          </div>
         {/if}
       </div>
     {/if}
@@ -574,6 +548,30 @@
     <div
       class="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-xeo-green/30 to-transparent"
     ></div>
+
+    <!-- Performance stats centered on the bottom frame line -->
+    {#if showModelSelector && !disabled && (currentTtft !== null || currentTps !== null)}
+      <div
+        class="absolute bottom-0 left-1/2 -translate-x-1/2 z-10 px-3 pb-px flex items-center gap-4 text-[11px] font-mono whitespace-nowrap pointer-events-none bg-[oklch(0.12_0_0)] rounded-t"
+      >
+        {#if currentTtft !== null}
+          <span class="text-xeo-light-gray">
+            <span class="text-white/70">TTFT</span>
+            <span class="text-xeo-green">{currentTtft.toFixed(1)}ms</span>
+          </span>
+        {/if}
+        {#if currentTps !== null}
+          <span class="text-xeo-light-gray">
+            <span class="text-white/70">TPS</span>
+            <span class="text-xeo-green">{currentTps.toFixed(1)}</span>
+            <span class="text-white/60">tok/s</span>
+            <span class="text-white/50"
+              >({(1000 / currentTps).toFixed(1)} ms/tok)</span
+            >
+          </span>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   {#if showHelperText}
