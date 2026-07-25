@@ -70,6 +70,9 @@ mlx-cuda13 = [
   "exo[mlx]",
   "mlx-cuda-13==0.32.0; sys_platform == 'linux'",
   "nvidia-ml-py>=13.595.45",
+  "torch==2.10.0; sys_platform == 'linux'",
+  "torchaudio==2.10.0; sys_platform == 'linux'",
+  "torchvision==0.25.0; sys_platform == 'linux'",
 ]
 
 ###
