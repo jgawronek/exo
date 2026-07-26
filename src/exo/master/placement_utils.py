@@ -111,6 +111,10 @@ _MOE_DENSE_WEIGHT_SHARE = 0.05
 _LIVE_SHIFT_MEMORY_NUMERATOR: Final = 3
 _LIVE_SHIFT_MEMORY_DENOMINATOR: Final = 4
 _LIVE_SHIFT_TRANSIENT_LAYER_RESERVE: Final = 1
+# A stage measuring this many times slower than its rated memory bandwidth
+# predicts is treated as a sick node (thermal throttling, memory thrashing,
+# wrong compute device) rather than correctly-rated slow hardware.
+_MEASURED_SLOWDOWN_WARNING_FACTOR: Final = 3.0
 
 
 def estimate_decode_bytes_read_per_token(model_card: ModelCard) -> float:
@@ -144,6 +148,9 @@ def allocate_layers_by_throughput(
     Per-token pipeline decode latency is the sum of every stage's compute
     time, and stage time is (layers on node) / (node throughput), so the sum
     is minimised by loading the fastest nodes to their memory capacity first.
+    Nodes with equal throughput contribute identically to the summed stage
+    time, so their share is spread as evenly as memory caps allow instead of
+    letting list order starve later nodes down to the 1-layer floor.
     Every node keeps at least one layer (a pipeline stage cannot be empty).
     Raises ValueError when allocation is impossible; handled by the placement
     caller (``place_instance``) which surfaces it to the API.
@@ -168,10 +175,24 @@ def allocate_layers_by_throughput(
 
     result = [1] * n
     remaining = total_layers - n
-    for i in sorted(range(n), key=lambda i: node_throughputs[i], reverse=True):
-        take = min(max_layers_per_node[i] - result[i], remaining)
-        result[i] += take
-        remaining -= take
+    descending_throughput = sorted(
+        range(n), key=lambda i: node_throughputs[i], reverse=True
+    )
+    for _, tie_group_iterator in itertools.groupby(
+        descending_throughput, key=lambda i: node_throughputs[i]
+    ):
+        tie_group = list(tie_group_iterator)
+        group_take = min(
+            sum(max_layers_per_node[i] - result[i] for i in tie_group), remaining
+        )
+        remaining -= group_take
+        while group_take > 0:
+            recipient = min(
+                (i for i in tie_group if result[i] < max_layers_per_node[i]),
+                key=lambda i: result[i],
+            )
+            result[recipient] += 1
+            group_take -= 1
         if remaining == 0:
             break
     assert remaining == 0
@@ -278,7 +299,7 @@ def allocate_layers_by_measured_speed(
         layer_rates.append(timing.layers_held / timing.compute_ms_per_token)
 
     max_layers_per_node = [
-        live_rebalance_max_layers(
+        pipeline_safe_max_layers(
             model_card=model_card,
             memory_usage=node_memory[node_id],
             current_layer_count=current_layers.get(node_id, 0),
@@ -294,41 +315,41 @@ def allocate_layers_by_measured_speed(
     return dict(zip(node_ids, allocations, strict=True))
 
 
-def live_rebalance_max_layers(
+def pipeline_safe_max_layers(
     *,
     model_card: ModelCard,
     memory_usage: MemoryUsage,
     current_layer_count: int,
 ) -> int:
-    """Return a safe live-shift layer ceiling for one node.
+    """Return a safe layer ceiling for one node's pipeline stage.
 
-    The current model weights are reclaimable for the final layout, but live
-    migration also needs runtime memory and enough transient space to load the
-    next layer. A node already above the conservative ceiling may keep its
-    current layers, but the rebalance cannot increase that pressure.
+    Weight bytes must stay within both the node's reported available memory
+    and a conservative fraction of its physical memory, so a stage never
+    squeezes out the runtime working set (KV cache, activations, OS
+    pressure). During a live shift (``current_layer_count`` > 0) the current
+    weights are reclaimable for the final layout, but one transient layer of
+    headroom is additionally reserved because the gaining layer is loaded
+    before the old layout is released; a node already above the ceiling may
+    keep its current layers, the shift just cannot increase that pressure.
 
     Raises ``ValueError`` for invalid model metadata; the API converts it to
     HTTP 400, while master recovery quarantines an unsafe persisted instance.
     """
     if model_card.storage_size.in_bytes <= 0:
-        raise ValueError("Model storage size must be positive for live rebalance")
-    layer_bytes = (
-        model_card.storage_size.in_bytes + model_card.n_layers - 1
-    ) // model_card.n_layers
+        raise ValueError("Model storage size must be positive for layer allocation")
     reclaimable_bytes = (
         model_card.storage_size.in_bytes * current_layer_count
     ) // model_card.n_layers
-    reported_weight_budget = (
-        memory_usage.ram_available.in_bytes + reclaimable_bytes
-    )
+    reported_weight_budget = memory_usage.ram_available.in_bytes + reclaimable_bytes
     physical_weight_budget = (
         memory_usage.ram_total.in_bytes * _LIVE_SHIFT_MEMORY_NUMERATOR
     ) // _LIVE_SHIFT_MEMORY_DENOMINATOR
-    transient_reserve_bytes = layer_bytes * _LIVE_SHIFT_TRANSIENT_LAYER_RESERVE
-    safe_weight_budget = min(
-        reported_weight_budget,
-        max(0, physical_weight_budget - transient_reserve_bytes),
-    )
+    if current_layer_count > 0:
+        layer_bytes = (
+            model_card.storage_size.in_bytes + model_card.n_layers - 1
+        ) // model_card.n_layers
+        physical_weight_budget -= layer_bytes * _LIVE_SHIFT_TRANSIENT_LAYER_RESERVE
+    safe_weight_budget = min(reported_weight_budget, max(0, physical_weight_budget))
     calculated_layer_count = (
         safe_weight_budget * model_card.n_layers
     ) // model_card.storage_size.in_bytes
@@ -357,7 +378,7 @@ def validate_live_rebalance_target(
         memory_usage = node_memory.get(node_id)
         if memory_usage is None:
             raise ValueError(f"No memory report for rebalance node {node_id}")
-        maximum_layers = live_rebalance_max_layers(
+        maximum_layers = pipeline_safe_max_layers(
             model_card=model_card,
             memory_usage=memory_usage,
             current_layer_count=current_layers[node_id],
@@ -454,7 +475,9 @@ def plan_pipeline_layer_shift_steps(
     for runner_id in ranked_runners:
         shard = current_shards[runner_id]
         if shard.start_layer != previous_end or shard.end_layer <= shard.start_layer:
-            raise ValueError("Pipeline shard boundaries must be contiguous and nonempty")
+            raise ValueError(
+                "Pipeline shard boundaries must be contiguous and nonempty"
+            )
         previous_end = shard.end_layer
     if previous_end != total_layers:
         raise ValueError("Pipeline shard boundaries must cover the complete model")
@@ -547,8 +570,11 @@ def _allocate_and_validate_layers(
     node_identities: Mapping[NodeId, NodeIdentity] | None = None,
 ) -> list[int]:
     max_layers_per_node = [
-        (node_memory[node_id].ram_available.in_bytes * model_card.n_layers)
-        // model_card.storage_size.in_bytes
+        pipeline_safe_max_layers(
+            model_card=model_card,
+            memory_usage=node_memory[node_id],
+            current_layer_count=0,
+        )
         for node_id in node_ids
     ]
 
@@ -580,17 +606,13 @@ def _allocate_and_validate_layers(
             max_layers_per_node=max_layers_per_node,
         )
 
-    total_storage = model_card.storage_size
-    total_layers = model_card.n_layers
     for i, node_id in enumerate(node_ids):
         node_layers = layer_allocations[i]
-        required_memory = (total_storage * node_layers) // total_layers
-        available_memory = node_memory[node_id].ram_available
-        if required_memory > available_memory:
+        if node_layers > max_layers_per_node[i]:
             raise ValueError(
                 f"Node {i} ({node_id}) has insufficient memory: "
-                f"requires {required_memory.in_gb:.2f} GB for {node_layers} layers, "
-                f"but only has {available_memory.in_gb:.2f} GB available"
+                f"{node_layers} layers exceed its safe ceiling of "
+                f"{max_layers_per_node[i]} layers"
             )
 
     return layer_allocations
@@ -1073,12 +1095,15 @@ def estimate_cycle_decode_seconds_per_token(
         or _FALLBACK_MEMORY_BANDWIDTH_GBPS
         for node_id in node_ids
     ]
-    max_layers_per_node = [
-        (node_memory[node_id].ram_available.in_bytes * model_card.n_layers)
-        // model_card.storage_size.in_bytes
-        for node_id in node_ids
-    ]
     try:
+        max_layers_per_node = [
+            pipeline_safe_max_layers(
+                model_card=model_card,
+                memory_usage=node_memory[node_id],
+                current_layer_count=0,
+            )
+            for node_id in node_ids
+        ]
         layer_allocations = allocate_layers_by_throughput(
             total_layers=model_card.n_layers,
             node_throughputs=node_bandwidths,

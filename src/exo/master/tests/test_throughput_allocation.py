@@ -6,7 +6,7 @@ from exo.master.placement_utils import (
     allocate_layers_by_throughput,
     estimate_memory_bandwidth_gigabytes_per_second,
     find_ip_prioritised,
-    live_rebalance_max_layers,
+    pipeline_safe_max_layers,
     plan_pipeline_layer_shift_steps,
     validate_live_rebalance_steps,
 )
@@ -844,7 +844,7 @@ def test_measured_speed_allocation_reserves_live_shift_memory() -> None:
 
 def test_live_rebalance_reserves_one_transient_layer() -> None:
     assert (
-        live_rebalance_max_layers(
+        pipeline_safe_max_layers(
             model_card=_pipeline_model_card(storage_bytes=1000),
             memory_usage=_memory_usage(total_bytes=1000, available_bytes=300),
             current_layer_count=5,
@@ -855,7 +855,7 @@ def test_live_rebalance_reserves_one_transient_layer() -> None:
 
 def test_live_rebalance_rejects_zero_sized_model() -> None:
     with pytest.raises(ValueError, match="storage size must be positive"):
-        _ = live_rebalance_max_layers(
+        _ = pipeline_safe_max_layers(
             model_card=_pipeline_model_card(storage_bytes=0),
             memory_usage=_memory_usage(total_bytes=1000, available_bytes=1000),
             current_layer_count=1,

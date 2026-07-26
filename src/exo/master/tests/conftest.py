@@ -8,8 +8,12 @@ from exo.shared.types.topology import RDMAConnection, SocketConnection
 
 
 def create_node_memory(memory: int) -> MemoryUsage:
+    # Physical RAM far above the reported availability so the
+    # available-memory figure stays the binding placement constraint,
+    # including during live shifts where reclaimable weight bytes are
+    # added back on top of it.
     return MemoryUsage.from_bytes(
-        ram_total=1000,
+        ram_total=memory * 100,
         ram_available=memory,
         swap_total=1000,
         swap_available=1000,
