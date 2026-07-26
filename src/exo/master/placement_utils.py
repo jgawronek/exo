@@ -521,9 +521,22 @@ def plan_pipeline_layer_shift_steps(
         abs(current - target)
         for current, target in zip(current_boundaries, target_boundaries, strict=True)
     )
+    # Process rightward-moving boundaries (decreasing splits) highest-first
+    # and leftward-moving ones (increasing splits) lowest-first, so a rank
+    # that layers merely flow through sheds to its downstream neighbour
+    # before gaining from upstream. No rank then transiently holds more than
+    # max(current, target) layers, which the live-shift memory validation
+    # would reject.
+    movable_boundaries = range(1, len(current_boundaries) - 1)
+    scan_order = sorted(
+        (i for i in movable_boundaries if target_boundaries[i] < current_boundaries[i]),
+        reverse=True,
+    ) + sorted(
+        i for i in movable_boundaries if target_boundaries[i] > current_boundaries[i]
+    )
     for _ in range(total_moves):
         moved = False
-        for i in range(1, len(current_boundaries) - 1):
+        for i in scan_order:
             if current_boundaries[i] < target_boundaries[i] and (
                 current_boundaries[i] + 1 < current_boundaries[i + 1]
             ):

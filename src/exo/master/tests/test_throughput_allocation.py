@@ -892,9 +892,12 @@ def test_live_rebalance_rejects_unsafe_intermediate_step() -> None:
             n_layers=10,
         ),
     }
+    # node_b's ceiling is 3 layers (three-quarters of 320 bytes minus one
+    # 60-byte transient layer), so growing it to 4 is unsafe at step 3 no
+    # matter how the planner orders the moves.
     steps = plan_pipeline_layer_shift_steps(
         current_shards,
-        {runner_a: 1, runner_b: 1, runner_c: 8},
+        {runner_a: 1, runner_b: 4, runner_c: 5},
     )
 
     with pytest.raises(ValueError, match="step 3"):

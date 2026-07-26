@@ -202,6 +202,26 @@ def test_multi_hop_moves_one_layer_per_step_and_keeps_every_rank_nonempty() -> N
     assert previous_counts == [1, 1, 4]
 
 
+def test_pass_through_rank_sheds_before_gaining() -> None:
+    # A mid-pipeline rank whose layer count is unchanged, but through which
+    # layers flow rightward, must never transiently exceed
+    # max(current, target) — a rank at its live-shift memory ceiling would
+    # otherwise fail step validation before shedding to its neighbour.
+    current = _shards([3, 37, 10, 10])
+    ranked = sorted(current, key=lambda r: current[r].device_rank)
+    target_counts = [1, 37, 7, 15]
+    target = dict(zip(ranked, target_counts, strict=True))
+
+    steps = plan_pipeline_layer_shift_steps(current, target)
+
+    current_counts = _layer_counts_by_rank(current)
+    for step in steps:
+        _assert_contiguous(step)
+        for rank, count in enumerate(_layer_counts_by_rank(step)):
+            assert count <= max(current_counts[rank], target_counts[rank])
+    assert _layer_counts_by_rank(steps[-1]) == target_counts
+
+
 def test_final_step_matches_target_exactly() -> None:
     current = _shards([1, 4, 1])
     ranked = sorted(current, key=lambda r: current[r].device_rank)

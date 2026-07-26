@@ -65,8 +65,11 @@ async def test_rebalance_rejects_unsafe_intermediate_step_as_bad_request(
         },
     )
 
+    # nodes[1]'s ceiling is 3 layers (three-quarters of 320 bytes minus one
+    # 60-byte transient layer), so an allocation growing it to 4 has an
+    # unsafe step no matter how the planner orders the moves.
     def unsafe_allocation(**_: object) -> dict[NodeId, int]:
-        return dict(zip(nodes, (1, 1, 8), strict=True))
+        return dict(zip(nodes, (1, 4, 5), strict=True))
 
     monkeypatch.setattr(
         "exo.api.main.allocate_layers_by_measured_speed",
