@@ -132,6 +132,7 @@ from exo.master.image_store import ImageStore
 from exo.master.placement import place_instance as get_instance_placements
 from exo.master.placement_utils import (
     allocate_layers_by_measured_speed,
+    node_memory_with_pending_shutdowns,
     plan_pipeline_layer_shift_steps,
     validate_live_rebalance_steps,
 )
@@ -534,7 +535,10 @@ class API:
                     instance_meta=instance_meta,
                     min_nodes=min_nodes,
                 ),
-                node_memory=self.state.node_memory,
+                node_memory=node_memory_with_pending_shutdowns(
+                    node_memory=self.state.node_memory,
+                    tasks=self.state.tasks,
+                ),
                 node_network=self.state.node_network,
                 node_backends=self.state.node_backends,
                 topology=self.state.topology,
@@ -599,7 +603,10 @@ class API:
                         instance_meta=instance_meta,
                         min_nodes=min_nodes,
                     ),
-                    node_memory=self.state.node_memory,
+                    node_memory=node_memory_with_pending_shutdowns(
+                        node_memory=self.state.node_memory,
+                        tasks=self.state.tasks,
+                    ),
                     node_network=self.state.node_network,
                     node_backends=self.state.node_backends,
                     topology=self.state.topology,

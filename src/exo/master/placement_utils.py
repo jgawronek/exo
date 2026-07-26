@@ -15,7 +15,19 @@ from exo.shared.types.profiling import (
     NodeNetworkInfo,
     StageTiming,
 )
+from exo.shared.types.tasks import (
+    CreateRunner as CreateRunnerTask,
+)
+from exo.shared.types.tasks import (
+    Shutdown as ShutdownTask,
+)
+from exo.shared.types.tasks import (
+    Task,
+    TaskId,
+    TaskStatus,
+)
 from exo.shared.types.topology import Cycle, RDMAConnection, SocketConnection
+from exo.shared.types.worker.instances import BoundInstance, InstanceId
 from exo.shared.types.worker.runners import RunnerId, ShardAssignments
 from exo.shared.types.worker.shards import (
     CfgShardMetadata,
@@ -357,6 +369,68 @@ def pipeline_safe_max_layers(
         model_card.n_layers,
         max(current_layer_count, calculated_layer_count),
     )
+
+
+def _shard_weight_bytes(shard: ShardMetadata) -> int:
+    layer_bytes = (
+        shard.model_card.storage_size.in_bytes * (shard.end_layer - shard.start_layer)
+    ) // max(shard.n_layers, 1)
+    if isinstance(shard, PipelineShardMetadata):
+        return layer_bytes
+    # Tensor/CFG ranks hold a per-rank slice of each layer; dividing by the
+    # world size under-credits, which is the safe direction for a memory
+    # credit.
+    return layer_bytes // max(shard.world_size, 1)
+
+
+def node_memory_with_pending_shutdowns(
+    *,
+    node_memory: Mapping[NodeId, MemoryUsage],
+    tasks: Mapping[TaskId, Task],
+) -> dict[NodeId, MemoryUsage]:
+    """Credit back weight bytes held by runners that are still shutting down.
+
+    Memory reports lag runner teardown: after an instance is deleted its
+    runner can hold shard weights for several more seconds, so a placement
+    computed from the raw report under-counts the node and can exclude it
+    entirely. A Shutdown task that is still pending or running marks such a
+    runner; its shard's weight bytes are added back to the node's reported
+    available memory. The physical-memory ceiling in
+    ``pipeline_safe_max_layers`` bounds any over-credit for a runner that
+    never finished loading its weights.
+    """
+    bound_by_runner: dict[tuple[InstanceId, RunnerId], BoundInstance] = {
+        (task.instance_id, task.bound_instance.bound_runner_id): task.bound_instance
+        for task in tasks.values()
+        if isinstance(task, CreateRunnerTask)
+    }
+    pending_release_bytes: dict[NodeId, int] = {}
+    for task in tasks.values():
+        if not isinstance(task, ShutdownTask):
+            continue
+        if task.task_status not in (TaskStatus.Pending, TaskStatus.Running):
+            continue
+        bound_instance = bound_by_runner.get((task.instance_id, task.runner_id))
+        if bound_instance is None:
+            continue
+        node_id = bound_instance.bound_node_id
+        pending_release_bytes[node_id] = pending_release_bytes.get(
+            node_id, 0
+        ) + _shard_weight_bytes(bound_instance.bound_shard)
+
+    adjusted = dict(node_memory)
+    for node_id, release_bytes in pending_release_bytes.items():
+        memory_usage = adjusted.get(node_id)
+        if memory_usage is None:
+            continue
+        adjusted[node_id] = memory_usage.model_copy(
+            update={
+                "ram_available": Memory.from_bytes(
+                    memory_usage.ram_available.in_bytes + release_bytes
+                )
+            }
+        )
+    return adjusted
 
 
 def validate_live_rebalance_target(

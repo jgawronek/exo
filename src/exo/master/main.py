@@ -16,6 +16,7 @@ from exo.master.placement import (
 )
 from exo.master.placement_utils import (
     find_ip_prioritised,
+    node_memory_with_pending_shutdowns,
     plan_pipeline_layer_shift_steps,
     validate_live_rebalance_steps,
 )
@@ -349,9 +350,7 @@ class Master:
                 for runner_id, shard in instance.shard_assignments.runner_to_shard.items()
                 if isinstance(shard, PipelineShardMetadata)
             }
-            if len(current_shards) != len(
-                instance.shard_assignments.runner_to_shard
-            ):
+            if len(current_shards) != len(instance.shard_assignments.runner_to_shard):
                 self._quarantine_shift_instance(instance_id, instance_tasks)
                 continue
             try:
@@ -416,9 +415,7 @@ class Master:
             "plan cannot be recovered safely"
         )
         self._recovered_instance_deletions.add(instance_id)
-        self._recovered_shift_deletions.update(
-            task_id for task_id, _ in instance_tasks
-        )
+        self._recovered_shift_deletions.update(task_id for task_id, _ in instance_tasks)
         self._layer_shift_plans.pop(instance_id, None)
         self._shift_task_instance = {
             task_id: mapped_instance_id
@@ -450,7 +447,9 @@ class Master:
                         SharedModelsDirectorySet(path=persisted_shared_dir)
                     )
                 for instance_id in sorted(self._recovered_instance_deletions):
-                    await self.event_sender.send(InstanceDeleted(instance_id=instance_id))
+                    await self.event_sender.send(
+                        InstanceDeleted(instance_id=instance_id)
+                    )
                 for task_id in sorted(self._recovered_shift_deletions):
                     await self.event_sender.send(TaskDeleted(task_id=task_id))
                 for update in self._recovered_shift_updates:
@@ -687,7 +686,10 @@ class Master:
                                 command,
                                 self.state.topology,
                                 self.state.instances,
-                                self.state.node_memory,
+                                node_memory_with_pending_shutdowns(
+                                    node_memory=self.state.node_memory,
+                                    tasks=self.state.tasks,
+                                ),
                                 self.state.node_network,
                                 self.state.node_backends,
                                 download_status=self.state.downloads,

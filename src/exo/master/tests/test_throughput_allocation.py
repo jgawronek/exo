@@ -6,6 +6,7 @@ from exo.master.placement_utils import (
     allocate_layers_by_throughput,
     estimate_memory_bandwidth_gigabytes_per_second,
     find_ip_prioritised,
+    node_memory_with_pending_shutdowns,
     pipeline_safe_max_layers,
     plan_pipeline_layer_shift_steps,
     validate_live_rebalance_steps,
@@ -29,9 +30,25 @@ from exo.shared.types.profiling import (
     NodeNetworkInfo,
     StageTiming,
 )
+from exo.shared.types.tasks import (
+    CreateRunner as CreateRunnerTask,
+)
+from exo.shared.types.tasks import (
+    Shutdown as ShutdownTask,
+)
+from exo.shared.types.tasks import (
+    Task,
+    TaskId,
+    TaskStatus,
+)
 from exo.shared.types.topology import Connection, SocketConnection
-from exo.shared.types.worker.instances import InstanceMeta
-from exo.shared.types.worker.runners import RunnerId
+from exo.shared.types.worker.instances import (
+    BoundInstance,
+    InstanceId,
+    InstanceMeta,
+    MlxRingInstance,
+)
+from exo.shared.types.worker.runners import RunnerId, ShardAssignments
 from exo.shared.types.worker.shards import PipelineShardMetadata, Sharding
 
 
@@ -1047,3 +1064,83 @@ def test_find_ip_prioritised_falls_back_to_nominal_speeds_for_ring() -> None:
 
     # Without measured speeds the previous type preference is preserved.
     assert selected_ip == thunderbolt_ip
+
+
+def _shutdown_scenario_tasks(
+    *, node_id: NodeId, shutdown_status: TaskStatus
+) -> dict[TaskId, Task]:
+    model_card = _pipeline_model_card(storage_bytes=1000)
+    runner_id = RunnerId()
+    instance = MlxRingInstance(
+        instance_id=InstanceId(),
+        shard_assignments=ShardAssignments(
+            model_id=model_card.model_id,
+            runner_to_shard={
+                runner_id: PipelineShardMetadata(
+                    model_card=model_card,
+                    device_rank=0,
+                    world_size=1,
+                    start_layer=0,
+                    end_layer=5,
+                    n_layers=10,
+                )
+            },
+            node_to_runner={node_id: runner_id},
+        ),
+        hosts_by_node={},
+        ephemeral_port=50_000,
+    )
+    create_task = CreateRunnerTask(
+        instance_id=instance.instance_id,
+        task_status=TaskStatus.Complete,
+        bound_instance=BoundInstance(
+            instance=instance, bound_runner_id=runner_id, bound_node_id=node_id
+        ),
+    )
+    shutdown_task = ShutdownTask(
+        instance_id=instance.instance_id,
+        task_status=shutdown_status,
+        runner_id=runner_id,
+    )
+    return {create_task.task_id: create_task, shutdown_task.task_id: shutdown_task}
+
+
+def test_pending_shutdown_credits_shard_weights_to_node_memory() -> None:
+    node_id = NodeId()
+    tasks = _shutdown_scenario_tasks(
+        node_id=node_id, shutdown_status=TaskStatus.Running
+    )
+    adjusted = node_memory_with_pending_shutdowns(
+        node_memory={node_id: _memory_usage(total_bytes=2000, available_bytes=100)},
+        tasks=tasks,
+    )
+    # 5 of 10 layers of a 1000-byte model are still held: 500 bytes credited.
+    assert adjusted[node_id].ram_available.in_bytes == 600
+    assert adjusted[node_id].ram_total.in_bytes == 2000
+
+
+def test_completed_shutdown_credits_nothing() -> None:
+    node_id = NodeId()
+    tasks = _shutdown_scenario_tasks(
+        node_id=node_id, shutdown_status=TaskStatus.Complete
+    )
+    adjusted = node_memory_with_pending_shutdowns(
+        node_memory={node_id: _memory_usage(total_bytes=2000, available_bytes=100)},
+        tasks=tasks,
+    )
+    assert adjusted[node_id].ram_available.in_bytes == 100
+
+
+def test_pending_shutdown_without_memory_report_is_ignored() -> None:
+    node_id = NodeId()
+    other_node = NodeId()
+    tasks = _shutdown_scenario_tasks(
+        node_id=node_id, shutdown_status=TaskStatus.Running
+    )
+    adjusted = node_memory_with_pending_shutdowns(
+        node_memory={other_node: _memory_usage(total_bytes=2000, available_bytes=100)},
+        tasks=tasks,
+    )
+    assert adjusted == {
+        other_node: _memory_usage(total_bytes=2000, available_bytes=100)
+    }
