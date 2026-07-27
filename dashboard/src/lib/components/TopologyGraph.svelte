@@ -264,28 +264,6 @@
     return result;
   });
 
-  /**
-   * Each node's share of the instance's summed per-token compute time —
-   * "which node is working hardest" — used to glow the node icon.
-   */
-  const nodeComputeShare = $derived.by(() => {
-    const share: Record<string, number> = {};
-    for (const timings of Object.values(stageTimingsData || {})) {
-      const entries = Object.entries(timings || {}).filter(
-        ([, timing]) => timing.computeMsPerToken > 0,
-      );
-      const total = entries.reduce(
-        (sum, [, timing]) => sum + timing.computeMsPerToken,
-        0,
-      );
-      if (total <= 0) continue;
-      for (const [nodeId, timing] of entries) {
-        share[nodeId] = timing.computeMsPerToken / total;
-      }
-    }
-    return share;
-  });
-
   /** Layer strip color: dim teal when unmeasured, teal->amber as more of
    * the layer's experts light up, decaying back toward the dim neutral as
    * the measurement ages. */
@@ -337,35 +315,6 @@
         .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
         .attr("clip-path", `url(#${clipId})`);
     }
-  }
-
-  /** Glow exactly one node: the pipeline bottleneck (largest share of
-   * per-token compute time). Intensity scales with its lead over the
-   * runner-up, so a well-balanced pipeline glows gently and a dominant
-   * bottleneck burns bright. */
-  function drawComputeGlow(
-    nodeG: d3.Selection<SVGGElement, unknown, null, undefined>,
-    nodeId: string,
-    cx: number,
-    cy: number,
-    radius: number,
-  ) {
-    const share = nodeComputeShare[nodeId];
-    if (share === undefined || share <= 0) return;
-    const shares = Object.values(nodeComputeShare).sort((a, b) => b - a);
-    if (shares.length < 2) return;
-    const [maxShare, secondShare] = shares;
-    if (share < maxShare) return;
-    const lead = secondShare > 0 ? maxShare / secondShare - 1 : 1;
-    const intensity = Math.min(0.9, 0.4 + 1.5 * lead) * activityFreshness;
-    if (intensity < 0.05) return;
-    nodeG
-      .insert("circle", ":first-child")
-      .attr("cx", cx)
-      .attr("cy", cy)
-      .attr("r", radius * (1.15 + 0.5 * intensity))
-      .attr("fill", "url(#node-compute-glow-gradient)")
-      .attr("opacity", (0.75 * intensity).toFixed(3));
   }
 
   /**
@@ -633,27 +582,6 @@
 
     // Add defs for clip paths and filters
     const defs = svg.append("defs");
-    // A radial gradient reads as a soft glow at a fraction of the render
-    // cost of an feGaussianBlur filter, which browsers re-rasterize on
-    // every redraw and visibly hitches the graph.
-    const glowGradient = defs
-      .append("radialGradient")
-      .attr("id", "node-compute-glow-gradient");
-    glowGradient
-      .append("stop")
-      .attr("offset", "0%")
-      .attr("stop-color", "oklch(0.72 0.16 55)")
-      .attr("stop-opacity", 0.85);
-    glowGradient
-      .append("stop")
-      .attr("offset", "55%")
-      .attr("stop-color", "oklch(0.72 0.16 55)")
-      .attr("stop-opacity", 0.35);
-    glowGradient
-      .append("stop")
-      .attr("offset", "100%")
-      .attr("stop-color", "oklch(0.72 0.16 55)")
-      .attr("stop-opacity", 0);
 
     // Glow filter
     const glowFilter = defs
@@ -1258,7 +1186,6 @@
             .attr("stroke-width", strokeWidth)
             .attr("stroke-linejoin", "round");
         }
-        drawComputeGlow(nodeG, nodeInfo.id, nodeInfo.x, nodeInfo.y, outerRadius);
       } else if (modelLower === "mac studio") {
         // Mac Studio - classic cube with memory fill
         iconBaseWidth = nodeRadius * 1.25;
@@ -1305,13 +1232,6 @@
             height: iconBaseHeight - topSurfaceHeight,
           },
           ramUsagePercent,
-        );
-        drawComputeGlow(
-          nodeG,
-          nodeInfo.id,
-          nodeInfo.x,
-          nodeInfo.y,
-          iconBaseWidth * 0.6,
         );
 
         // Front panel details - vertical slots
@@ -1391,13 +1311,6 @@
             height: iconBaseHeight - topSurfaceHeight,
           },
           ramUsagePercent,
-        );
-        drawComputeGlow(
-          nodeG,
-          nodeInfo.id,
-          nodeInfo.x,
-          nodeInfo.y,
-          iconBaseWidth * 0.6,
         );
 
         // Front panel details - vertical slots (no horizontal slot for Mini)
@@ -1482,13 +1395,6 @@
             height: screenHeight - screenBezel * 2,
           },
           ramUsagePercent,
-        );
-        drawComputeGlow(
-          nodeG,
-          nodeInfo.id,
-          nodeInfo.x,
-          nodeInfo.y,
-          iconBaseWidth * 0.55,
         );
 
         // Apple logo on screen (centered, on top of memory fill)
@@ -1599,7 +1505,6 @@
             .attr("stroke", wireColor)
             .attr("stroke-width", strokeWidth);
         }
-        drawComputeGlow(nodeG, nodeInfo.id, nodeInfo.x, nodeInfo.y, hexRadius);
       }
 
       // --- Telemetry rail (right of icon): load meter + metric stack ---
@@ -2114,8 +2019,6 @@
     const _nodeStageTiming = nodeStageTiming;
     const _nodeLayerHeat = nodeLayerHeat;
     void _nodeLayerHeat;
-    const _nodeComputeShare = nodeComputeShare;
-    void _nodeComputeShare;
     const _activityFreshness = activityFreshness;
     void _activityFreshness;
     const _generationActive = generationActive;
