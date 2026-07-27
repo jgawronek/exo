@@ -136,6 +136,42 @@
       const assignments = instance?.shardAssignments;
       if (!assignments) continue;
       const activity = expertActivityData?.[instanceId] ?? {};
+
+      // Raw per-layer routing concentration: effective number of experts
+      // (exp of Shannon entropy of the activation histogram) relative to
+      // the pool. Raw coverage saturates (64 tokens x top-k touches nearly
+      // every expert) and MoE balancing losses keep absolute concentration
+      // similar across layers, so the strips are normalized to the
+      // instance's own min-max range below to make differences visible.
+      const rawHeatByLayer: Record<number, number> = {};
+      for (const [layerKey, layerActivity] of Object.entries(activity)) {
+        const layer = Number(layerKey);
+        if (
+          !Number.isInteger(layer) ||
+          !layerActivity ||
+          layerActivity.numExperts < 1 ||
+          layerActivity.tokensMeasured < 1
+        ) {
+          continue;
+        }
+        const total = layerActivity.activations.reduce(
+          (sum, count) => sum + count,
+          0,
+        );
+        if (total <= 0) continue;
+        let entropy = 0;
+        for (const count of layerActivity.activations) {
+          if (count <= 0) continue;
+          const probability = count / total;
+          entropy -= probability * Math.log(probability);
+        }
+        rawHeatByLayer[layer] = Math.exp(entropy) / layerActivity.numExperts;
+      }
+      const rawValues = Object.values(rawHeatByLayer);
+      const minHeat = rawValues.length ? Math.min(...rawValues) : 0;
+      const maxHeat = rawValues.length ? Math.max(...rawValues) : 0;
+      const heatSpan = maxHeat - minHeat;
+
       for (const [nodeId, runnerId] of Object.entries(
         assignments.nodeToRunner || {},
       )) {
@@ -150,33 +186,13 @@
         }
         const strips: (number | null)[] = [];
         for (let layer = shard.startLayer; layer < shard.endLayer; layer++) {
-          const layerActivity = activity[String(layer)];
-          if (
-            layerActivity &&
-            layerActivity.numExperts > 0 &&
-            layerActivity.tokensMeasured > 0
-          ) {
-            // Effective number of experts (exp of Shannon entropy of the
-            // activation histogram) over the window, relative to the pool.
-            // Raw coverage saturates: 64 tokens x top-k touches nearly every
-            // expert, but concentration still varies layer to layer.
-            const total = layerActivity.activations.reduce(
-              (sum, count) => sum + count,
-              0,
-            );
-            if (total > 0) {
-              let entropy = 0;
-              for (const count of layerActivity.activations) {
-                if (count <= 0) continue;
-                const probability = count / total;
-                entropy -= probability * Math.log(probability);
-              }
-              strips.push(Math.exp(entropy) / layerActivity.numExperts);
-            } else {
-              strips.push(null);
-            }
-          } else {
+          const raw = rawHeatByLayer[layer];
+          if (raw === undefined) {
             strips.push(null);
+          } else if (heatSpan > 1e-9) {
+            strips.push((raw - minHeat) / heatSpan);
+          } else {
+            strips.push(0.5);
           }
         }
         if (strips.length > 0) result[nodeId] = strips;

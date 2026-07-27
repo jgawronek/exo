@@ -7273,25 +7273,40 @@
                                   </div>
                                 </div>
                               {:else}
-                                <button
-                                  onclick={(event) => {
-                                    event.stopPropagation();
-                                    rebalanceInstance(id);
-                                  }}
-                                  disabled={rebalancingInstances[id]}
-                                  title="Live-migrate layers one at a time to the measured-speed split (no downtime)"
-                                  class="mt-1.5 text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
-                                    null && rebalanceGain > 0.1
-                                    ? 'border-xeo-green/60 text-xeo-green shadow-[0_0_8px_oklch(0.78_0.17_145/0.35)] hover:bg-xeo-green/20'
-                                    : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
-                                >
-                                  {rebalancingInstances[id]
-                                    ? "REBALANCING..."
-                                    : rebalanceGain !== null &&
-                                        rebalanceGain > 0.1
-                                      ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
-                                      : "REBALANCE"}
-                                </button>
+                                <div class="mt-1.5 flex items-center gap-1.5">
+                                  <button
+                                    onclick={(event) => {
+                                      event.stopPropagation();
+                                      rebalanceInstance(id, "speed");
+                                    }}
+                                    disabled={rebalancingInstances[id]}
+                                    title="Live-migrate layers one at a time to the measured-speed split (no downtime)"
+                                    class="text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
+                                      null && rebalanceGain > 0.1
+                                      ? 'border-xeo-green/60 text-xeo-green shadow-[0_0_8px_oklch(0.78_0.17_145/0.35)] hover:bg-xeo-green/20'
+                                      : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
+                                  >
+                                    {rebalancingInstances[id]
+                                      ? "REBALANCING..."
+                                      : rebalanceGain !== null &&
+                                          rebalanceGain > 0.1
+                                        ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
+                                        : "REBALANCE"}
+                                  </button>
+                                  <button
+                                    onclick={(event) => {
+                                      event.stopPropagation();
+                                      rebalanceInstance(id, "experts");
+                                    }}
+                                    disabled={rebalancingInstances[id]}
+                                    title="Live-migrate layers using measured MoE expert routing: layers whose recent tokens hit few experts pack more densely (MoE models only)"
+                                    class="text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait border-purple-500/30 text-purple-400 hover:bg-purple-500/20 hover:border-purple-500/50"
+                                  >
+                                    {rebalancingInstances[id]
+                                      ? "REBALANCING..."
+                                      : "REBALANCE · MOE"}
+                                  </button>
+                                </div>
                               {/if}
                             </div>
                           {/if}
