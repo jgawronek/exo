@@ -87,6 +87,12 @@ export interface StageTiming {
   tokensMeasured: number;
 }
 
+export interface LayerExpertActivity {
+  numExperts: number;
+  tokensMeasured: number;
+  activations: number[];
+}
+
 // Granular node state types from the new state structure
 interface RawNodeIdentity {
   modelId?: string;
@@ -240,6 +246,7 @@ interface RawStateResponse {
   tasks?: Record<string, unknown>;
   instanceLinks?: Record<string, RawInstanceLink>;
   instanceStageTimings?: Record<string, Record<string, StageTiming>>;
+  instanceExpertActivity?: Record<string, Record<string, LayerExpertActivity>>;
   downloads?: Record<string, unknown[]>;
   // New granular node state fields
   nodeIdentities?: Record<string, RawNodeIdentity>;
@@ -599,6 +606,9 @@ class AppStore {
   instanceStageTimings = $state<Record<string, Record<string, StageTiming>>>(
     {},
   );
+  instanceExpertActivity = $state<
+    Record<string, Record<string, LayerExpertActivity>>
+  >({});
   featureFlags = $state<Record<string, boolean>>({});
   downloads = $state<Record<string, unknown[]>>({});
   nodeDisk = $state<
@@ -1484,6 +1494,7 @@ class AppStore {
         this.instanceLinks = {};
       }
       this.instanceStageTimings = data.instanceStageTimings ?? {};
+      this.instanceExpertActivity = data.instanceExpertActivity ?? {};
       if (data.downloads) {
         this.downloads = data.downloads;
       }
@@ -3720,6 +3731,7 @@ export const runners = () => appStore.runners;
 export const tasks = () => appStore.tasks;
 export const instanceLinks = () => appStore.instanceLinks;
 export const instanceStageTimings = () => appStore.instanceStageTimings;
+export const instanceExpertActivity = () => appStore.instanceExpertActivity;
 export const featureFlags = () => appStore.featureFlags;
 export const createInstanceLink = (
   prefillInstances: string[],

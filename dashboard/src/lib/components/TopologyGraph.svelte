@@ -10,6 +10,7 @@
     nodeIdentities,
     instances,
     instanceStageTimings,
+    instanceExpertActivity,
     placementPreviews,
     selectedPreviewModelId,
     type NodeInfo,
@@ -113,6 +114,153 @@
   });
 
   const stageTimingsData = $derived(instanceStageTimings());
+  const expertActivityData = $derived(instanceExpertActivity());
+
+  /**
+   * Per-node layer strips for running instances, in pipeline order. Each
+   * entry is one held layer's heat: the fraction of that layer's experts
+   * that recent decode tokens activated (null when unmeasured or dense).
+   * Shown inside the node icon in place of the memory fill.
+   */
+  const nodeLayerHeat = $derived.by(() => {
+    const result: Record<string, (number | null)[]> = {};
+    for (const [instanceId, instanceWrapped] of Object.entries(
+      instancesData || {},
+    )) {
+      const instance = unwrapTagged(instanceWrapped) as {
+        shardAssignments?: {
+          nodeToRunner?: Record<string, string>;
+          runnerToShard?: Record<string, unknown>;
+        };
+      } | null;
+      const assignments = instance?.shardAssignments;
+      if (!assignments) continue;
+      const activity = expertActivityData?.[instanceId] ?? {};
+      for (const [nodeId, runnerId] of Object.entries(
+        assignments.nodeToRunner || {},
+      )) {
+        const shard = unwrapTagged(
+          (assignments.runnerToShard || {})[runnerId],
+        ) as {
+          startLayer?: number;
+          endLayer?: number;
+        } | null;
+        if (shard?.startLayer === undefined || shard?.endLayer === undefined) {
+          continue;
+        }
+        const strips: (number | null)[] = [];
+        for (let layer = shard.startLayer; layer < shard.endLayer; layer++) {
+          const layerActivity = activity[String(layer)];
+          if (
+            layerActivity &&
+            layerActivity.numExperts > 0 &&
+            layerActivity.tokensMeasured > 0
+          ) {
+            const unique = layerActivity.activations.filter(
+              (count) => count > 0,
+            ).length;
+            strips.push(unique / layerActivity.numExperts);
+          } else {
+            strips.push(null);
+          }
+        }
+        if (strips.length > 0) result[nodeId] = strips;
+      }
+    }
+    return result;
+  });
+
+  /**
+   * Each node's share of the instance's summed per-token compute time —
+   * "which node is working hardest" — used to glow the node icon.
+   */
+  const nodeComputeShare = $derived.by(() => {
+    const share: Record<string, number> = {};
+    for (const timings of Object.values(stageTimingsData || {})) {
+      const entries = Object.entries(timings || {}).filter(
+        ([, timing]) => timing.computeMsPerToken > 0,
+      );
+      const total = entries.reduce(
+        (sum, [, timing]) => sum + timing.computeMsPerToken,
+        0,
+      );
+      if (total <= 0) continue;
+      for (const [nodeId, timing] of entries) {
+        share[nodeId] = timing.computeMsPerToken / total;
+      }
+    }
+    return share;
+  });
+
+  /** Layer strip color: dim teal when unmeasured, teal->amber as more of
+   * the layer's experts light up. */
+  function layerHeatColor(heat: number | null): string {
+    if (heat === null) return "oklch(0.55 0.08 200 / 0.45)";
+    // hue 200 (cool teal) down to 80 (hot amber)
+    const hue = 200 - 120 * heat;
+    const lightness = 0.55 + 0.25 * heat;
+    const chroma = 0.09 + 0.1 * heat;
+    return `oklch(${lightness.toFixed(3)} ${chroma.toFixed(3)} ${hue.toFixed(0)} / 0.9)`;
+  }
+
+  /**
+   * Fill a node icon's clipped body area: stacked per-layer heat strips when
+   * the node holds pipeline layers (first held layer at the top), otherwise
+   * the classic bottom-up memory fill.
+   */
+  function drawNodeBodyFill(
+    nodeG: d3.Selection<SVGGElement, unknown, null, undefined>,
+    nodeId: string,
+    clipId: string,
+    area: { x: number; y: number; width: number; height: number },
+    ramUsagePercent: number,
+  ) {
+    const strips = nodeLayerHeat[nodeId];
+    if (strips && strips.length > 0) {
+      const stripHeight = area.height / strips.length;
+      strips.forEach((heat, index) => {
+        nodeG
+          .append("rect")
+          .attr("x", area.x)
+          .attr("y", area.y + index * stripHeight)
+          .attr("width", area.width)
+          .attr("height", Math.max(stripHeight - 0.4, 0.4))
+          .attr("fill", layerHeatColor(heat))
+          .attr("clip-path", `url(#${clipId})`);
+      });
+      return;
+    }
+    if (ramUsagePercent > 0) {
+      const fillHeight = (ramUsagePercent / 100) * area.height;
+      nodeG
+        .append("rect")
+        .attr("x", area.x)
+        .attr("y", area.y + (area.height - fillHeight))
+        .attr("width", area.width)
+        .attr("height", fillHeight)
+        .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
+        .attr("clip-path", `url(#${clipId})`);
+    }
+  }
+
+  /** Soft glow behind a node icon scaled by its compute share. */
+  function drawComputeGlow(
+    nodeG: d3.Selection<SVGGElement, unknown, null, undefined>,
+    nodeId: string,
+    cx: number,
+    cy: number,
+    radius: number,
+  ) {
+    const share = nodeComputeShare[nodeId];
+    if (share === undefined || share <= 0) return;
+    nodeG
+      .insert("circle", ":first-child")
+      .attr("cx", cx)
+      .attr("cy", cy)
+      .attr("r", radius * (0.9 + 0.5 * share))
+      .attr("fill", `oklch(0.75 0.14 80 / ${(0.12 + 0.45 * share).toFixed(3)})`)
+      .attr("filter", "url(#node-compute-glow)");
+  }
 
   /**
    * Best stage-timing sample per node (highest tokensMeasured).
@@ -379,6 +527,15 @@
 
     // Add defs for clip paths and filters
     const defs = svg.append("defs");
+    defs
+      .append("filter")
+      .attr("id", "node-compute-glow")
+      .attr("x", "-60%")
+      .attr("y", "-60%")
+      .attr("width", "220%")
+      .attr("height", "220%")
+      .append("feGaussianBlur")
+      .attr("stdDeviation", 7);
 
     // Glow filter
     const glowFilter = defs
@@ -955,22 +1112,25 @@
           .attr("stroke-width", strokeWidth)
           .attr("stroke-linejoin", "round");
 
-        if (ramUsagePercent > 0) {
+        if (ramUsagePercent > 0 || nodeLayerHeat[nodeInfo.id]) {
           defs
             .append("clipPath")
             .attr("id", starClipId)
             .append("polygon")
             .attr("points", starPoints);
 
-          const fillHeight = (ramUsagePercent / 100) * starHeight;
-          nodeG
-            .append("rect")
-            .attr("x", nodeInfo.x - outerRadius)
-            .attr("y", starMaxY - fillHeight)
-            .attr("width", outerRadius * 2)
-            .attr("height", fillHeight)
-            .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
-            .attr("clip-path", `url(#${starClipId})`);
+          drawNodeBodyFill(
+            nodeG,
+            nodeInfo.id,
+            starClipId,
+            {
+              x: nodeInfo.x - outerRadius,
+              y: starMinY,
+              width: outerRadius * 2,
+              height: starHeight,
+            },
+            ramUsagePercent,
+          );
 
           nodeG
             .append("polygon")
@@ -980,6 +1140,7 @@
             .attr("stroke-width", strokeWidth)
             .attr("stroke-linejoin", "round");
         }
+        drawComputeGlow(nodeG, nodeInfo.id, nodeInfo.x, nodeInfo.y, outerRadius);
       } else if (modelLower === "mac studio") {
         // Mac Studio - classic cube with memory fill
         iconBaseWidth = nodeRadius * 1.25;
@@ -1014,23 +1175,26 @@
           .attr("stroke", wireColor)
           .attr("stroke-width", strokeWidth);
 
-        // Memory fill (fills from bottom up)
-        if (ramUsagePercent > 0) {
-          const memFillTotalHeight = iconBaseHeight - topSurfaceHeight;
-          const memFillActualHeight =
-            (ramUsagePercent / 100) * memFillTotalHeight;
-          nodeG
-            .append("rect")
-            .attr("x", x)
-            .attr(
-              "y",
-              y + topSurfaceHeight + (memFillTotalHeight - memFillActualHeight),
-            )
-            .attr("width", iconBaseWidth)
-            .attr("height", memFillActualHeight)
-            .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
-            .attr("clip-path", `url(#${studioClipId})`);
-        }
+        // Layer heat strips (running instance) or memory fill
+        drawNodeBodyFill(
+          nodeG,
+          nodeInfo.id,
+          studioClipId,
+          {
+            x,
+            y: y + topSurfaceHeight,
+            width: iconBaseWidth,
+            height: iconBaseHeight - topSurfaceHeight,
+          },
+          ramUsagePercent,
+        );
+        drawComputeGlow(
+          nodeG,
+          nodeInfo.id,
+          nodeInfo.x,
+          nodeInfo.y,
+          iconBaseWidth * 0.6,
+        );
 
         // Front panel details - vertical slots
         const detailColor = "rgba(0,0,0,0.35)";
@@ -1097,23 +1261,26 @@
           .attr("stroke", wireColor)
           .attr("stroke-width", strokeWidth);
 
-        // Memory fill (fills from bottom up)
-        if (ramUsagePercent > 0) {
-          const memFillTotalHeight = iconBaseHeight - topSurfaceHeight;
-          const memFillActualHeight =
-            (ramUsagePercent / 100) * memFillTotalHeight;
-          nodeG
-            .append("rect")
-            .attr("x", x)
-            .attr(
-              "y",
-              y + topSurfaceHeight + (memFillTotalHeight - memFillActualHeight),
-            )
-            .attr("width", iconBaseWidth)
-            .attr("height", memFillActualHeight)
-            .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
-            .attr("clip-path", `url(#${miniClipId})`);
-        }
+        // Layer heat strips (running instance) or memory fill
+        drawNodeBodyFill(
+          nodeG,
+          nodeInfo.id,
+          miniClipId,
+          {
+            x,
+            y: y + topSurfaceHeight,
+            width: iconBaseWidth,
+            height: iconBaseHeight - topSurfaceHeight,
+          },
+          ramUsagePercent,
+        );
+        drawComputeGlow(
+          nodeG,
+          nodeInfo.id,
+          nodeInfo.x,
+          nodeInfo.y,
+          iconBaseWidth * 0.6,
+        );
 
         // Front panel details - vertical slots (no horizontal slot for Mini)
         const detailColor = "rgba(0,0,0,0.35)";
@@ -1185,23 +1352,26 @@
           .attr("rx", 2)
           .attr("fill", "#0a0a12");
 
-        // Memory fill on screen (fills from bottom up - classic style)
-        if (ramUsagePercent > 0) {
-          const memFillTotalHeight = screenHeight - screenBezel * 2;
-          const memFillActualHeight =
-            (ramUsagePercent / 100) * memFillTotalHeight;
-          nodeG
-            .append("rect")
-            .attr("x", screenX + screenBezel)
-            .attr(
-              "y",
-              y + screenBezel + (memFillTotalHeight - memFillActualHeight),
-            )
-            .attr("width", screenWidth - screenBezel * 2)
-            .attr("height", memFillActualHeight)
-            .attr("fill", "oklch(0.78 0.17 145 / 0.85)")
-            .attr("clip-path", `url(#${screenClipId})`);
-        }
+        // Layer heat strips (running instance) or memory fill on screen
+        drawNodeBodyFill(
+          nodeG,
+          nodeInfo.id,
+          screenClipId,
+          {
+            x: screenX + screenBezel,
+            y: y + screenBezel,
+            width: screenWidth - screenBezel * 2,
+            height: screenHeight - screenBezel * 2,
+          },
+          ramUsagePercent,
+        );
+        drawComputeGlow(
+          nodeG,
+          nodeInfo.id,
+          nodeInfo.x,
+          nodeInfo.y,
+          iconBaseWidth * 0.55,
+        );
 
         // Apple logo on screen (centered, on top of memory fill)
         const targetLogoHeight = screenHeight * 0.22;
@@ -1280,8 +1450,9 @@
           .attr("stroke", wireColor)
           .attr("stroke-width", strokeWidth);
 
-        // Memory fill (fills from bottom up), clipped to the hexagon
-        if (ramUsagePercent > 0) {
+        // Layer heat strips (running instance) or memory fill, clipped to
+        // the hexagon
+        if (ramUsagePercent > 0 || nodeLayerHeat[nodeInfo.id]) {
           const hexClipId = `hex-clip-${nodeInfo.id.replace(/[^a-zA-Z0-9]/g, "-")}`;
           defs
             .append("clipPath")
@@ -1289,17 +1460,18 @@
             .append("polygon")
             .attr("points", hexPoints);
 
-          const memFillTotalHeight = hexRadius * 2;
-          const memFillActualHeight =
-            (ramUsagePercent / 100) * memFillTotalHeight;
-          nodeG
-            .append("rect")
-            .attr("x", nodeInfo.x - hexRadius)
-            .attr("y", nodeInfo.y + hexRadius - memFillActualHeight)
-            .attr("width", hexRadius * 2)
-            .attr("height", memFillActualHeight)
-            .attr("fill", "oklch(0.78 0.17 145 / 0.75)")
-            .attr("clip-path", `url(#${hexClipId})`);
+          drawNodeBodyFill(
+            nodeG,
+            nodeInfo.id,
+            hexClipId,
+            {
+              x: nodeInfo.x - hexRadius,
+              y: nodeInfo.y - hexRadius,
+              width: hexRadius * 2,
+              height: hexRadius * 2,
+            },
+            ramUsagePercent,
+          );
 
           // Redraw the outline so the fill doesn't blur the wireframe edge
           nodeG
@@ -1309,6 +1481,7 @@
             .attr("stroke", wireColor)
             .attr("stroke-width", strokeWidth);
         }
+        drawComputeGlow(nodeG, nodeInfo.id, nodeInfo.x, nodeInfo.y, hexRadius);
       }
 
       // --- Telemetry rail (right of icon): load meter + metric stack ---
@@ -1821,6 +1994,10 @@
     const _nodeEfficiencyLabels = nodeEfficiencyLabels;
     const _nodeTokPerSec = nodeTokPerSec;
     const _nodeStageTiming = nodeStageTiming;
+    const _nodeLayerHeat = nodeLayerHeat;
+    void _nodeLayerHeat;
+    const _nodeComputeShare = nodeComputeShare;
+    void _nodeComputeShare;
     const _ringRouteHops = ringRouteHops;
     const _ringNodeIds = ringNodeIds;
     if (_data) {
