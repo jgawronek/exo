@@ -56,6 +56,40 @@ def _create_snapshot_transport(router: Router) -> SnapshotTransport:
     )
 
 
+# A worker publishes NodeGatheredInfo every second, so the master indexes a
+# fresh last_seen entry for a healthy node continuously. If this node's
+# replica keeps advancing (the master's global events still arrive and apply)
+# while its own last_seen entry stays stale or evicted for this long, the
+# outbound publish path is wedged — observed after a runner SIGABRT left
+# gossipsub delivering inbound messages but silently dropping publishes. The
+# process cannot repair a half-dead transport from the inside, so it exits
+# and lets the service supervisor restart it into a clean session.
+FORWARDING_WEDGE_SECONDS = 90.0
+_FORWARDING_WATCH_POLL_SECONDS = 10.0
+
+
+def event_forwarding_wedged(
+    *,
+    now: float,
+    inbound_advanced_at: float,
+    own_last_seen_advanced_at: float,
+    master_node_id: NodeId | None,
+    node_id: NodeId,
+) -> bool:
+    """True when the master indexes events we receive but never ours.
+
+    Inbound must be live (recently applied indexed events) so a full
+    disconnect or master loss — failure modes the election layer owns — does
+    not trigger a restart.
+    """
+    if master_node_id is None or master_node_id == node_id:
+        return False
+    inbound_alive = now - inbound_advanced_at < _FORWARDING_WATCH_POLL_SECONDS * 3
+    if not inbound_alive:
+        return False
+    return now - own_last_seen_advanced_at > FORWARDING_WEDGE_SECONDS
+
+
 @dataclass
 class Node:
     router: Router
@@ -232,6 +266,8 @@ class Node:
             if self.api:
                 tg.start_soon(self.api.run)
             tg.start_soon(self._elect_loop)
+            if self.worker:
+                tg.start_soon(self._watch_event_forwarding)
 
     def shutdown(self):
         # if this is our second call to shutdown, just sys.exit
@@ -240,6 +276,48 @@ class Node:
 
             sys.exit(1)
         self._tg.cancel_tasks()
+
+    async def _watch_event_forwarding(self):
+        """Exit for a supervisor restart when our events stop reaching the master."""
+        now = anyio.current_time()
+        inbound_advanced_at = now
+        own_advanced_at = now
+        last_applied_idx = self.state_replica.state.last_event_applied_idx
+        last_own_timestamp = None
+        while True:
+            await anyio.sleep(_FORWARDING_WATCH_POLL_SECONDS)
+            state = self.state_replica.state
+            now = anyio.current_time()
+            if state.last_event_applied_idx != last_applied_idx:
+                last_applied_idx = state.last_event_applied_idx
+                inbound_advanced_at = now
+            own_timestamp = state.last_seen.get(self.node_id)
+            if own_timestamp is not None and own_timestamp != last_own_timestamp:
+                last_own_timestamp = own_timestamp
+                own_advanced_at = now
+            if state.master_node_id is None or state.master_node_id == self.node_id:
+                # No master to index our events, or we are the master; the
+                # election layer owns those failure modes.
+                own_advanced_at = now
+                continue
+            if event_forwarding_wedged(
+                now=now,
+                inbound_advanced_at=inbound_advanced_at,
+                own_last_seen_advanced_at=own_advanced_at,
+                master_node_id=state.master_node_id,
+                node_id=self.node_id,
+            ):
+                logger.critical(
+                    "Event forwarding is wedged: the master keeps indexing "
+                    "other nodes' events (our replica is advancing) but has "
+                    f"not indexed ours for {FORWARDING_WEDGE_SECONDS:.0f}s. "
+                    "Exiting so the service supervisor restarts this node "
+                    "into a clean networking session."
+                )
+                raise RuntimeError(
+                    "Event forwarding wedged: outbound publishes are not "
+                    "reaching the master"
+                )
 
     async def _elect_loop(self):
         with self.election_result_receiver as results:

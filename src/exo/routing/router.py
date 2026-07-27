@@ -243,7 +243,16 @@ class Router:
                     logger.warning(
                         "Sending overlarge payload, network performance may be temporarily degraded"
                     )
-                await self._net.gossipsub_publish(topic, data)
+                try:
+                    await self._net.gossipsub_publish(topic, data)
+                except Exception as exception:
+                    # A single failed publish must not take down the whole
+                    # router (and with it the node). Events have their own
+                    # redelivery layer and election/connection messages
+                    # repeat, so dropping this message is safe.
+                    logger.opt(exception=exception).error(
+                        f"Failed to publish {topic} message; dropping it"
+                    )
 
 
 def get_node_zid(
