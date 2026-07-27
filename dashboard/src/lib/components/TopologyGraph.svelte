@@ -363,12 +363,9 @@
       .insert("circle", ":first-child")
       .attr("cx", cx)
       .attr("cy", cy)
-      .attr("r", radius * (0.95 + 0.4 * intensity))
-      .attr(
-        "fill",
-        `oklch(0.72 0.16 55 / ${(0.55 * intensity).toFixed(3)})`,
-      )
-      .attr("filter", "url(#node-compute-glow)");
+      .attr("r", radius * (1.15 + 0.5 * intensity))
+      .attr("fill", "url(#node-compute-glow-gradient)")
+      .attr("opacity", (0.75 * intensity).toFixed(3));
   }
 
   /**
@@ -636,15 +633,27 @@
 
     // Add defs for clip paths and filters
     const defs = svg.append("defs");
-    defs
-      .append("filter")
-      .attr("id", "node-compute-glow")
-      .attr("x", "-60%")
-      .attr("y", "-60%")
-      .attr("width", "220%")
-      .attr("height", "220%")
-      .append("feGaussianBlur")
-      .attr("stdDeviation", 7);
+    // A radial gradient reads as a soft glow at a fraction of the render
+    // cost of an feGaussianBlur filter, which browsers re-rasterize on
+    // every redraw and visibly hitches the graph.
+    const glowGradient = defs
+      .append("radialGradient")
+      .attr("id", "node-compute-glow-gradient");
+    glowGradient
+      .append("stop")
+      .attr("offset", "0%")
+      .attr("stop-color", "oklch(0.72 0.16 55)")
+      .attr("stop-opacity", 0.85);
+    glowGradient
+      .append("stop")
+      .attr("offset", "55%")
+      .attr("stop-color", "oklch(0.72 0.16 55)")
+      .attr("stop-opacity", 0.35);
+    glowGradient
+      .append("stop")
+      .attr("offset", "100%")
+      .attr("stop-color", "oklch(0.72 0.16 55)")
+      .attr("stop-opacity", 0);
 
     // Glow filter
     const glowFilter = defs
