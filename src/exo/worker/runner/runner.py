@@ -1,3 +1,4 @@
+import os
 import queue
 import threading
 import time
@@ -8,6 +9,7 @@ from typing import BinaryIO
 from anyio import ClosedResourceError, EndOfStream
 
 from exo.shared.constants import ENABLE_DISAGGREGATION
+from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.chunks import Chunk
 from exo.shared.types.common import CommandId
 from exo.shared.types.events import (
@@ -64,9 +66,17 @@ from exo.worker.runner.bootstrap import logger
 PREFILL_PICKUP_TIMEOUT_SECONDS = 3
 PREFILL_FINISH_TIMEOUT_SECONDS = 300
 
-# How many engine steps to wait between stage-timing publications while a
-# generation is running (each step is roughly one decode token).
-DECODE_TIMING_PUBLISH_INTERVAL_STEPS = 64
+# How many engine steps to wait between stage-timing and expert-activation
+# publications while a generation is running (each step is roughly one decode
+# token). Smaller windows update the dashboard's activity display faster but
+# sample fewer routed dispatches per report; overridable for tuning.
+DECODE_TIMING_PUBLISH_INTERVAL_STEPS = int(
+    get_compatible_environment_value(
+        os.environ,
+        "EXO_TIMING_PUBLISH_STEPS",
+        "32",
+    )
+)
 
 
 @dataclass
