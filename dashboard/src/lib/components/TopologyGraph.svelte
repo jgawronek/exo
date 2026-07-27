@@ -11,6 +11,7 @@
     instances,
     instanceStageTimings,
     instanceExpertActivity,
+    tasks,
     placementPreviews,
     selectedPreviewModelId,
     type NodeInfo,
@@ -116,16 +117,40 @@
   const stageTimingsData = $derived(instanceStageTimings());
   const expertActivityData = $derived(instanceExpertActivity());
 
-  // ── Activity pulse ──────────────────────────────────────────────
-  // Stage timings and expert activations only update while tokens are
-  // decoding (roughly every 64 tokens). Each fresh measurement snaps the
-  // freshness to 1, which then decays to 0 over ACTIVITY_FADE_MS — so the
-  // heat strips and bottleneck glow pulse with each measurement window
-  // while generating, and settle back to neutral quickly after the last
-  // token.
-  const ACTIVITY_FADE_MS = 5_000;
+  // ── Live activity ───────────────────────────────────────────────
+  // A running generation task is the real-time "model is busy" signal
+  // (state polls once a second), so the heat strips and bottleneck glow
+  // hold at full intensity for as long as one exists — measurement windows
+  // refresh the heat values underneath without any flicker. When the last
+  // task finishes (or a measurement was the final signal), everything
+  // fades back to neutral over ACTIVITY_FADE_MS.
+  const ACTIVITY_FADE_MS = 2_000;
+  const tasksData = $derived(tasks());
+
+  const generationActive = $derived.by(() => {
+    for (const wrapped of Object.values(tasksData || {})) {
+      if (!wrapped || typeof wrapped !== "object") continue;
+      const record = wrapped as Record<string, unknown>;
+      const kind = Object.keys(record)[0];
+      if (
+        kind !== "TextGeneration" &&
+        kind !== "ImageGeneration" &&
+        kind !== "ImageEdits"
+      ) {
+        continue;
+      }
+      const task = record[kind] as { taskStatus?: string } | null;
+      if (task?.taskStatus === "Running" || task?.taskStatus === "Pending") {
+        return true;
+      }
+    }
+    return false;
+  });
+
   let lastActivitySignature = $state("");
   let lastActivityAt = $state(0);
+  let busyEndedAt = $state(0);
+  let wasGenerationActive = $state(false);
   let idleClockTick = $state(Date.now());
   let idleClock: ReturnType<typeof setInterval> | undefined;
 
@@ -138,10 +163,19 @@
     }
   });
 
-  /** 1 right after a measurement arrives, decaying linearly to 0. */
+  $effect(() => {
+    if (wasGenerationActive && !generationActive) {
+      busyEndedAt = Date.now();
+    }
+    wasGenerationActive = generationActive;
+  });
+
+  /** 1 while a generation task runs, fading to 0 after activity stops. */
   const activityFreshness = $derived.by(() => {
-    if (lastActivityAt <= 0) return 0;
-    const age = idleClockTick - lastActivityAt;
+    if (generationActive) return 1;
+    const anchor = Math.max(lastActivityAt, busyEndedAt);
+    if (anchor <= 0) return 0;
+    const age = idleClockTick - anchor;
     return Math.max(0, Math.min(1, 1 - age / ACTIVITY_FADE_MS));
   });
 
@@ -2075,6 +2109,8 @@
     void _nodeComputeShare;
     const _activityFreshness = activityFreshness;
     void _activityFreshness;
+    const _generationActive = generationActive;
+    void _generationActive;
     const _ringRouteHops = ringRouteHops;
     const _ringNodeIds = ringNodeIds;
     if (_data) {
