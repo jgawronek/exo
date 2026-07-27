@@ -274,8 +274,10 @@
     }
   }
 
-  /** Soft glow behind a node icon scaled by its compute share relative to
-   * the busiest node, so only the actual bottleneck lights up strongly. */
+  /** Glow exactly one node: the pipeline bottleneck (largest share of
+   * per-token compute time). Intensity scales with its lead over the
+   * runner-up, so a well-balanced pipeline glows gently and a dominant
+   * bottleneck burns bright. */
   function drawComputeGlow(
     nodeG: d3.Selection<SVGGElement, unknown, null, undefined>,
     nodeId: string,
@@ -285,21 +287,20 @@
   ) {
     const share = nodeComputeShare[nodeId];
     if (share === undefined || share <= 0) return;
-    const maxShare = Math.max(...Object.values(nodeComputeShare));
-    if (maxShare <= 0) return;
-    const relative = share / maxShare;
-    // Quadratic falloff: the busiest node glows, near-peers glow faintly,
-    // light stages stay dark.
-    const intensity = relative * relative;
-    if (intensity < 0.15) return;
+    const shares = Object.values(nodeComputeShare).sort((a, b) => b - a);
+    if (shares.length < 2) return;
+    const [maxShare, secondShare] = shares;
+    if (share < maxShare) return;
+    const lead = secondShare > 0 ? maxShare / secondShare - 1 : 1;
+    const intensity = Math.min(0.9, 0.4 + 1.5 * lead);
     nodeG
       .insert("circle", ":first-child")
       .attr("cx", cx)
       .attr("cy", cy)
-      .attr("r", radius * (0.9 + 0.5 * intensity))
+      .attr("r", radius * (0.95 + 0.4 * intensity))
       .attr(
         "fill",
-        `oklch(0.75 0.14 80 / ${(0.5 * intensity).toFixed(3)})`,
+        `oklch(0.72 0.16 55 / ${(0.55 * intensity).toFixed(3)})`,
       )
       .attr("filter", "url(#node-compute-glow)");
   }
