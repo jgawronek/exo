@@ -52,7 +52,7 @@ from exo.shared.types.state import State
 from exo.shared.types.storage import SharedDirectoryStatus
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.topology import Connection, RDMAConnection
-from exo.shared.types.worker.downloads import DownloadProgress
+from exo.shared.types.worker.downloads import DownloadPending, DownloadProgress
 from exo.shared.types.worker.instances import Instance, InstanceId
 from exo.shared.types.worker.runners import (
     RunnerId,
@@ -161,9 +161,18 @@ def apply(state: State, event: IndexedEvent) -> State:
 def apply_node_download_progress(event: NodeDownloadProgress, state: State) -> State:
     """
     Update or add a node download progress to state.
+
+    A zero-byte DownloadPending means "no download state for this model" —
+    it removes any existing record instead of being stored, because keeping
+    one such record (with its embedded model card) per catalog model per
+    node bloats the state every dashboard poll downloads by hundreds of
+    kilobytes. Absence carries the same information.
     """
     dp = event.download_progress
     node_id = dp.node_id
+    model_id = dp.shard_metadata.model_card.model_id
+
+    resets_model = isinstance(dp, DownloadPending) and dp.downloaded.in_bytes == 0
 
     current = list(state.downloads.get(node_id, ()))
 
@@ -172,15 +181,15 @@ def apply_node_download_progress(event: NodeDownloadProgress, state: State) -> S
         # TODO(ciaran): deduplicate by model_id for now. Will need to use
         # shard_metadata again when pipeline and tensor downloads differ.
         # For now this is fine
-        if (
-            existing_dp.shard_metadata.model_card.model_id
-            == dp.shard_metadata.model_card.model_id
-        ):
-            current[i] = dp
+        if existing_dp.shard_metadata.model_card.model_id == model_id:
+            if resets_model:
+                del current[i]
+            else:
+                current[i] = dp
             replaced = True
             break
 
-    if not replaced:
+    if not replaced and not resets_model:
         current.append(dp)
 
     new_downloads: Mapping[NodeId, Sequence[DownloadProgress]] = {

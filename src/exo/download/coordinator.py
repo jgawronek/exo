@@ -409,6 +409,12 @@ class DownloadCoordinator:
                                 progress.shard, found, progress.total
                             )
                         elif progress.downloaded_this_session.in_bytes == 0:
+                            if progress.downloaded.in_bytes == 0:
+                                # Nothing local and nothing happening: absence
+                                # in state carries the same information, and a
+                                # pending record per catalog model per node
+                                # bloats every state poll.
+                                continue
                             status = DownloadPending(
                                 node_id=self.node_id,
                                 shard_metadata=progress.shard,
