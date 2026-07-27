@@ -116,12 +116,14 @@
   const stageTimingsData = $derived(instanceStageTimings());
   const expertActivityData = $derived(instanceExpertActivity());
 
-  // ── Idle detection ──────────────────────────────────────────────
+  // ── Activity pulse ──────────────────────────────────────────────
   // Stage timings and expert activations only update while tokens are
-  // decoding; once generation stops, the last window would otherwise stay
-  // painted forever. Track when the measurements last changed and fade the
-  // heat strips and bottleneck glow back to neutral after a quiet period.
-  const ACTIVITY_IDLE_MS = 15_000;
+  // decoding (roughly every 64 tokens). Each fresh measurement snaps the
+  // freshness to 1, which then decays to 0 over ACTIVITY_FADE_MS — so the
+  // heat strips and bottleneck glow pulse with each measurement window
+  // while generating, and settle back to neutral quickly after the last
+  // token.
+  const ACTIVITY_FADE_MS = 5_000;
   let lastActivitySignature = $state("");
   let lastActivityAt = $state(0);
   let idleClockTick = $state(Date.now());
@@ -136,9 +138,12 @@
     }
   });
 
-  const activityIsFresh = $derived(
-    lastActivityAt > 0 && idleClockTick - lastActivityAt < ACTIVITY_IDLE_MS,
-  );
+  /** 1 right after a measurement arrives, decaying linearly to 0. */
+  const activityFreshness = $derived.by(() => {
+    if (lastActivityAt <= 0) return 0;
+    const age = idleClockTick - lastActivityAt;
+    return Math.max(0, Math.min(1, 1 - age / ACTIVITY_FADE_MS));
+  });
 
   /**
    * Per-node layer strips for running instances, in pipeline order. Each
@@ -211,7 +216,7 @@
         const strips: (number | null)[] = [];
         for (let layer = shard.startLayer; layer < shard.endLayer; layer++) {
           const raw = rawHeatByLayer[layer];
-          if (!activityIsFresh || raw === undefined) {
+          if (raw === undefined) {
             strips.push(null);
           } else if (heatSpan > 1e-9) {
             strips.push((raw - minHeat) / heatSpan);
@@ -231,7 +236,6 @@
    */
   const nodeComputeShare = $derived.by(() => {
     const share: Record<string, number> = {};
-    if (!activityIsFresh) return share;
     for (const timings of Object.values(stageTimingsData || {})) {
       const entries = Object.entries(timings || {}).filter(
         ([, timing]) => timing.computeMsPerToken > 0,
@@ -249,14 +253,16 @@
   });
 
   /** Layer strip color: dim teal when unmeasured, teal->amber as more of
-   * the layer's experts light up. */
+   * the layer's experts light up, decaying back toward the dim neutral as
+   * the measurement ages. */
   function layerHeatColor(heat: number | null): string {
-    if (heat === null) return "oklch(0.55 0.08 200 / 0.45)";
+    const effectiveHeat = heat === null ? 0 : heat * activityFreshness;
+    const alpha = 0.45 + 0.45 * (heat === null ? 0 : activityFreshness);
     // hue 200 (cool teal) down to 80 (hot amber)
-    const hue = 200 - 120 * heat;
-    const lightness = 0.55 + 0.25 * heat;
-    const chroma = 0.09 + 0.1 * heat;
-    return `oklch(${lightness.toFixed(3)} ${chroma.toFixed(3)} ${hue.toFixed(0)} / 0.9)`;
+    const hue = 200 - 120 * effectiveHeat;
+    const lightness = 0.55 + 0.25 * effectiveHeat;
+    const chroma = 0.08 + 0.11 * effectiveHeat;
+    return `oklch(${lightness.toFixed(3)} ${chroma.toFixed(3)} ${hue.toFixed(0)} / ${alpha.toFixed(2)})`;
   }
 
   /**
@@ -317,7 +323,8 @@
     const [maxShare, secondShare] = shares;
     if (share < maxShare) return;
     const lead = secondShare > 0 ? maxShare / secondShare - 1 : 1;
-    const intensity = Math.min(0.9, 0.4 + 1.5 * lead);
+    const intensity = Math.min(0.9, 0.4 + 1.5 * lead) * activityFreshness;
+    if (intensity < 0.05) return;
     nodeG
       .insert("circle", ":first-child")
       .attr("cx", cx)
@@ -2066,6 +2073,8 @@
     void _nodeLayerHeat;
     const _nodeComputeShare = nodeComputeShare;
     void _nodeComputeShare;
+    const _activityFreshness = activityFreshness;
+    void _activityFreshness;
     const _ringRouteHops = ringRouteHops;
     const _ringNodeIds = ringNodeIds;
     if (_data) {
@@ -2086,7 +2095,7 @@
     }
     idleClock = setInterval(() => {
       idleClockTick = Date.now();
-    }, 2000);
+    }, 400);
   });
 
   onDestroy(() => {
