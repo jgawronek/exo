@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
-from collections.abc import Generator, Iterable
+from collections.abc import Generator, Iterable, Mapping
 from typing import BinaryIO
 
 from exo.shared.types.chunks import Chunk
-from exo.shared.types.profiling import DecodeTimingSample
+from exo.shared.types.profiling import DecodeTimingSample, LayerExpertActivity
 from exo.shared.types.tasks import CANCEL_ALL_TASKS, GenerationTask, ShiftLayers, TaskId
 from exo.shared.types.worker.instances import BoundInstance
 from exo.shared.types.worker.runner_response import (
@@ -50,6 +50,14 @@ class Engine(ABC):
         tensor sharding, single-node instances) return None.
         """
         return None
+
+    def poll_expert_activity(self) -> Mapping[int, LayerExpertActivity]:
+        """Drain per-layer MoE expert activation counts since the last poll.
+
+        Keys are absolute decoder layer indices. Engines without MoE
+        instrumentation (image engines, dense models) return an empty map.
+        """
+        return {}
 
     def submit_shard_update(self, task: ShiftLayers) -> bool:
         """Queue a live pipeline layer-boundary shift.

@@ -131,6 +131,7 @@ from exo.api.types.openai_responses import (
 from exo.master.image_store import ImageStore
 from exo.master.placement import place_instance as get_instance_placements
 from exo.master.placement_utils import (
+    allocate_layers_by_expert_activity,
     allocate_layers_by_measured_speed,
     node_memory_with_pending_shutdowns,
     plan_pipeline_layer_shift_steps,
@@ -753,9 +754,14 @@ class API:
         )
 
     async def rebalance_instance(
-        self, instance_id: InstanceId
+        self, instance_id: InstanceId, mode: Literal["speed", "experts"] = "speed"
     ) -> RebalanceInstanceResponse:
         """Live-migrate an instance's layers to the measured-speed allocation.
+
+        ``mode="speed"`` splits layers by each stage's measured decode rate;
+        ``mode="experts"`` additionally weighs each MoE layer by the fraction
+        of its experts recent tokens actually activated, so layers with
+        concentrated routing pack more densely onto a stage.
 
         Like a disk defragmenter, the rebalance moves one layer at a time
         between adjacent pipeline ranks while the instance keeps serving
@@ -805,7 +811,12 @@ class API:
                 detail=f"No memory report for nodes: {missing_memory_nodes}",
             )
 
-        node_ids = list(node_to_shard.keys())
+        # Pipeline rank order: the expert-aware split is a contiguous
+        # boundary choice, and layers stay attributable to their stages.
+        node_ids = sorted(
+            node_to_shard.keys(),
+            key=lambda node_id: node_to_shard[node_id].device_rank,
+        )
         model_card = next(iter(node_to_shard.values())).model_card
         current_layers = {
             node_id: shard.end_layer - shard.start_layer
@@ -814,13 +825,25 @@ class API:
         stage_timings = self.state.instance_stage_timings.get(instance_id, {})
 
         try:
-            node_layers = allocate_layers_by_measured_speed(
-                model_card=model_card,
-                node_ids=node_ids,
-                node_memory=self.state.node_memory,
-                current_layers=current_layers,
-                stage_timings=stage_timings,
-            )
+            if mode == "experts":
+                node_layers = allocate_layers_by_expert_activity(
+                    model_card=model_card,
+                    node_ids=node_ids,
+                    node_memory=self.state.node_memory,
+                    current_layers=current_layers,
+                    stage_timings=stage_timings,
+                    expert_activity=self.state.instance_expert_activity.get(
+                        instance_id, {}
+                    ),
+                )
+            else:
+                node_layers = allocate_layers_by_measured_speed(
+                    model_card=model_card,
+                    node_ids=node_ids,
+                    node_memory=self.state.node_memory,
+                    current_layers=current_layers,
+                    stage_timings=stage_timings,
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

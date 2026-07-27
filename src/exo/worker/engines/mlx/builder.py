@@ -26,6 +26,7 @@ from exo.worker.runner.llm_inference.batch_generator import (
 from exo.worker.runner.llm_inference.tool_parsers import make_mlx_parser
 
 from .cache import KVPrefixCache
+from .expert_activity import expert_activity
 from .types import Model
 from .utils_mlx import (
     initialize_mlx,
@@ -92,6 +93,12 @@ class MlxBuilder(Builder):
         bound_shard = bound_instance.bound_shard
         if isinstance(bound_shard, PipelineShardMetadata) and self.group is not None:
             self.pipeline_shard = bound_shard
+        start_layer = (
+            bound_shard.start_layer
+            if isinstance(bound_shard, PipelineShardMetadata)
+            else 0
+        )
+        expert_activity.register_model(self.inference_model, start_layer)
 
     def close(self) -> None:
         with contextlib.suppress(NameError, AttributeError):

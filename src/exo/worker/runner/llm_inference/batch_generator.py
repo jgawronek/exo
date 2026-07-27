@@ -1,7 +1,7 @@
 import itertools
 import time
 from collections import deque
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
@@ -13,7 +13,7 @@ from exo.shared.constants import EXO_MAX_CONCURRENT_REQUESTS
 from exo.shared.types.chunks import ErrorChunk, GenerationChunk, PrefillProgressChunk
 from exo.shared.types.common import ModelId
 from exo.shared.types.events import ChunkGenerated, Event
-from exo.shared.types.profiling import DecodeTimingSample
+from exo.shared.types.profiling import DecodeTimingSample, LayerExpertActivity
 from exo.shared.types.tasks import (
     CANCEL_ALL_TASKS,
     GenerationTask,
@@ -35,6 +35,7 @@ from exo.worker.engines.mlx.auto_parallel import decode_timings, shift_pipeline_
 from exo.worker.engines.mlx.cache import KVPrefixCache
 from exo.worker.engines.mlx.disaggregated.adapter import write_cache_to_wire
 from exo.worker.engines.mlx.disaggregated.serve import run_prefill_for_request
+from exo.worker.engines.mlx.expert_activity import expert_activity
 from exo.worker.engines.mlx.generator.batch_generate import ExoBatchGenerator
 from exo.worker.engines.mlx.generator.generate import (
     PrefillCancelled,
@@ -320,6 +321,9 @@ class SequentialGenerator(Engine):
 
     def poll_decode_timing(self) -> DecodeTimingSample | None:
         return decode_timings.drain_sample()
+
+    def poll_expert_activity(self) -> Mapping[int, LayerExpertActivity]:
+        return expert_activity.drain()
 
     def serve_prefill(self, request: PrefillRequest, wfile: BinaryIO) -> None:
         cache = run_prefill_for_request(
@@ -674,6 +678,9 @@ class BatchGenerator(Engine):
 
     def poll_decode_timing(self) -> DecodeTimingSample | None:
         return decode_timings.drain_sample()
+
+    def poll_expert_activity(self) -> Mapping[int, LayerExpertActivity]:
+        return expert_activity.drain()
 
     def serve_prefill(self, request: PrefillRequest, wfile: BinaryIO) -> None:
         cache = run_prefill_for_request(

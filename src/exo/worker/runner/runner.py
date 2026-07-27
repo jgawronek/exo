@@ -13,6 +13,7 @@ from exo.shared.types.common import CommandId
 from exo.shared.types.events import (
     ChunkGenerated,
     Event,
+    ExpertActivationsUpdated,
     RunnerStatusUpdated,
     StageTimingsUpdated,
     TaskAcknowledged,
@@ -438,6 +439,18 @@ class Runner:
     def _publish_stage_timing(self) -> None:
         self._steps_since_timing_publish = 0
         assert isinstance(self.generator, Engine)
+        expert_layers = self.generator.poll_expert_activity()
+        if expert_layers:
+            self.event_sender.send(
+                ExpertActivationsUpdated(
+                    instance_id=self.instance.instance_id,
+                    node_id=self.bound_instance.bound_node_id,
+                    layers={
+                        str(layer_index): activity
+                        for layer_index, activity in expert_layers.items()
+                    },
+                )
+            )
         sample = self.generator.poll_decode_timing()
         if sample is None:
             return

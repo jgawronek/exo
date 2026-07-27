@@ -12,6 +12,7 @@ from exo.shared.types.common import ModelId, NodeId
 from exo.shared.types.instance_link import InstanceLink, InstanceLinkId
 from exo.shared.types.profiling import (
     DiskUsage,
+    LayerExpertActivity,
     MemoryUsage,
     NodeIdentity,
     NodeNetworkInfo,
@@ -76,6 +77,14 @@ class State(FrozenModel):
     # Measured per-stage decode timings, reported by each pipeline rank while
     # it generates. Used to offer usage-based layer rebalancing.
     instance_stage_timings: Mapping[InstanceId, Mapping[NodeId, StageTiming]] = {}
+
+    # Measured MoE expert activations per absolute decoder layer (string
+    # keys: JSON object keys are strings and state must round-trip through
+    # serialization), reported by each pipeline rank while it generates.
+    # Used to offer expert-aware layer rebalancing.
+    instance_expert_activity: Mapping[
+        InstanceId, Mapping[str, LayerExpertActivity]
+    ] = {}
 
     # User-added model cards. Workers can reconcile their on-disk custom card cache
     custom_model_cards: Mapping[ModelId, ModelCard] = {}

@@ -11,6 +11,7 @@ from exo.shared.types.events import (
     CustomModelCardAdded,
     CustomModelCardDeleted,
     Event,
+    ExpertActivationsUpdated,
     IndexedEvent,
     InputChunkReceived,
     InstanceCreated,
@@ -39,6 +40,7 @@ from exo.shared.types.events import (
 )
 from exo.shared.types.instance_link import InstanceLink, InstanceLinkId
 from exo.shared.types.profiling import (
+    LayerExpertActivity,
     NodeIdentity,
     NodeNetworkInfo,
     NodeRdmaCtlStatus,
@@ -125,6 +127,8 @@ def event_apply(event: Event, state: State) -> State:
             return apply_runner_status_updated(event, state)
         case StageTimingsUpdated():
             return apply_stage_timings_updated(event, state)
+        case ExpertActivationsUpdated():
+            return apply_expert_activations_updated(event, state)
         case TaskCreated():
             return apply_task_created(event, state)
         case TaskDeleted():
@@ -259,11 +263,17 @@ def apply_instance_deleted(event: InstanceDeleted, state: State) -> State:
         for iid, timings in state.instance_stage_timings.items()
         if iid != event.instance_id
     }
+    new_expert_activity: Mapping[InstanceId, Mapping[str, LayerExpertActivity]] = {
+        iid: activity
+        for iid, activity in state.instance_expert_activity.items()
+        if iid != event.instance_id
+    }
     return state.model_copy(
         update={
             "instances": new_instances,
             "instance_links": new_links,
             "instance_stage_timings": new_stage_timings,
+            "instance_expert_activity": new_expert_activity,
         }
     )
 
@@ -310,6 +320,23 @@ def apply_stage_timings_updated(event: StageTimingsUpdated, state: State) -> Sta
         event.instance_id: instance_timings,
     }
     return state.model_copy(update={"instance_stage_timings": new_stage_timings})
+
+
+def apply_expert_activations_updated(
+    event: ExpertActivationsUpdated, state: State
+) -> State:
+    if event.instance_id not in state.instances:
+        # Stale report from a runner whose instance was already deleted.
+        return state
+    instance_activity: Mapping[str, LayerExpertActivity] = {
+        **state.instance_expert_activity.get(event.instance_id, {}),
+        **event.layers,
+    }
+    new_expert_activity: Mapping[InstanceId, Mapping[str, LayerExpertActivity]] = {
+        **state.instance_expert_activity,
+        event.instance_id: instance_activity,
+    }
+    return state.model_copy(update={"instance_expert_activity": new_expert_activity})
 
 
 def apply_instance_link_created(event: InstanceLinkCreated, state: State) -> State:

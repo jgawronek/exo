@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from typing import final
 
@@ -8,7 +9,7 @@ from exo.shared.topology import Connection
 from exo.shared.types.chunks import Chunk, InputImageChunk
 from exo.shared.types.common import CommandId, Id, ModelId, NodeId, SessionId, SystemId
 from exo.shared.types.instance_link import InstanceLink, InstanceLinkId
-from exo.shared.types.profiling import StageTiming
+from exo.shared.types.profiling import LayerExpertActivity, StageTiming
 from exo.shared.types.storage import SharedDirectoryStatus
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.worker.downloads import DownloadProgress
@@ -92,6 +93,18 @@ class StageTimingsUpdated(BaseEvent):
     instance_id: InstanceId
     node_id: NodeId
     timing: StageTiming
+
+
+class ExpertActivationsUpdated(BaseEvent):
+    """Measured MoE expert activations for one node's layers of an instance.
+
+    Keys of ``layers`` are absolute decoder layer indices as strings (JSON
+    object keys are strings; state must round-trip through serialization).
+    """
+
+    instance_id: InstanceId
+    node_id: NodeId
+    layers: Mapping[str, LayerExpertActivity]
 
 
 class NodeTimedOut(BaseEvent):
@@ -201,6 +214,7 @@ Event = (
     | InstanceShardAssignmentsUpdated
     | RunnerStatusUpdated
     | StageTimingsUpdated
+    | ExpertActivationsUpdated
     | NodeTimedOut
     | MasterAnnounced
     | NodeGatheredInfo

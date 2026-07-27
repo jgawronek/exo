@@ -227,6 +227,24 @@ class DecodeTimingSample(FrozenModel):
 
 
 @final
+class LayerExpertActivity(FrozenModel):
+    """Expert activation counts for one MoE decoder layer over a decode window.
+
+    ``activations[i]`` is how many times expert ``i`` was selected across the
+    window's routed dispatches; ``tokens_measured`` is the approximate number
+    of decode tokens the window covered.
+    """
+
+    num_experts: int
+    tokens_measured: int
+    activations: list[int]
+
+    @property
+    def unique_experts_activated(self) -> int:
+        return sum(1 for count in self.activations if count > 0)
+
+
+@final
 class StageTiming(FrozenModel):
     """Measured decode timing for one node's pipeline stage of an instance."""
 

@@ -9,6 +9,7 @@ from exo.shared.topology import Topology
 from exo.shared.types.common import Host, NodeId
 from exo.shared.types.memory import Memory
 from exo.shared.types.profiling import (
+    LayerExpertActivity,
     MemoryUsage,
     NetworkInterfaceInfo,
     NodeIdentity,
@@ -324,6 +325,157 @@ def allocate_layers_by_measured_speed(
         node_throughputs=layer_rates,
         max_layers_per_node=max_layers_per_node,
     )
+    return dict(zip(node_ids, allocations, strict=True))
+
+
+def layer_expert_costs(
+    model_card: ModelCard,
+    expert_activity: Mapping[str, LayerExpertActivity],
+) -> list[float]:
+    """Relative per-layer decode cost from measured expert routing.
+
+    A MoE layer whose recent tokens concentrated on few experts touches a
+    smaller weight working set than one whose routing spread widely, so its
+    cost is the always-active dense share plus the routed share scaled by the
+    fraction of experts actually activated in the window. Layers without a
+    measurement (dense layers, or not yet decoded through) cost the full 1.0.
+    """
+    costs = [1.0] * model_card.n_layers
+    for layer_key, activity in expert_activity.items():
+        try:
+            layer_index = int(layer_key)
+        except ValueError:
+            continue
+        if not 0 <= layer_index < model_card.n_layers:
+            continue
+        if activity.num_experts < 1 or activity.tokens_measured < 1:
+            continue
+        unique_fraction = activity.unique_experts_activated / activity.num_experts
+        costs[layer_index] = min(
+            1.0,
+            _MOE_DENSE_WEIGHT_SHARE + (1.0 - _MOE_DENSE_WEIGHT_SHARE) * unique_fraction,
+        )
+    return costs
+
+
+def allocate_layers_by_expert_activity(
+    *,
+    model_card: ModelCard,
+    node_ids: list[NodeId],
+    node_memory: Mapping[NodeId, MemoryUsage],
+    current_layers: Mapping[NodeId, int],
+    stage_timings: Mapping[NodeId, StageTiming],
+    expert_activity: Mapping[str, LayerExpertActivity],
+) -> dict[NodeId, int]:
+    """Re-split pipeline layers using measured MoE expert activations.
+
+    ``node_ids`` must be in pipeline rank order: layers are contiguous per
+    stage, so the split is a boundary choice, and per-layer costs make the
+    boundary placement matter (unlike uniform costs, where only the count
+    does). Each node's measured rate is expressed in cost units per
+    millisecond — the summed cost of the layers it currently holds divided by
+    its measured per-token compute time — and a dynamic program picks the
+    contiguous split minimising the summed per-token stage time under the
+    same memory ceilings as the measured-speed rebalance.
+
+    Raises ValueError when expert activity or stage timings are missing or
+    the allocation is impossible; handled by the API rebalance endpoint,
+    which surfaces it as HTTP 400.
+    """
+    if not expert_activity:
+        raise ValueError(
+            "No expert activations measured yet; generate some tokens with "
+            "this instance before an expert-aware rebalance (dense models "
+            "have no expert signal — use the speed rebalance instead)"
+        )
+    costs = layer_expert_costs(model_card, expert_activity)
+    total_layers = model_card.n_layers
+    prefix_costs = [0.0]
+    for cost in costs:
+        prefix_costs.append(prefix_costs[-1] + cost)
+
+    def range_cost(start: int, end: int) -> float:
+        return prefix_costs[end] - prefix_costs[start]
+
+    node_rates: list[float] = []
+    layer_cursor = 0
+    for node_id in node_ids:
+        timing = stage_timings.get(node_id)
+        if timing is None:
+            raise ValueError(
+                f"No measured decode timing for node {node_id}; "
+                "complete at least one generation before rebalancing"
+            )
+        held = current_layers.get(node_id, 0)
+        if held < 1 or timing.compute_ms_per_token <= 0.0:
+            raise ValueError(
+                f"Measured decode timing for node {node_id} is unusable "
+                f"(layers_held={held}, "
+                f"compute_ms_per_token={timing.compute_ms_per_token})"
+            )
+        held_cost = range_cost(layer_cursor, layer_cursor + held)
+        layer_cursor += held
+        node_rates.append(max(held_cost, 1e-9) / timing.compute_ms_per_token)
+    if layer_cursor != total_layers:
+        raise ValueError(
+            f"Current layer counts sum to {layer_cursor}, expected {total_layers}"
+        )
+
+    max_layers_per_node = [
+        pipeline_safe_max_layers(
+            model_card=model_card,
+            memory_usage=node_memory[node_id],
+            current_layer_count=current_layers.get(node_id, 0),
+        )
+        for node_id in node_ids
+    ]
+    node_count = len(node_ids)
+    if sum(max_layers_per_node) < total_layers or any(
+        cap < 1 for cap in max_layers_per_node
+    ):
+        raise ValueError("Nodes lack the memory capacity for an expert-aware rebalance")
+
+    # dp[i][j]: minimal summed stage time placing the first j layers on the
+    # first i nodes, tie-broken by total deviation from the current layer
+    # counts so equal-latency splits do not trigger pointless migrations.
+    # choice[i][j] reconstructs the winning segment length.
+    infinity = float("inf")
+    time_tolerance = 1e-9
+    dp = [[infinity] * (total_layers + 1) for _ in range(node_count + 1)]
+    deviation = [[0] * (total_layers + 1) for _ in range(node_count + 1)]
+    choice = [[0] * (total_layers + 1) for _ in range(node_count + 1)]
+    dp[0][0] = 0.0
+    for i in range(1, node_count + 1):
+        rate = node_rates[i - 1]
+        cap = max_layers_per_node[i - 1]
+        held = current_layers.get(node_ids[i - 1], 0)
+        for j in range(i, total_layers + 1):
+            for segment in range(1, min(cap, j) + 1):
+                previous = dp[i - 1][j - segment]
+                if previous == infinity:
+                    continue
+                candidate = previous + range_cost(j - segment, j) / rate
+                candidate_deviation = deviation[i - 1][j - segment] + abs(
+                    segment - held
+                )
+                improves_time = candidate < dp[i][j] - time_tolerance
+                ties_time = abs(candidate - dp[i][j]) <= time_tolerance
+                if improves_time or (
+                    ties_time and candidate_deviation < deviation[i][j]
+                ):
+                    dp[i][j] = candidate
+                    deviation[i][j] = candidate_deviation
+                    choice[i][j] = segment
+    if dp[node_count][total_layers] == infinity:
+        raise ValueError("Nodes lack the memory capacity for an expert-aware rebalance")
+
+    allocations: list[int] = []
+    remaining = total_layers
+    for i in range(node_count, 0, -1):
+        segment = choice[i][remaining]
+        allocations.append(segment)
+        remaining -= segment
+    allocations.reverse()
     return dict(zip(node_ids, allocations, strict=True))
 
 

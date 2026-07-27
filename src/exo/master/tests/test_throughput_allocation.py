@@ -2,10 +2,12 @@ import pytest
 
 from exo.master.placement import place_instance
 from exo.master.placement_utils import (
+    allocate_layers_by_expert_activity,
     allocate_layers_by_measured_speed,
     allocate_layers_by_throughput,
     estimate_memory_bandwidth_gigabytes_per_second,
     find_ip_prioritised,
+    layer_expert_costs,
     node_memory_with_pending_shutdowns,
     pipeline_safe_max_layers,
     plan_pipeline_layer_shift_steps,
@@ -24,6 +26,7 @@ from exo.shared.types.common import CommandId, NodeId
 from exo.shared.types.memory import Memory
 from exo.shared.types.multiaddr import Multiaddr
 from exo.shared.types.profiling import (
+    LayerExpertActivity,
     MemoryUsage,
     NetworkInterfaceInfo,
     NodeIdentity,
@@ -1144,3 +1147,124 @@ def test_pending_shutdown_without_memory_report_is_ignored() -> None:
     assert adjusted == {
         other_node: _memory_usage(total_bytes=2000, available_bytes=100)
     }
+
+
+def _uniform_stage_timings(
+    node_ids: list[NodeId], current_layers: dict[NodeId, int]
+) -> dict[NodeId, StageTiming]:
+    # Every node measures the same per-layer speed: 1 ms per layer held.
+    return {
+        node_id: _stage_timing(
+            layers_held=current_layers[node_id],
+            compute_ms_per_token=float(current_layers[node_id]),
+        )
+        for node_id in node_ids
+    }
+
+
+def _expert_layer(unique: int, total: int) -> LayerExpertActivity:
+    return LayerExpertActivity(
+        num_experts=total,
+        tokens_measured=64,
+        activations=[1] * unique + [0] * (total - unique),
+    )
+
+
+def test_expert_allocation_requires_activity() -> None:
+    node_a, node_b = NodeId(), NodeId()
+    current = {node_a: 5, node_b: 5}
+    with pytest.raises(ValueError, match="No expert activations measured"):
+        _ = allocate_layers_by_expert_activity(
+            model_card=_pipeline_model_card(storage_bytes=1000),
+            node_ids=[node_a, node_b],
+            node_memory={
+                node_a: _memory_usage(total_bytes=4000, available_bytes=2000),
+                node_b: _memory_usage(total_bytes=4000, available_bytes=2000),
+            },
+            current_layers=current,
+            stage_timings=_uniform_stage_timings([node_a, node_b], current),
+            expert_activity={},
+        )
+
+
+def test_expert_allocation_packs_cheap_layers_onto_slow_node() -> None:
+    # Layers 5-9 route to a single expert of 10 (cheap); layers 0-4 use all
+    # experts (full cost). With equal measured per-cost-unit speed, the DP
+    # gives the second node more of the cheap tail layers than a uniform
+    # split would.
+    node_a, node_b = NodeId(), NodeId()
+    current = {node_a: 5, node_b: 5}
+    activity = {str(i): _expert_layer(10, 10) for i in range(5)} | {
+        str(i): _expert_layer(1, 10) for i in range(5, 10)
+    }
+    allocations = allocate_layers_by_expert_activity(
+        model_card=_pipeline_model_card(storage_bytes=1000),
+        node_ids=[node_a, node_b],
+        node_memory={
+            node_a: _memory_usage(total_bytes=4000, available_bytes=2000),
+            node_b: _memory_usage(total_bytes=4000, available_bytes=2000),
+        },
+        current_layers=current,
+        stage_timings={
+            # node_a measured while holding the 5 expensive layers, node_b
+            # the 5 cheap ones; both took 5 ms -> node_a is faster per cost.
+            node_a: _stage_timing(layers_held=5, compute_ms_per_token=5.0),
+            node_b: _stage_timing(layers_held=5, compute_ms_per_token=5.0),
+        },
+        expert_activity=activity,
+    )
+    assert sum(allocations.values()) == 10
+    # node_a processes cost far faster (5.0 cost units / 5ms vs ~0.7/5ms),
+    # so it takes as many layers as its memory cap allows.
+    assert allocations[node_a] > allocations[node_b]
+
+
+def test_expert_allocation_uniform_activity_keeps_even_split() -> None:
+    node_a, node_b = NodeId(), NodeId()
+    current = {node_a: 5, node_b: 5}
+    activity = {str(i): _expert_layer(5, 10) for i in range(10)}
+    allocations = allocate_layers_by_expert_activity(
+        model_card=_pipeline_model_card(storage_bytes=1000),
+        node_ids=[node_a, node_b],
+        node_memory={
+            node_a: _memory_usage(total_bytes=4000, available_bytes=2000),
+            node_b: _memory_usage(total_bytes=4000, available_bytes=2000),
+        },
+        current_layers=current,
+        stage_timings=_uniform_stage_timings([node_a, node_b], current),
+        expert_activity=activity,
+    )
+    assert allocations == {node_a: 5, node_b: 5}
+
+
+def test_expert_allocation_respects_memory_caps() -> None:
+    node_a, node_b = NodeId(), NodeId()
+    current = {node_a: 5, node_b: 5}
+    activity = {str(i): _expert_layer(5, 10) for i in range(10)}
+    # node_a is measured much faster but only has memory for 6 layers.
+    allocations = allocate_layers_by_expert_activity(
+        model_card=_pipeline_model_card(storage_bytes=1000),
+        node_ids=[node_a, node_b],
+        node_memory={
+            node_a: _memory_usage(total_bytes=1000, available_bytes=100),
+            node_b: _memory_usage(total_bytes=4000, available_bytes=2000),
+        },
+        current_layers=current,
+        stage_timings={
+            node_a: _stage_timing(layers_held=5, compute_ms_per_token=1.0),
+            node_b: _stage_timing(layers_held=5, compute_ms_per_token=10.0),
+        },
+        expert_activity=activity,
+    )
+    assert sum(allocations.values()) == 10
+    assert allocations[node_a] <= 6
+
+
+def test_layer_expert_costs_defaults_unmeasured_layers_to_full_cost() -> None:
+    costs = layer_expert_costs(
+        _pipeline_model_card(storage_bytes=1000),
+        {"2": _expert_layer(1, 10), "bogus": _expert_layer(1, 10)},
+    )
+    assert len(costs) == 10
+    assert costs[0] == 1.0
+    assert costs[2] < 0.2
