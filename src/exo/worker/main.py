@@ -38,6 +38,7 @@ from exo.shared.types.events import (
     NodeDownloadProgress,
     NodeGatheredInfo,
     NodeSharedDirectoryStatusUpdated,
+    RunnerStatusUpdated,
     TaskCreated,
     TaskStatusUpdated,
     TopologyEdgeCreated,
@@ -60,7 +61,7 @@ from exo.shared.types.text_generation import Base64Image, Base64ImageHash
 from exo.shared.types.topology import Connection, SocketConnection
 from exo.shared.types.worker.downloads import DownloadCompleted
 from exo.shared.types.worker.instances import InstanceId
-from exo.shared.types.worker.runners import RunnerId
+from exo.shared.types.worker.runners import RunnerFailed, RunnerId
 from exo.utils.channels import Receiver, Sender, channel
 from exo.utils.info_gatherer.info_gatherer import GatheredInfo, InfoGatherer
 from exo.utils.info_gatherer.net_profile import check_reachable
@@ -69,6 +70,17 @@ from exo.utils.state_replica import StateReplica
 from exo.utils.task_group import TaskGroup
 from exo.worker.plan import plan
 from exo.worker.runner.supervisor import RunnerSupervisor
+
+# How long to wait for a runner to acknowledge a submitted task before
+# treating it as wedged. Acknowledgement normally happens within
+# milliseconds, but a runner mid-prefill only drains its queue afterwards,
+# so this must exceed the prefill finish timeout (300s). A runner stuck in
+# an abandoned distributed collective never acknowledges at all — observed
+# after a generation was cancelled mid-prefill — and previously blocked the
+# worker's whole plan loop forever.
+RUNNER_TASK_ACK_TIMEOUT_SECONDS = 330
+RUNNER_CANCEL_TIMEOUT_SECONDS = 10
+
 
 
 class Worker:
@@ -368,7 +380,18 @@ class Worker:
                 case CancelTask(
                     cancelled_task_id=cancelled_task_id, runner_id=runner_id
                 ):
-                    await self.runners[runner_id].cancel_task(cancelled_task_id)
+                    cancel_target = self.runners.get(runner_id)
+                    if cancel_target is not None:
+                        try:
+                            with fail_after(RUNNER_CANCEL_TIMEOUT_SECONDS):
+                                await cancel_target.cancel_task(cancelled_task_id)
+                        except TimeoutError:
+                            await self._fail_unresponsive_runner(
+                                runner_id,
+                                f"Runner {runner_id} did not process a cancel "
+                                f"within {RUNNER_CANCEL_TIMEOUT_SECONDS}s; "
+                                "treating it as wedged",
+                            )
                     await self.event_sender.send(
                         TaskStatusUpdated(
                             task_id=task.task_id, task_status=TaskStatus.Complete
@@ -445,10 +468,42 @@ class Worker:
         await self._stopped.wait()
 
     async def _start_runner_task(self, task: Task):
-        if (instance := self.state.instances.get(task.instance_id)) is not None:
-            await self.runners[
-                instance.shard_assignments.node_to_runner[self.node_id]
-            ].start_task(task)
+        if (instance := self.state.instances.get(task.instance_id)) is None:
+            return
+        runner_id = instance.shard_assignments.node_to_runner[self.node_id]
+        runner = self.runners.get(runner_id)
+        if runner is None:
+            return
+        try:
+            with fail_after(RUNNER_TASK_ACK_TIMEOUT_SECONDS):
+                await runner.start_task(task)
+        except TimeoutError:
+            await self._fail_unresponsive_runner(
+                runner_id,
+                f"Runner {runner_id} did not acknowledge task {task.task_id} "
+                f"within {RUNNER_TASK_ACK_TIMEOUT_SECONDS}s; treating it as "
+                "wedged",
+            )
+
+    async def _fail_unresponsive_runner(self, runner_id: RunnerId, reason: str):
+        """Report a wedged runner as failed and tear its process down.
+
+        Publishing RunnerFailed makes every node's planner recycle its runner
+        for the instance, and the supervisor shutdown escalates through
+        SIGTERM to SIGKILL, so a runner stuck in an abandoned collective
+        cannot hold the node (or its memory) hostage.
+        """
+        runner = self.runners.pop(runner_id, None)
+        if runner is None:
+            return
+        logger.error(reason)
+        await self.event_sender.send(
+            RunnerStatusUpdated(
+                runner_id=runner_id,
+                runner_status=RunnerFailed(error_message=reason, diagnostics=[]),
+            )
+        )
+        runner.shutdown()
 
     async def _create_supervisor(self, task: CreateRunner) -> RunnerSupervisor:
         """Creates and stores a new AssignedRunner with initial downloading status."""

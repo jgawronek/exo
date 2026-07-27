@@ -93,7 +93,7 @@ from exo.shared.types.tasks import (
     TextGeneration as TextGenerationTask,
 )
 from exo.shared.types.worker.instances import InstanceId
-from exo.shared.types.worker.runners import RunnerId
+from exo.shared.types.worker.runners import RunnerId, RunnerReady, RunnerRunning
 from exo.shared.types.worker.shards import PipelineShardMetadata
 from exo.utils.channels import Receiver, Sender
 from exo.utils.disk_event_log import DiskEventLog
@@ -125,8 +125,16 @@ def find_stalled_generation_tasks(
     last_progress: Mapping[TaskId, datetime],
     now: datetime,
     stall_timeout: timedelta,
+    pending_watch_instances: frozenset[InstanceId] = frozenset(),
 ) -> list[TextGenerationTask]:
-    """Running text-generation tasks whose last observed progress is too old.
+    """Text-generation tasks whose last observed progress is too old.
+
+    Running tasks are always watched. Pending tasks are watched only for
+    instances in ``pending_watch_instances`` — those whose runners are all
+    up — because a generation that sits unacknowledged on a fully-running
+    instance means a runner is wedged (e.g. stuck in an abandoned
+    distributed collective after a cancel), while a Pending task on a
+    still-loading instance is normal.
 
     Tasks without a recorded progress timestamp are skipped; the caller seeds
     one when it first observes the task, so a fresh master never kills tasks
@@ -136,7 +144,12 @@ def find_stalled_generation_tasks(
     for task_id, task in tasks.items():
         if not isinstance(task, TextGenerationTask):
             continue
-        if task.task_status != TaskStatus.Running:
+        if task.task_status == TaskStatus.Running or (
+            task.task_status == TaskStatus.Pending
+            and task.instance_id in pending_watch_instances
+        ):
+            pass
+        else:
             continue
         observed = last_progress.get(task_id)
         if observed is not None and now - observed > stall_timeout:
@@ -992,21 +1005,43 @@ class Master:
         """
         now = datetime.now(tz=timezone.utc)
 
-        # Seed and prune bookkeeping so a fresh master watches every running
-        # task for a full window before judging it, and entries don't leak.
-        running_task_ids = {
+        # Instances whose runners are all up: a Pending generation task on one
+        # of these means a runner is wedged and never acknowledged it.
+        pending_watch_instances = frozenset(
+            instance_id
+            for instance_id, instance in self.state.instances.items()
+            if all(
+                isinstance(
+                    self.state.runners.get(runner_id), (RunnerReady, RunnerRunning)
+                )
+                for runner_id in instance.shard_assignments.node_to_runner.values()
+            )
+        )
+
+        # Seed and prune bookkeeping so a fresh master watches every task for
+        # a full window before judging it, and entries don't leak.
+        watched_task_ids = {
             task_id
             for task_id, task in self.state.tasks.items()
             if task.task_status == TaskStatus.Running
+            or (
+                task.task_status == TaskStatus.Pending
+                and isinstance(task, TextGenerationTask)
+                and task.instance_id in pending_watch_instances
+            )
         }
-        for task_id in running_task_ids:
+        for task_id in watched_task_ids:
             _ = self._task_last_progress.setdefault(task_id, now)
         for task_id in list(self._task_last_progress):
-            if task_id not in running_task_ids:
+            if task_id not in watched_task_ids:
                 del self._task_last_progress[task_id]
 
         for task in find_stalled_generation_tasks(
-            self.state.tasks, self._task_last_progress, now, GENERATION_STALL_TIMEOUT
+            self.state.tasks,
+            self._task_last_progress,
+            now,
+            GENERATION_STALL_TIMEOUT,
+            pending_watch_instances,
         ):
             logger.error(
                 f"Task {task.task_id} made no progress for "

@@ -89,3 +89,37 @@ def test_unwatched_task_is_not_stalled() -> None:
     )
 
     assert stalled == []
+
+
+def test_pending_task_on_ready_instance_is_stalled() -> None:
+    # A generation sitting unacknowledged on an instance whose runners are
+    # all up means a runner is wedged (e.g. stuck in an abandoned collective
+    # after a cancel); the watchdog must reclaim it.
+    now = datetime.now(tz=timezone.utc)
+    task = _generation_task(TaskStatus.Pending)
+
+    stalled = find_stalled_generation_tasks(
+        {task.task_id: task},
+        {task.task_id: now - timedelta(seconds=121)},
+        now,
+        _STALL_TIMEOUT,
+        pending_watch_instances=frozenset({task.instance_id}),
+    )
+
+    assert stalled == [task]
+
+
+def test_pending_task_on_loading_instance_is_ignored() -> None:
+    # Pending is normal while an instance is still loading or warming up.
+    now = datetime.now(tz=timezone.utc)
+    task = _generation_task(TaskStatus.Pending)
+
+    stalled = find_stalled_generation_tasks(
+        {task.task_id: task},
+        {task.task_id: now - timedelta(seconds=121)},
+        now,
+        _STALL_TIMEOUT,
+        pending_watch_instances=frozenset(),
+    )
+
+    assert stalled == []
