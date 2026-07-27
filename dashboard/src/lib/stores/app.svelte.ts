@@ -90,7 +90,9 @@ export interface StageTiming {
 export interface LayerExpertActivity {
   numExperts: number;
   tokensMeasured: number;
-  activations: number[];
+  uniqueExpertsActivated: number;
+  effectiveExperts: number;
+  topActivations: Record<string, number>;
 }
 
 // Granular node state types from the new state structure

@@ -1,7 +1,7 @@
 import os
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final, Literal, Self, final
 
@@ -228,20 +228,22 @@ class DecodeTimingSample(FrozenModel):
 
 @final
 class LayerExpertActivity(FrozenModel):
-    """Expert activation counts for one MoE decoder layer over a decode window.
+    """Expert activation summary for one MoE decoder layer over a decode window.
 
-    ``activations[i]`` is how many times expert ``i`` was selected across the
-    window's routed dispatches; ``tokens_measured`` is the approximate number
-    of decode tokens the window covered.
+    Computed runner-side from the raw selection histogram so state stays
+    small (512-expert histograms across 60 layers cost ~100 KB per poll):
+    ``unique_experts_activated`` counts experts selected at least once,
+    ``effective_experts`` is the exponential of the histogram's Shannon
+    entropy (the "perplexity" of routing — how many experts the layer
+    behaved as if it used), and ``top_activations`` keeps the most-selected
+    experts (index -> count) for display.
     """
 
     num_experts: int
     tokens_measured: int
-    activations: list[int]
-
-    @property
-    def unique_experts_activated(self) -> int:
-        return sum(1 for count in self.activations if count > 0)
+    unique_experts_activated: int
+    effective_experts: float
+    top_activations: Mapping[str, int] = {}
 
 
 @final

@@ -109,6 +109,11 @@ from exo.utils.task_group import TaskGroup
 # distributed collective cannot recover on their own; the watchdog fails the
 # task, notifies the client, and tears the instance down so it can be
 # relaunched cleanly.
+# Terminal generation task records embed the full prompt, so retaining every
+# chat message ever sent bloats the state each dashboard poll downloads.
+# Keep them briefly for status displays, then prune.
+TERMINAL_GENERATION_TASK_RETENTION = timedelta(minutes=5)
+
 GENERATION_STALL_TIMEOUT = timedelta(
     seconds=float(
         get_compatible_environment_value(
@@ -272,6 +277,8 @@ class Master:
         # Watchdog bookkeeping: last time each generation task showed progress
         # (any chunk reaching the master), seeded when the task is first seen.
         self._task_last_progress: dict[TaskId, datetime] = {}
+        self._task_terminal_since: dict[TaskId, datetime] = {}
+        self._task_deletion_requested: set[TaskId] = set()
         # Live layer rebalancing: remaining single-layer boundary shifts per
         # instance, executed one task at a time; the head of each deque is the
         # step currently in flight.
@@ -986,8 +993,46 @@ class Master:
                     await self.event_sender.send(NodeTimedOut(node_id=node_id))
 
             await self._fail_stalled_tasks()
+            await self._prune_stale_tasks()
 
             await anyio.sleep(10)
+
+    async def _prune_stale_tasks(self) -> None:
+        """Delete task records nothing will read again.
+
+        Terminal tasks of deleted instances serve no consumer, and terminal
+        generation tasks embed the full prompt, so retaining every chat
+        message ever sent grows the state (which every dashboard poll
+        downloads) without bound. Non-terminal tasks and everything on a
+        live instance's lifecycle (CreateRunner, Shutdown, ShiftLayers...)
+        stay: recovery and the shutdown memory credit read those.
+        """
+        now = datetime.now(tz=timezone.utc)
+        terminal_statuses = {
+            TaskStatus.Complete,
+            TaskStatus.Failed,
+            TaskStatus.Cancelled,
+            TaskStatus.TimedOut,
+        }
+        for task_id, task in self.state.tasks.items():
+            if task_id in self._task_deletion_requested:
+                continue
+            if task.task_status not in terminal_statuses:
+                self._task_terminal_since.pop(task_id, None)
+                continue
+            terminal_since = self._task_terminal_since.setdefault(task_id, now)
+            instance_gone = task.instance_id not in self.state.instances
+            is_generation = isinstance(
+                task, (TextGenerationTask, ImageGenerationTask, ImageEditsTask)
+            )
+            expired = now - terminal_since > TERMINAL_GENERATION_TASK_RETENTION
+            if instance_gone or (is_generation and expired):
+                self._task_deletion_requested.add(task_id)
+                await self.event_sender.send(TaskDeleted(task_id=task_id))
+        for task_id in list(self._task_terminal_since):
+            if task_id not in self.state.tasks:
+                del self._task_terminal_since[task_id]
+        self._task_deletion_requested &= set(self.state.tasks)
 
     def _record_task_progress(self, command_id: CommandId) -> None:
         for task_id, task in self.state.tasks.items():

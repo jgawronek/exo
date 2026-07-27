@@ -217,18 +217,8 @@
         ) {
           continue;
         }
-        const total = layerActivity.activations.reduce(
-          (sum, count) => sum + count,
-          0,
-        );
-        if (total <= 0) continue;
-        let entropy = 0;
-        for (const count of layerActivity.activations) {
-          if (count <= 0) continue;
-          const probability = count / total;
-          entropy -= probability * Math.log(probability);
-        }
-        rawHeatByLayer[layer] = Math.exp(entropy) / layerActivity.numExperts;
+        rawHeatByLayer[layer] =
+          layerActivity.effectiveExperts / layerActivity.numExperts;
       }
       const rawValues = Object.values(rawHeatByLayer);
       const minHeat = rawValues.length ? Math.min(...rawValues) : 0;

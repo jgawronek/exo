@@ -32,7 +32,8 @@ def test_register_model_maps_moe_layers_to_absolute_indices() -> None:
     recorder.record(model.layers[1].switch_mlp, mx.array([[0, 3]]))
     drained = recorder.drain()
     assert set(drained) == {11}
-    assert drained[11].activations == [1, 0, 0, 1]
+    assert drained[11].top_activations == {"0": 1, "3": 1}
+    assert drained[11].unique_experts_activated == 2
     assert drained[11].num_experts == 4
     assert drained[11].tokens_measured == 1
 
@@ -47,7 +48,10 @@ def test_record_accumulates_across_steps_and_resets_on_drain() -> None:
     recorder.record(dispatch, mx.array([[1, 3]]))
 
     drained = recorder.drain()
-    assert drained[0].activations == [0, 2, 1, 1]
+    assert drained[0].top_activations == {"1": 2, "2": 1, "3": 1}
+    assert drained[0].unique_experts_activated == 3
+    # Perplexity of the [2,1,1] histogram sits between 2 and 3 experts.
+    assert 2.0 < drained[0].effective_experts < 3.0
     assert drained[0].tokens_measured == 2
     assert recorder.drain() == {}
 
@@ -88,4 +92,5 @@ def test_patched_dispatch_records_and_preserves_output() -> None:
     # the routing weights.
     assert output.shape == (1, 1, 2, 8)
     drained = expert_activity.drain()
-    assert drained[5].activations == [1, 0, 1, 0]
+    assert drained[5].top_activations == {"0": 1, "2": 1}
+    assert drained[5].unique_experts_activated == 2

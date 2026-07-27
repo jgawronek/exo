@@ -15,6 +15,7 @@ is materialised when the runner drains it on its stage-timing cadence, never
 inside the decode hot path.
 """
 
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -32,6 +33,9 @@ from exo.worker.runner.bootstrap import logger
 # the rebalance cares about, so they are skipped. Decode dispatches are
 # (concurrent generations x top_k experts) indices, comfortably below this.
 _MAX_DECODE_DISPATCH_INDICES = 256
+
+# Most-selected experts kept per layer for display purposes.
+_TOP_ACTIVATIONS_KEPT = 8
 
 _LAYER_INDEX_PATTERN = re.compile(r"(?:^|\.)layers\.(\d+)(?:\.|$)")
 
@@ -116,14 +120,31 @@ class ExpertActivityRecorder:
         if not self._counts_by_layer:
             return {}
         mx.eval(*self._counts_by_layer.values())
-        drained = {
-            layer_index: LayerExpertActivity(
-                num_experts=counts.size,
+        drained: dict[int, LayerExpertActivity] = {}
+        for layer_index, counts_array in self._counts_by_layer.items():
+            counts = cast(list[int], counts_array.tolist())
+            total = sum(counts)
+            if total <= 0:
+                continue
+            entropy = 0.0
+            unique = 0
+            for count in counts:
+                if count <= 0:
+                    continue
+                unique += 1
+                probability = count / total
+                entropy -= probability * math.log(probability)
+            top = sorted(
+                ((index, count) for index, count in enumerate(counts) if count > 0),
+                key=lambda pair: -pair[1],
+            )[:_TOP_ACTIVATIONS_KEPT]
+            drained[layer_index] = LayerExpertActivity(
+                num_experts=counts_array.size,
                 tokens_measured=self._tokens_by_layer.get(layer_index, 0),
-                activations=[int(count) for count in cast(list[int], counts.tolist())],
+                unique_experts_activated=unique,
+                effective_experts=math.exp(entropy),
+                top_activations={str(index): count for index, count in top},
             )
-            for layer_index, counts in self._counts_by_layer.items()
-        }
         self._counts_by_layer.clear()
         self._tokens_by_layer.clear()
         return drained

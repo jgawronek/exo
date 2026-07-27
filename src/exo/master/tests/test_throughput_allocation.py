@@ -1166,7 +1166,9 @@ def _expert_layer(unique: int, total: int) -> LayerExpertActivity:
     return LayerExpertActivity(
         num_experts=total,
         tokens_measured=64,
-        activations=[1] * unique + [0] * (total - unique),
+        unique_experts_activated=unique,
+        effective_experts=float(unique),
+        top_activations={str(index): 1 for index in range(min(unique, 8))},
     )
 
 

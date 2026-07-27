@@ -45,10 +45,15 @@ def _instance(node_id: NodeId) -> Instance:
 
 
 def _activity(activations: list[int], tokens: int = 64) -> LayerExpertActivity:
+    unique = sum(1 for count in activations if count > 0)
     return LayerExpertActivity(
         num_experts=len(activations),
         tokens_measured=tokens,
-        activations=activations,
+        unique_experts_activated=unique,
+        effective_experts=float(unique),
+        top_activations={
+            str(index): count for index, count in enumerate(activations) if count > 0
+        },
     )
 
 
@@ -77,7 +82,7 @@ def test_expert_activity_merges_layers_across_reports() -> None:
     activity = state.instance_expert_activity[instance.instance_id]
     assert set(activity) == {"3", "5"}
     # The newest report for a layer replaces the previous window.
-    assert activity["3"].activations == [1, 1, 1, 1]
+    assert activity["3"].top_activations == {"0": 1, "1": 1, "2": 1, "3": 1}
     assert activity["3"].unique_experts_activated == 4
     assert activity["5"].unique_experts_activated == 1
 
