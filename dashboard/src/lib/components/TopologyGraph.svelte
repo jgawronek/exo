@@ -156,10 +156,25 @@
             layerActivity.numExperts > 0 &&
             layerActivity.tokensMeasured > 0
           ) {
-            const unique = layerActivity.activations.filter(
-              (count) => count > 0,
-            ).length;
-            strips.push(unique / layerActivity.numExperts);
+            // Effective number of experts (exp of Shannon entropy of the
+            // activation histogram) over the window, relative to the pool.
+            // Raw coverage saturates: 64 tokens x top-k touches nearly every
+            // expert, but concentration still varies layer to layer.
+            const total = layerActivity.activations.reduce(
+              (sum, count) => sum + count,
+              0,
+            );
+            if (total > 0) {
+              let entropy = 0;
+              for (const count of layerActivity.activations) {
+                if (count <= 0) continue;
+                const probability = count / total;
+                entropy -= probability * Math.log(probability);
+              }
+              strips.push(Math.exp(entropy) / layerActivity.numExperts);
+            } else {
+              strips.push(null);
+            }
           } else {
             strips.push(null);
           }
@@ -243,7 +258,8 @@
     }
   }
 
-  /** Soft glow behind a node icon scaled by its compute share. */
+  /** Soft glow behind a node icon scaled by its compute share relative to
+   * the busiest node, so only the actual bottleneck lights up strongly. */
   function drawComputeGlow(
     nodeG: d3.Selection<SVGGElement, unknown, null, undefined>,
     nodeId: string,
@@ -253,12 +269,22 @@
   ) {
     const share = nodeComputeShare[nodeId];
     if (share === undefined || share <= 0) return;
+    const maxShare = Math.max(...Object.values(nodeComputeShare));
+    if (maxShare <= 0) return;
+    const relative = share / maxShare;
+    // Quadratic falloff: the busiest node glows, near-peers glow faintly,
+    // light stages stay dark.
+    const intensity = relative * relative;
+    if (intensity < 0.15) return;
     nodeG
       .insert("circle", ":first-child")
       .attr("cx", cx)
       .attr("cy", cy)
-      .attr("r", radius * (0.9 + 0.5 * share))
-      .attr("fill", `oklch(0.75 0.14 80 / ${(0.12 + 0.45 * share).toFixed(3)})`)
+      .attr("r", radius * (0.9 + 0.5 * intensity))
+      .attr(
+        "fill",
+        `oklch(0.75 0.14 80 / ${(0.5 * intensity).toFixed(3)})`,
+      )
       .attr("filter", "url(#node-compute-glow)");
   }
 
