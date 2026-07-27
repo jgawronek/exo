@@ -116,6 +116,30 @@
   const stageTimingsData = $derived(instanceStageTimings());
   const expertActivityData = $derived(instanceExpertActivity());
 
+  // ── Idle detection ──────────────────────────────────────────────
+  // Stage timings and expert activations only update while tokens are
+  // decoding; once generation stops, the last window would otherwise stay
+  // painted forever. Track when the measurements last changed and fade the
+  // heat strips and bottleneck glow back to neutral after a quiet period.
+  const ACTIVITY_IDLE_MS = 15_000;
+  let lastActivitySignature = $state("");
+  let lastActivityAt = $state(0);
+  let idleClockTick = $state(Date.now());
+  let idleClock: ReturnType<typeof setInterval> | undefined;
+
+  $effect(() => {
+    const signature =
+      JSON.stringify(stageTimingsData) + JSON.stringify(expertActivityData);
+    if (signature !== lastActivitySignature) {
+      lastActivitySignature = signature;
+      lastActivityAt = Date.now();
+    }
+  });
+
+  const activityIsFresh = $derived(
+    lastActivityAt > 0 && idleClockTick - lastActivityAt < ACTIVITY_IDLE_MS,
+  );
+
   /**
    * Per-node layer strips for running instances, in pipeline order. Each
    * entry is one held layer's heat: the fraction of that layer's experts
@@ -187,7 +211,7 @@
         const strips: (number | null)[] = [];
         for (let layer = shard.startLayer; layer < shard.endLayer; layer++) {
           const raw = rawHeatByLayer[layer];
-          if (raw === undefined) {
+          if (!activityIsFresh || raw === undefined) {
             strips.push(null);
           } else if (heatSpan > 1e-9) {
             strips.push((raw - minHeat) / heatSpan);
@@ -207,6 +231,7 @@
    */
   const nodeComputeShare = $derived.by(() => {
     const share: Record<string, number> = {};
+    if (!activityIsFresh) return share;
     for (const timings of Object.values(stageTimingsData || {})) {
       const entries = Object.entries(timings || {}).filter(
         ([, timing]) => timing.computeMsPerToken > 0,
@@ -2059,10 +2084,14 @@
       });
       resizeObserver.observe(svgContainer);
     }
+    idleClock = setInterval(() => {
+      idleClockTick = Date.now();
+    }, 2000);
   });
 
   onDestroy(() => {
     resizeObserver?.disconnect();
+    if (idleClock) clearInterval(idleClock);
   });
 </script>
 
