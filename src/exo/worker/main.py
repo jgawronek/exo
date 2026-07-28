@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import anyio
-from anyio import fail_after, to_thread
+from anyio import fail_after, move_on_after, to_thread
 from loguru import logger
 
 from exo.api.types import ImageEditsTaskParams
@@ -80,7 +80,9 @@ from exo.worker.runner.supervisor import RunnerSupervisor
 # worker's whole plan loop forever.
 RUNNER_TASK_ACK_TIMEOUT_SECONDS = 330
 RUNNER_CANCEL_TIMEOUT_SECONDS = 10
-
+# Backstop for waiting on a shutting-down runner's process to exit before its
+# instance may create a replacement.
+RUNNER_REAP_TIMEOUT_SECONDS = 60
 
 
 class Worker:
@@ -107,6 +109,12 @@ class Worker:
 
         self._state = State()
         self.runners: dict[RunnerId, RunnerSupervisor] = {}
+        # Runners whose shutdown has been initiated but whose OS process may
+        # still be alive. A replacement runner for the same instance must not
+        # be created until these are reaped: the ring listener port is fixed
+        # per instance, so an early replacement hits EADDRINUSE and dies,
+        # which recycles into an endless bind-fail loop.
+        self.terminating_runners: dict[RunnerId, RunnerSupervisor] = {}
         self._tg: TaskGroup = TaskGroup()
 
         self._system_id = SystemId()
@@ -290,6 +298,7 @@ class Worker:
                 self.image_cache,
                 self._instance_backoff,
                 self._download_backoff,
+                self._terminating_instance_ids(),
             )
             if task is None:
                 continue
@@ -366,6 +375,7 @@ class Worker:
                         )
                 case Shutdown(runner_id=runner_id):
                     runner = self.runners.pop(runner_id)
+                    self.terminating_runners[runner_id] = runner
                     try:
                         with fail_after(3):
                             await runner.start_task(task)
@@ -377,6 +387,7 @@ class Worker:
                         )
                     finally:
                         runner.shutdown()
+                        self._tg.start_soon(self._reap_runner, runner_id, runner)
                 case CancelTask(
                     cancelled_task_id=cancelled_task_id, runner_id=runner_id
                 ):
@@ -504,6 +515,25 @@ class Worker:
             )
         )
         runner.shutdown()
+
+    def _terminating_instance_ids(self) -> frozenset[InstanceId]:
+        return frozenset(
+            runner.bound_instance.instance.instance_id
+            for runner in self.terminating_runners.values()
+        )
+
+    async def _reap_runner(self, runner_id: RunnerId, runner: RunnerSupervisor) -> None:
+        """Release an instance for a replacement once its process is gone.
+
+        The supervisor's teardown escalates SIGTERM to SIGKILL, so this always
+        completes; the timeout is a backstop so a pathological process cannot
+        block the instance forever.
+        """
+        try:
+            with move_on_after(RUNNER_REAP_TIMEOUT_SECONDS):
+                _ = await runner.runner_process.wait()
+        finally:
+            del self.terminating_runners[runner_id]
 
     async def _create_supervisor(self, task: CreateRunner) -> RunnerSupervisor:
         """Creates and stores a new AssignedRunner with initial downloading status."""

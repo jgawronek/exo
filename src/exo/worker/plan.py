@@ -57,12 +57,20 @@ def plan(
     image_cache: Mapping[Base64ImageHash, Base64Image],
     instance_backoff: KeyedBackoff[InstanceId],
     download_backoff: KeyedBackoff[ModelId],
+    terminating_instance_ids: frozenset[InstanceId] = frozenset(),
 ) -> Task | None:
     # Python short circuiting OR logic should evaluate these sequentially.
     return (
         _cancel_tasks(runners, tasks)
         or _kill_runner(runners, all_runners, instances)
-        or _create_runner(node_id, runners, all_runners, instances, instance_backoff)
+        or _create_runner(
+            node_id,
+            runners,
+            all_runners,
+            instances,
+            instance_backoff,
+            terminating_instance_ids,
+        )
         or _model_needs_download(
             node_id, runners, global_download_status, download_backoff
         )
@@ -107,6 +115,7 @@ def _create_runner(
     all_runners: Mapping[RunnerId, RunnerStatus],
     instances: Mapping[InstanceId, Instance],
     instance_backoff: KeyedBackoff[InstanceId],
+    terminating_instance_ids: frozenset[InstanceId] = frozenset(),
 ) -> CreateRunner | None:
     for instance in instances.values():
         runner_id = instance.shard_assignments.node_to_runner.get(node_id, None)
@@ -114,6 +123,12 @@ def _create_runner(
             continue
 
         if runner_id in runners:
+            continue
+
+        # A predecessor runner for this instance is still shutting down. Its
+        # process holds the instance's fixed ring port until it exits, so a
+        # replacement created now fails to bind and recycles forever.
+        if instance.instance_id in terminating_instance_ids:
             continue
 
         # don't create runners if any other nodes have runners that have failed - wait for them to fix themselves first.

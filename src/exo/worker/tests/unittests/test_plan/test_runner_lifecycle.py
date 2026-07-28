@@ -213,3 +213,38 @@ def test_plan_does_not_create_runner_for_unassigned_node():
     )
 
     assert result is None
+
+
+def test_plan_defers_runner_creation_while_predecessor_terminates():
+    """
+    A replacement runner must wait for its predecessor's process to exit.
+    The instance's ring listener port is fixed, so creating the replacement
+    while the old process still holds it fails to bind (EADDRINUSE) and
+    recycles into an endless loop.
+    """
+    shard = get_pipeline_shard_metadata(model_id=MODEL_A_ID, device_rank=0)
+    instance = get_mlx_ring_instance(
+        instance_id=INSTANCE_1_ID,
+        model_id=MODEL_A_ID,
+        node_to_runner={NODE_A: RUNNER_1_ID},
+        runner_to_shard={RUNNER_1_ID: shard},
+    )
+
+    def make_plan(terminating: frozenset[InstanceId]):
+        return plan_mod.plan(
+            node_id=NODE_A,
+            runners={},
+            global_download_status={NODE_A: []},
+            instances={INSTANCE_1_ID: instance},
+            all_runners={},
+            tasks={},
+            input_chunk_buffer={},
+            image_cache={},
+            instance_backoff=KeyedBackoff(),
+            download_backoff=KeyedBackoff(),
+            terminating_instance_ids=terminating,
+        )
+
+    assert make_plan(frozenset({INSTANCE_1_ID})) is None
+    # Once the predecessor is reaped, the replacement proceeds.
+    assert isinstance(make_plan(frozenset()), plan_mod.CreateRunner)
