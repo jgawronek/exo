@@ -1,5 +1,6 @@
 import hashlib
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,7 +62,7 @@ from exo.shared.types.text_generation import Base64Image, Base64ImageHash
 from exo.shared.types.topology import Connection, SocketConnection
 from exo.shared.types.worker.downloads import DownloadCompleted
 from exo.shared.types.worker.instances import InstanceId
-from exo.shared.types.worker.runners import RunnerFailed, RunnerId
+from exo.shared.types.worker.runners import RunnerFailed, RunnerId, RunnerStatus
 from exo.utils.channels import Receiver, Sender, channel
 from exo.utils.info_gatherer.info_gatherer import GatheredInfo, InfoGatherer
 from exo.utils.info_gatherer.net_profile import check_reachable
@@ -80,6 +81,27 @@ from exo.worker.runner.supervisor import RunnerSupervisor
 # worker's whole plan loop forever.
 RUNNER_TASK_ACK_TIMEOUT_SECONDS = 330
 RUNNER_CANCEL_TIMEOUT_SECONDS = 10
+# How often each worker restates its runners' statuses. Ring formation is
+# sequenced on cluster-wide runner status — the last rank only dials once
+# every peer reports connecting — so a single dropped status event would
+# otherwise deadlock the whole instance permanently. Restating makes that
+# state self-correcting instead.
+RUNNER_STATUS_REPUBLISH_SECONDS = 5
+
+
+def diverged_runner_statuses(
+    *,
+    local_statuses: Mapping[RunnerId, RunnerStatus],
+    replicated_statuses: Mapping[RunnerId, RunnerStatus],
+) -> dict[RunnerId, RunnerStatus]:
+    """Local runner statuses that cluster state does not yet agree with."""
+    return {
+        runner_id: status
+        for runner_id, status in local_statuses.items()
+        if replicated_statuses.get(runner_id) != status
+    }
+
+
 # Backstop for waiting on a shutting-down runner's process to exit before its
 # instance may create a replacement.
 RUNNER_REAP_TIMEOUT_SECONDS = 60
@@ -151,6 +173,7 @@ class Worker:
                 tg.start_soon(self._poll_connection_updates)
                 tg.start_soon(self._reconcile_custom_cards)
                 tg.start_soon(self._reconcile_shared_models_dir)
+                tg.start_soon(self._republish_runner_statuses)
         except* (EventRouterBrokenResourceError, EventRouterClosedResourceError):
             # Event router has been closed (try-star syntax handles error groups)
             pass
@@ -515,6 +538,28 @@ class Worker:
             )
         )
         runner.shutdown()
+
+    async def _republish_runner_statuses(self) -> None:
+        """Periodically restate local runner statuses so state self-heals.
+
+        Runner status is published once per transition. Ring formation reads
+        those statuses cluster-wide, so one lost event strands an instance in
+        a half-connected state forever with nothing to retry it. Re-sending
+        the current status is idempotent — apply just overwrites with the
+        same value — and bounds any such gap to one interval.
+        """
+        while True:
+            await anyio.sleep(RUNNER_STATUS_REPUBLISH_SECONDS)
+            for runner_id, status in diverged_runner_statuses(
+                local_statuses={
+                    runner_id: runner.status
+                    for runner_id, runner in self.runners.items()
+                },
+                replicated_statuses=self.state.runners,
+            ).items():
+                await self.event_sender.send(
+                    RunnerStatusUpdated(runner_id=runner_id, runner_status=status)
+                )
 
     def _terminating_instance_ids(self) -> frozenset[InstanceId]:
         return frozenset(

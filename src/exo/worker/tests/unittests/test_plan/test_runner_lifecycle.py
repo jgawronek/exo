@@ -248,3 +248,34 @@ def test_plan_defers_runner_creation_while_predecessor_terminates():
     assert make_plan(frozenset({INSTANCE_1_ID})) is None
     # Once the predecessor is reaped, the replacement proceeds.
     assert isinstance(make_plan(frozenset()), plan_mod.CreateRunner)
+
+
+def test_diverged_runner_statuses_finds_only_stale_entries() -> None:
+    """A dropped status event must not strand an instance forever.
+
+    Ring formation is sequenced on cluster-wide runner status, so if a
+    transition is lost the last rank waits on a peer state that never
+    arrives. The worker restates exactly the statuses state disagrees with.
+    """
+    from exo.shared.types.worker.runners import RunnerConnecting
+    from exo.worker.main import diverged_runner_statuses
+
+    stale, agreed, unknown = RunnerId(), RunnerId(), RunnerId()
+    local = {
+        stale: RunnerConnecting(),
+        agreed: RunnerReady(prefill_server_port=None),
+        unknown: RunnerConnecting(),
+    }
+    replicated = {
+        stale: RunnerReady(prefill_server_port=None),
+        agreed: RunnerReady(prefill_server_port=None),
+    }
+
+    diverged = diverged_runner_statuses(
+        local_statuses=local, replicated_statuses=replicated
+    )
+
+    # The stale entry and the one state has never seen are republished; the
+    # one already agreed on is left alone.
+    assert set(diverged) == {stale, unknown}
+    assert diverged[stale] == RunnerConnecting()
