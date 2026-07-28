@@ -66,6 +66,7 @@ from mlx_lm.models.step3p5 import Step3p5MLP as Step35MLP
 from mlx_lm.models.step3p5 import Step3p5Model as Step35InnerModel
 from mlx_lm.utils import load_model
 
+from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.profiling import DecodeTimingSample
 from exo.shared.types.worker.runner_response import ModelLoadingResponse
 from exo.shared.types.worker.shards import PipelineShardMetadata
@@ -172,7 +173,9 @@ decode_timings = PipelineDecodeTimings()
 # Every node in the cluster must set the same value or ranks will exchange
 # mismatched payloads and hang. Keep the legacy name canonical until mixed-version
 # clusters no longer need to read the same setting.
-WIRE_QUANTIZATION_ENABLED: Final = os.environ.get("EXO_WIRE_QUANT") == "1"
+WIRE_QUANTIZATION_ENABLED: Final = (
+    get_compatible_environment_value(os.environ, "EXO_WIRE_QUANT", "1") == "1"
+)
 
 _WIRE_QUANTIZATION_MINIMUM_SCALE: Final = 1e-8
 
