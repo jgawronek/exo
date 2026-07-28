@@ -478,3 +478,46 @@ async def test_master_waits_for_recovered_state_cleanup() -> None:
         )
 
     assert wait_finished
+
+
+async def test_master_prunes_orphaned_shift_task_from_a_previous_master() -> None:
+    """A finished migration step left behind by a failover must not linger.
+
+    Steps are deleted by the master that scheduled them; a successor has no
+    mapping for an in-flight step, so the record survives forever. The
+    dashboard draws its migration progress bar from exactly these records,
+    so a stale one shows a phantom migration and hides the rebalance
+    controls.
+    """
+    current = _shards([3, 3])
+    orphan = ShiftLayers(
+        instance_id=InstanceId("instance"),
+        task_status=TaskStatus.Complete,
+        new_shards=current,
+        target_layer_counts=dict(
+            zip(
+                sorted(current, key=lambda r: current[r].device_rank),
+                [3, 3],
+                strict=True,
+            )
+        ),
+        current_step=1,
+        total_steps=26,
+    )
+    master = _restore_master(current_shards=current, task=orphan)
+    # No plan is active for this instance, so nothing can ever advance it.
+    master._layer_shift_plans.clear()  # pyright: ignore[reportPrivateUsage]
+    master._task_terminal_since = {}  # pyright: ignore[reportPrivateUsage]
+    master._task_deletion_requested = set()  # pyright: ignore[reportPrivateUsage]
+
+    deleted: list[TaskId] = []
+
+    class _Recorder:
+        async def send(self, event: object) -> None:
+            if isinstance(event, TaskDeleted):
+                deleted.append(event.task_id)
+
+    master.event_sender = _Recorder()  # pyright: ignore[reportAttributeAccessIssue]
+    await master._prune_stale_tasks()  # pyright: ignore[reportPrivateUsage]
+
+    assert deleted == [orphan.task_id]

@@ -1029,6 +1029,20 @@ class Master:
                 self._task_terminal_since.pop(task_id, None)
                 continue
             terminal_since = self._task_terminal_since.setdefault(task_id, now)
+            if isinstance(task, ShiftLayersTask) and (
+                task.instance_id not in self._layer_shift_plans
+            ):
+                # A finished migration step is normally deleted as the plan
+                # advances, but only by the master that scheduled it. After a
+                # failover the successor has no mapping for the in-flight
+                # step, so the record survives — and the dashboard reads
+                # exactly these records to draw its migration progress bar,
+                # leaving a phantom migration that also hides the rebalance
+                # controls. No plan is running for this instance, so nothing
+                # will ever advance it.
+                self._task_deletion_requested.add(task_id)
+                await self.event_sender.send(TaskDeleted(task_id=task_id))
+                continue
             is_generation = isinstance(
                 task, (TextGenerationTask, ImageGenerationTask, ImageEditsTask)
             )
