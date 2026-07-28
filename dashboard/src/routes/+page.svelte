@@ -79,8 +79,11 @@
     type PlacementPreview,
   } from "$lib/stores/app.svelte";
   import {
+    fetchRebalancePreview,
     formatRebalanceProgress,
     getActiveRebalances,
+    rebalanceButtonLabel,
+    type RebalancePreview,
     type RebalanceProgress,
   } from "$lib/utils/rebalance";
   import { addToast, dismissByMessage } from "$lib/stores/toast.svelte";
@@ -2425,65 +2428,53 @@
   // server's allocator: decode latency is the sum of stage times, so layers
   // pile onto the nodes with the fastest measured per-layer rate, capped by
   // each node's memory (its current share counts as reclaimable).
-  function getRebalanceProjectedGain(
-    instanceId: string,
-    instanceWrapped: unknown,
-  ): number | null {
-    const rows = getInstanceStageTimingRows(instanceId, instanceWrapped);
-    const info = getInstanceInfo(instanceWrapped);
-    if (rows.length < 2 || rows.length !== info.nodeCount) return null;
-    if (rows.some((row) => row.computeMs <= 0 || row.layers < 1)) return null;
+  let rebalancingInstances = $state<Record<string, boolean>>({});
 
-    const [, instance] = getTagged(instanceWrapped);
-    const inst = (instance ?? {}) as {
-      shardAssignments?: { runnerToShard?: Record<string, unknown> };
-    };
-    const firstShardWrapped = Object.values(
-      inst.shardAssignments?.runnerToShard || {},
-    )[0];
-    const [, firstShard] = getTagged(firstShardWrapped);
-    const shardInfo = (firstShard ?? {}) as {
-      nLayers?: number;
-      modelCard?: { storageSize?: { inBytes?: number } };
-    };
-    const measuredLayers = rows.reduce((sum, row) => sum + row.layers, 0);
-    const totalLayers = shardInfo.nLayers ?? measuredLayers;
-    const storageBytes = shardInfo.modelCard?.storageSize?.inBytes ?? 0;
+  // Backend-computed rebalance projections, fetched lazily. The dashboard
+  // deliberately does not recompute layer allocation: doing so previously
+  // produced speedup claims the allocator would never honour.
+  type CachedRebalancePreview = {
+    preview: RebalancePreview | null;
+    fetchedAt: number;
+    signature: string;
+  };
+  let rebalancePreviews = $state<Record<string, CachedRebalancePreview>>({});
+  const rebalancePreviewInflight = new Set<string>();
+  const REBALANCE_PREVIEW_TTL_MS = 15_000;
 
-    const rates = rows.map((row) => row.layers / row.computeMs);
-    const caps = rows.map((row) => {
-      const memory = data?.nodes?.[row.nodeId]?.macmon_info?.memory;
-      if (!memory || storageBytes <= 0) return totalLayers;
-      const available = Math.max(memory.ram_total - memory.ram_usage, 0);
-      const reclaimable = (storageBytes * row.layers) / totalLayers;
-      return Math.floor(
-        ((available + reclaimable) * totalLayers) / storageBytes,
-      );
-    });
-    if (caps.some((cap) => cap < 1)) return null;
-
-    const projected = rows.map(() => 1);
-    let remaining = totalLayers - rows.length;
-    if (remaining < 0) return null;
-    const byRate = [...rows.keys()].sort((a, b) => rates[b] - rates[a]);
-    for (const index of byRate) {
-      const take = Math.min(caps[index] - projected[index], remaining);
-      projected[index] += Math.max(0, take);
-      remaining -= Math.max(0, take);
-      if (remaining === 0) break;
-    }
-    if (remaining > 0) return null;
-
-    const currentTotalMs = rows.reduce((sum, row) => sum + row.computeMs, 0);
-    const projectedTotalMs = projected.reduce(
-      (sum, layerCount, index) => sum + layerCount / rates[index],
-      0,
-    );
-    if (currentTotalMs <= 0) return null;
-    return Math.max(0, (currentTotalMs - projectedTotalMs) / currentTotalMs);
+  function instanceLayerSignature(instanceWrapped: unknown): string {
+    return getInstanceStageTimingRows("", instanceWrapped)
+      .map((row) => `${row.nodeId}:${row.layers}`)
+      .sort()
+      .join("|");
   }
 
-  let rebalancingInstances = $state<Record<string, boolean>>({});
+  async function ensureRebalancePreview(
+    instanceId: string,
+    instanceWrapped: unknown,
+  ) {
+    if (rebalancePreviewInflight.has(instanceId)) return;
+    const signature = instanceLayerSignature(instanceWrapped);
+    const cached = rebalancePreviews[instanceId];
+    if (
+      cached &&
+      cached.signature === signature &&
+      Date.now() - cached.fetchedAt < REBALANCE_PREVIEW_TTL_MS
+    ) {
+      return;
+    }
+    rebalancePreviewInflight.add(instanceId);
+    try {
+      const preview = await fetchRebalancePreview(instanceId);
+      rebalancePreviews[instanceId] = {
+        preview,
+        fetchedAt: Date.now(),
+        signature,
+      };
+    } finally {
+      rebalancePreviewInflight.delete(instanceId);
+    }
+  }
   // Instances mid-rebalance. The rebalance is a live migration: the master
   // moves one layer at a time between adjacent pipeline ranks while the
   // instance keeps serving, so the card never disappears — it shows a
@@ -2656,6 +2647,7 @@
             !transition.replicatedTaskObserved
           ) {
             delete rebalanceTransitions[instanceId];
+            delete rebalancePreviews[instanceId];
           }
         }, 10_000);
         addToast({
@@ -2673,6 +2665,9 @@
       addToast({ type: "error", message: "Failed to rebalance instance" });
     } finally {
       delete rebalancingInstances[instanceId];
+      // The split just changed (or the attempt failed): drop the stale
+      // projection so the next hover re-asks the backend.
+      delete rebalancePreviews[instanceId];
     }
   }
 
@@ -5732,9 +5727,9 @@
                     id,
                     instance,
                   )}
-                  {@const rebalanceGain = getRebalanceProjectedGain(
-                    id,
-                    instance,
+                  {@const rebalanceLabel = rebalanceButtonLabel(
+                    rebalancePreviews[id]?.preview ?? null,
+                    !!rebalancingInstances[id],
                   )}
                   {@const migration = getDisplayedRebalance(id, instance)}
                   {@const prepProgress =
@@ -5752,7 +5747,10 @@
                     tabindex="0"
                     aria-pressed={selectedInstanceId === id}
                     transition:slide={{ duration: 250, easing: cubicOut }}
-                    onmouseenter={() => (hoveredInstanceId = id)}
+                    onmouseenter={() => {
+                      hoveredInstanceId = id;
+                      void ensureRebalancePreview(id, instance);
+                    }}
                     onmouseleave={() => (hoveredInstanceId = null)}
                     onclick={() => selectInstance(id, instanceModelId ?? null)}
                     onkeydown={(e) => {
@@ -5957,19 +5955,13 @@
                                     event.stopPropagation();
                                     rebalanceInstance(id, "speed");
                                   }}
-                                  disabled={rebalancingInstances[id]}
-                                  title="Live-migrate layers one at a time to the measured-speed split (no downtime)"
-                                  class="text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
-                                    null && rebalanceGain > 0.1
+                                  disabled={rebalanceLabel.disabled}
+                                  title={rebalanceLabel.title}
+                                  class="text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {rebalanceLabel.emphasize
                                     ? 'border-xeo-green/60 text-xeo-green shadow-[0_0_8px_oklch(0.78_0.17_145/0.35)] hover:bg-xeo-green/20'
                                     : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
                                 >
-                                  {rebalancingInstances[id]
-                                    ? "REBALANCING..."
-                                    : rebalanceGain !== null &&
-                                        rebalanceGain > 0.1
-                                      ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
-                                      : "REBALANCE"}
+                                  {rebalanceLabel.text}
                                 </button>
                                 <button
                                   onclick={(event) => {
@@ -7053,9 +7045,9 @@
                       id,
                       instance,
                     )}
-                    {@const rebalanceGain = getRebalanceProjectedGain(
-                      id,
-                      instance,
+                    {@const rebalanceLabel = rebalanceButtonLabel(
+                      rebalancePreviews[id]?.preview ?? null,
+                      !!rebalancingInstances[id],
                     )}
                     {@const migration = getDisplayedRebalance(id, instance)}
                     {@const prepProgress =
@@ -7072,7 +7064,10 @@
                       role="button"
                       tabindex="0"
                       aria-pressed={selectedInstanceId === id}
-                      onmouseenter={() => (hoveredInstanceId = id)}
+                      onmouseenter={() => {
+                        hoveredInstanceId = id;
+                        void ensureRebalancePreview(id, instance);
+                      }}
                       onmouseleave={() => (hoveredInstanceId = null)}
                       onclick={() =>
                         selectInstance(id, instanceModelId ?? null)}
@@ -7279,19 +7274,13 @@
                                       event.stopPropagation();
                                       rebalanceInstance(id, "speed");
                                     }}
-                                    disabled={rebalancingInstances[id]}
-                                    title="Live-migrate layers one at a time to the measured-speed split (no downtime)"
-                                    class="text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait {rebalanceGain !==
-                                      null && rebalanceGain > 0.1
+                                    disabled={rebalanceLabel.disabled}
+                                    title={rebalanceLabel.title}
+                                    class="text-[10px] px-2 py-1 font-mono tracking-wider uppercase border transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed {rebalanceLabel.emphasize
                                       ? 'border-xeo-green/60 text-xeo-green shadow-[0_0_8px_oklch(0.78_0.17_145/0.35)] hover:bg-xeo-green/20'
                                       : 'border-teal-500/30 text-teal-400 hover:bg-teal-500/20 hover:border-teal-500/50'}"
                                   >
-                                    {rebalancingInstances[id]
-                                      ? "REBALANCING..."
-                                      : rebalanceGain !== null &&
-                                          rebalanceGain > 0.1
-                                        ? `REBALANCE (~${Math.round(rebalanceGain * 100)}% FASTER)`
-                                        : "REBALANCE"}
+                                    {rebalanceLabel.text}
                                   </button>
                                   <button
                                     onclick={(event) => {

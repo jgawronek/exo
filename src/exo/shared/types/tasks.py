@@ -130,7 +130,10 @@ class ShiftLayers(BaseTask):  # emitted by Master
             raise ValueError("Layer-shift shards must describe the same complete model")
         previous_end = 0
         for shard in ranked_shards:
-            if shard.start_layer != previous_end or shard.end_layer <= shard.start_layer:
+            if (
+                shard.start_layer != previous_end
+                or shard.end_layer <= shard.start_layer
+            ):
                 raise ValueError(
                     "Layer-shift shard boundaries must be contiguous and nonempty"
                 )

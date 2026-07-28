@@ -4,11 +4,11 @@ import hashlib
 import json
 import random
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, NamedTuple, cast
 from uuid import uuid4
 
 import anyio
@@ -135,6 +135,7 @@ from exo.master.placement_utils import (
     allocate_layers_by_measured_speed,
     node_memory_with_pending_shutdowns,
     plan_pipeline_layer_shift_steps,
+    projected_decode_compute_ms,
     validate_live_rebalance_steps,
 )
 from exo.routing.event_router import ReplicatedEventDelivery
@@ -198,6 +199,7 @@ from exo.shared.types.events import (
 )
 from exo.shared.types.instance_link import InstanceLink, InstanceLinkId
 from exo.shared.types.memory import Memory
+from exo.shared.types.profiling import StageTiming
 from exo.shared.types.state import State
 from exo.shared.types.tasks import (
     ImageEdits as ImageEditsTask,
@@ -220,6 +222,7 @@ from exo.shared.types.worker.instances import (
     InstanceId,
     InstanceMeta,
 )
+from exo.shared.types.worker.runners import RunnerId
 from exo.shared.types.worker.shards import PipelineShardMetadata, Sharding
 from exo.utils.banner import print_startup_banner
 from exo.utils.channels import Receiver, Sender, channel
@@ -230,6 +233,16 @@ from exo.utils.task_group import TaskGroup
 
 _API_EVENT_LOG_DIR = EXO_EVENT_LOG_DIR / "api"
 ONBOARDING_COMPLETE_FILE = EXO_CACHE_HOME / "onboarding_complete"
+
+
+class _RebalancePlan(NamedTuple):
+    """A rebalance target split plus the migration that would reach it."""
+
+    node_ids: list[NodeId]
+    current_layers: dict[NodeId, int]
+    node_layers: dict[NodeId, int]
+    steps: list[dict[RunnerId, PipelineShardMetadata]]
+    stage_timings: Mapping[NodeId, StageTiming]
 
 
 def _format_to_content_type(image_format: Literal["png", "jpeg", "webp"] | None) -> str:
@@ -399,6 +412,9 @@ class API:
         self.app.get("/instance/{instance_id}")(self.get_instance)
         self.app.delete("/instance/{instance_id}")(self.delete_instance)
         self.app.post("/instance/{instance_id}/rebalance")(self.rebalance_instance)
+        self.app.get("/instance/{instance_id}/rebalance/preview")(
+            self.preview_rebalance_instance
+        )
         self.app.get("/v1/instance-links")(self.list_instance_links)
         self.app.post("/v1/instance-links")(self.create_instance_link)
         self.app.put("/v1/instance-links/{link_id}")(self.update_instance_link)
@@ -753,35 +769,19 @@ class API:
             instance_id=instance_id,
         )
 
-    async def rebalance_instance(
-        self, instance_id: InstanceId, mode: Literal["speed", "experts"] = "speed"
-    ) -> RebalanceInstanceResponse:
-        """Live-migrate an instance's layers to the measured-speed allocation.
+    def _plan_rebalance(
+        self, instance_id: InstanceId, mode: Literal["speed", "experts"]
+    ) -> "_RebalancePlan":
+        """Compute the target layer split and the migration steps to reach it.
 
-        ``mode="speed"`` splits layers by each stage's measured decode rate;
-        ``mode="experts"`` additionally weighs each MoE layer by the fraction
-        of its experts recent tokens actually activated, so layers with
-        concentrated routing pack more densely onto a stage.
-
-        Like a disk defragmenter, the rebalance moves one layer at a time
-        between adjacent pipeline ranks while the instance keeps serving
-        requests; each step pauses generation only for the moment the gaining
-        rank loads that layer's weights from local disk.
+        Shared by the preview and the live migration so the two can never
+        disagree: whatever the preview advertises is exactly what the applier
+        would carry out, including the validation that can reject a plan for
+        an unsafe intermediate step.
         """
         instance = self.state.instances.get(instance_id)
         if instance is None:
             raise HTTPException(status_code=404, detail="Instance not found")
-        if any(
-            isinstance(task, ShiftLayersTask)
-            and task.instance_id == instance_id
-            and task.task_status
-            in {TaskStatus.Pending, TaskStatus.Running, TaskStatus.Complete}
-            for task in self.state.tasks.values()
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="Instance already has a layer rebalance in progress",
-            )
 
         shard_assignments = instance.shard_assignments
         node_to_shard = {
@@ -847,48 +847,127 @@ class API:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        if node_layers == current_layers:
-            return RebalanceInstanceResponse(
-                message="Measured allocation already matches the current layer split.",
-                instance_id=instance_id,
-                node_layers=node_layers,
+        planned_steps: list[dict[RunnerId, PipelineShardMetadata]] = []
+        if node_layers != current_layers:
+            current_pipeline_shards = {
+                shard_assignments.node_to_runner[node_id]: shard
+                for node_id, shard in node_to_shard.items()
+                if isinstance(shard, PipelineShardMetadata)
+            }
+            target_layer_counts = {
+                shard_assignments.node_to_runner[node_id]: layer_count
+                for node_id, layer_count in node_layers.items()
+            }
+            try:
+                planned_steps = plan_pipeline_layer_shift_steps(
+                    current_pipeline_shards, target_layer_counts
+                )
+                validate_live_rebalance_steps(
+                    model_card=model_card,
+                    node_ids=node_ids,
+                    node_to_runner=shard_assignments.node_to_runner,
+                    node_memory=self.state.node_memory,
+                    current_layers=current_layers,
+                    steps=planned_steps,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return _RebalancePlan(
+            node_ids=node_ids,
+            current_layers=current_layers,
+            node_layers=node_layers,
+            steps=planned_steps,
+            stage_timings=stage_timings,
+        )
+
+    async def preview_rebalance_instance(
+        self, instance_id: InstanceId, mode: Literal["speed", "experts"] = "speed"
+    ) -> RebalanceInstanceResponse:
+        """Report the split a rebalance would produce, without performing it."""
+        return await self.rebalance_instance(instance_id, mode=mode, dry_run=True)
+
+    async def rebalance_instance(
+        self,
+        instance_id: InstanceId,
+        mode: Literal["speed", "experts"] = "speed",
+        dry_run: bool = False,
+    ) -> RebalanceInstanceResponse:
+        """Live-migrate an instance's layers to the measured-speed allocation.
+
+        ``mode="speed"`` splits layers by each stage's measured decode rate;
+        ``mode="experts"`` additionally weighs each MoE layer by how much of
+        its expert pool recent tokens actually engaged, so layers with
+        concentrated routing pack more densely onto a stage.
+
+        Like a disk defragmenter, the rebalance moves one layer at a time
+        between adjacent pipeline ranks while the instance keeps serving
+        requests; each step pauses generation only for the moment the gaining
+        rank loads that layer's weights from local disk.
+
+        With ``dry_run`` the same plan is computed and returned but nothing is
+        migrated, so callers can show what a rebalance would actually do
+        instead of guessing at it.
+        """
+        if not dry_run and any(
+            isinstance(task, ShiftLayersTask)
+            and task.instance_id == instance_id
+            and task.task_status
+            in {TaskStatus.Pending, TaskStatus.Running, TaskStatus.Complete}
+            for task in self.state.tasks.values()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Instance already has a layer rebalance in progress",
             )
 
-        current_pipeline_shards = {
-            shard_assignments.node_to_runner[node_id]: shard
-            for node_id, shard in node_to_shard.items()
-            if isinstance(shard, PipelineShardMetadata)
-        }
-        target_layer_counts = {
-            shard_assignments.node_to_runner[node_id]: layer_count
-            for node_id, layer_count in node_layers.items()
-        }
-        try:
-            planned_steps = plan_pipeline_layer_shift_steps(
-                current_pipeline_shards, target_layer_counts
+        plan = self._plan_rebalance(instance_id, mode)
+
+        current_ms = projected_decode_compute_ms(
+            node_ids=plan.node_ids,
+            layer_counts=plan.current_layers,
+            stage_timings=plan.stage_timings,
+        )
+        projected_ms = projected_decode_compute_ms(
+            node_ids=plan.node_ids,
+            layer_counts=plan.node_layers,
+            stage_timings=plan.stage_timings,
+        )
+        speedup: float | None = None
+        if current_ms is not None and projected_ms is not None and current_ms > 0:
+            speedup = (current_ms - projected_ms) / current_ms
+
+        def respond(
+            message: str, command_id: CommandId | None
+        ) -> RebalanceInstanceResponse:
+            return RebalanceInstanceResponse(
+                message=message,
+                instance_id=instance_id,
+                node_layers=plan.node_layers,
+                command_id=command_id,
+                steps=len(plan.steps),
+                dry_run=dry_run,
+                current_layers=plan.current_layers,
+                current_compute_ms_per_token=current_ms,
+                projected_compute_ms_per_token=projected_ms,
+                projected_compute_speedup=speedup,
             )
-            validate_live_rebalance_steps(
-                model_card=model_card,
-                node_ids=node_ids,
-                node_to_runner=shard_assignments.node_to_runner,
-                node_memory=self.state.node_memory,
-                current_layers=current_layers,
-                steps=planned_steps,
+
+        if plan.node_layers == plan.current_layers:
+            return respond(
+                "Measured allocation already matches the current layer split.", None
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if dry_run:
+            return respond(
+                f"Rebalancing would move {len(plan.steps)} layer boundaries.", None
+            )
+
         command = ShiftInstanceLayers(
             instance_id=instance_id,
-            node_layers=node_layers,
+            node_layers=plan.node_layers,
         )
         await self._send(command)
-        return RebalanceInstanceResponse(
-            message="Live layer migration started.",
-            instance_id=instance_id,
-            node_layers=node_layers,
-            command_id=command.command_id,
-            steps=len(planned_steps),
-        )
+        return respond("Live layer migration started.", command.command_id)
 
     async def get_feature_flags(self) -> dict[str, bool]:
         return {"disaggregation": ENABLE_DISAGGREGATION}

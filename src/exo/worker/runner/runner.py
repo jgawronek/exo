@@ -313,9 +313,9 @@ class Runner:
                 )
                 logger.info("runner ready")
 
-            case TextGeneration() | ImageEdits() | ImageGeneration() | ShiftLayers() if isinstance(
-                self.current_status, RunnerReady
-            ):
+            case (
+                TextGeneration() | ImageEdits() | ImageGeneration() | ShiftLayers()
+            ) if isinstance(self.current_status, RunnerReady):
                 return_code = self.handle_generation_tasks(starting_task=task)
                 if return_code == ExitCode.Shutdown:
                     return
@@ -409,7 +409,9 @@ class Runner:
                 continue
             self.seen.add(item.task_id)
             match item:
-                case TextGeneration() | ImageGeneration() | ImageEdits() | ShiftLayers():
+                case (
+                    TextGeneration() | ImageGeneration() | ImageEdits() | ShiftLayers()
+                ):
                     self.acknowledge_task(item)
                     self.submit_generation(item)
                 case Shutdown():

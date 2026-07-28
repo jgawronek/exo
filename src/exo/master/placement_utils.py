@@ -328,6 +328,36 @@ def allocate_layers_by_measured_speed(
     return dict(zip(node_ids, allocations, strict=True))
 
 
+def projected_decode_compute_ms(
+    *,
+    node_ids: list[NodeId],
+    layer_counts: Mapping[NodeId, int],
+    stage_timings: Mapping[NodeId, StageTiming],
+) -> float | None:
+    """Per-token pipeline compute time for a hypothetical layer split.
+
+    Pipeline decode latency is the sum of every stage's compute time, and a
+    stage's time scales with the layers it holds at its measured per-layer
+    rate. Feeding the current split through this returns the measured
+    baseline, so a projected split can be compared against it under one
+    model rather than against a possibly stale raw measurement.
+
+    Returns ``None`` when any stage lacks a usable measurement, matching the
+    predicate ``allocate_layers_by_measured_speed`` rejects on, so a preview
+    and the migration it previews always agree on what is measurable.
+    """
+    total_ms = 0.0
+    for node_id in node_ids:
+        timing = stage_timings.get(node_id)
+        if timing is None:
+            return None
+        if timing.layers_held < 1 or timing.compute_ms_per_token <= 0.0:
+            return None
+        rate = timing.layers_held / timing.compute_ms_per_token
+        total_ms += layer_counts.get(node_id, 0) / rate
+    return total_ms
+
+
 def layer_expert_costs(
     model_card: ModelCard,
     expert_activity: Mapping[str, LayerExpertActivity],
@@ -350,10 +380,15 @@ def layer_expert_costs(
             continue
         if activity.num_experts < 1 or activity.tokens_measured < 1:
             continue
-        unique_fraction = activity.unique_experts_activated / activity.num_experts
+        # Effective experts (exp of the routing entropy) rather than the count
+        # of distinct experts touched: distinct counts keep growing with the
+        # sample, so a layer whose measurement window happened to cover fewer
+        # tokens would score artificially cheap. Perplexity converges instead,
+        # which makes layers with unequal windows comparable.
+        active_fraction = activity.effective_experts / activity.num_experts
         costs[layer_index] = min(
             1.0,
-            _MOE_DENSE_WEIGHT_SHARE + (1.0 - _MOE_DENSE_WEIGHT_SHARE) * unique_fraction,
+            _MOE_DENSE_WEIGHT_SHARE + (1.0 - _MOE_DENSE_WEIGHT_SHARE) * active_fraction,
         )
     return costs
 

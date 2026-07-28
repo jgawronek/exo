@@ -436,7 +436,7 @@ def parse_thinking_models(
                     )
                 # Swallow the delimiter and flip the thinking state.
                 is_thinking = not is_thinking
-                accumulated = accumulated[idx + len(active):]
+                accumulated = accumulated[idx + len(active) :]
             # Handle the remainder after the last delimiter. If it is a clean
             # (incomplete) prefix of the next possible delimiter, keep it
             # buffered and wait for more; otherwise emit it with the new flag.

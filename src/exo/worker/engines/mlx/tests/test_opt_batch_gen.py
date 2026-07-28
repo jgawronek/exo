@@ -102,9 +102,7 @@ def test_non_last_pipeline_rank_skips_vocabulary_processing(
         assert sampled.tolist() == [0, 0]
         return mx.array([17, 23], dtype=mx.int32)
 
-    monkeypatch.setattr(
-        opt_batch_gen, "get_active_relay_context", active_relay_context
-    )
+    monkeypatch.setattr(opt_batch_gen, "get_active_relay_context", active_relay_context)
     monkeypatch.setattr(opt_batch_gen, "relay_sampled_tokens", relay_sampled_tokens)
     opt_batch_gen.apply_batch_gen_patch()
 
@@ -135,15 +133,11 @@ def test_last_pipeline_rank_preserves_vocabulary_processing(
     ) -> mx.array:
         return sampled
 
-    monkeypatch.setattr(
-        opt_batch_gen, "get_active_relay_context", active_relay_context
-    )
+    monkeypatch.setattr(opt_batch_gen, "get_active_relay_context", active_relay_context)
     monkeypatch.setattr(opt_batch_gen, "relay_sampled_tokens", relay_sampled_tokens)
     opt_batch_gen.apply_batch_gen_patch()
 
     responses = _generation_batch(call_counts, batch_size, vocabulary_size).next()
 
-    assert all(
-        response.logprobs.shape == (vocabulary_size,) for response in responses
-    )
+    assert all(response.logprobs.shape == (vocabulary_size,) for response in responses)
     assert call_counts == _CallCounts(processor=4, sampler=4)

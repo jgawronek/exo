@@ -488,9 +488,9 @@ def test_place_instance_excludes_occupied_nodes() -> None:
         backends=[Backend.MlxMetal],
     )
     cic = place_instance_command(model_card)
-    existing = _occupied_instance(node_a, model_card.model_copy(
-        update={"model_id": ModelId("other-model")}
-    ))
+    existing = _occupied_instance(
+        node_a, model_card.model_copy(update={"model_id": ModelId("other-model")})
+    )
 
     placements = place_instance(
         cic,
@@ -527,9 +527,9 @@ def test_place_instance_fails_when_all_nodes_occupied() -> None:
         backends=[Backend.MlxMetal],
     )
     cic = place_instance_command(model_card)
-    existing = _occupied_instance(node_id, model_card.model_copy(
-        update={"model_id": ModelId("other-model")}
-    ))
+    existing = _occupied_instance(
+        node_id, model_card.model_copy(update={"model_id": ModelId("other-model")})
+    )
 
     with pytest.raises(ValueError, match="No free nodes available"):
         place_instance(

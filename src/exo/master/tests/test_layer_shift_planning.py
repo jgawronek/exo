@@ -98,9 +98,7 @@ def _restore_master(
         session=session,
         initial_state=State(
             instances={instance_id: instance},
-            node_memory=dict(
-                zip(node_to_runner, effective_node_memory, strict=True)
-            ),
+            node_memory=dict(zip(node_to_runner, effective_node_memory, strict=True)),
             tasks={
                 replicated_task.task_id: replicated_task
                 for replicated_task in (task, *additional_tasks)
@@ -361,9 +359,12 @@ def test_master_restores_active_plan_and_task_mapping() -> None:
 
     master = _restore_master(current_shards=current, task=task)
 
-    assert list(
-        master._layer_shift_plans[task.instance_id]  # pyright: ignore[reportPrivateUsage]
-    ) == steps
+    assert (
+        list(
+            master._layer_shift_plans[task.instance_id]  # pyright: ignore[reportPrivateUsage]
+        )
+        == steps
+    )
     assert (
         master._shift_task_instance[task.task_id]  # pyright: ignore[reportPrivateUsage]
         == task.instance_id

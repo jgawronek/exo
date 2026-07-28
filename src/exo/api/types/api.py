@@ -316,10 +316,22 @@ class RebalanceInstanceResponse(BaseModel):
     instance_id: InstanceId
     node_layers: dict[NodeId, int]
     # ShiftInstanceLayers command id when a live migration was triggered;
-    # None when the measured allocation already matches the current one.
+    # None when the measured allocation already matches the current one, or
+    # when this was only a preview.
     command_id: CommandId | None = None
     # Number of single-layer boundary shifts the migration will perform.
     steps: int = 0
+    # True when the split was computed but nothing was migrated.
+    dry_run: bool = False
+    current_layers: dict[NodeId, int] = {}
+    # Per-token pipeline compute time for the current and projected splits,
+    # None when stage timings are not yet usable.
+    current_compute_ms_per_token: float | None = None
+    projected_compute_ms_per_token: float | None = None
+    # Fraction of per-token *compute* time the projected split would save; may
+    # be <= 0. Communication time is unchanged by a re-split, so the
+    # end-to-end token-rate gain is strictly smaller than this.
+    projected_compute_speedup: float | None = None
 
 
 class AwaitInstanceReadyMessage(BaseModel):

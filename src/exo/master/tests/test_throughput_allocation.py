@@ -11,6 +11,7 @@ from exo.master.placement_utils import (
     node_memory_with_pending_shutdowns,
     pipeline_safe_max_layers,
     plan_pipeline_layer_shift_steps,
+    projected_decode_compute_ms,
     validate_live_rebalance_steps,
 )
 from exo.master.tests.conftest import (
@@ -1270,3 +1271,89 @@ def test_layer_expert_costs_defaults_unmeasured_layers_to_full_cost() -> None:
     assert len(costs) == 10
     assert costs[0] == 1.0
     assert costs[2] < 0.2
+
+
+def test_projected_compute_reproduces_measured_baseline() -> None:
+    node_a, node_b = NodeId(), NodeId()
+    current = {node_a: 6, node_b: 4}
+    timings = {
+        node_a: _stage_timing(layers_held=6, compute_ms_per_token=12.0),
+        node_b: _stage_timing(layers_held=4, compute_ms_per_token=16.0),
+    }
+    total = projected_decode_compute_ms(
+        node_ids=[node_a, node_b], layer_counts=current, stage_timings=timings
+    )
+    assert total is not None
+    # Feeding the current split back through the model must return the
+    # measured sum, so a projection is compared against a like-for-like
+    # baseline rather than a raw reading.
+    assert abs(total - 28.0) < 1e-9
+
+
+def test_projected_compute_drops_when_layers_move_to_faster_node() -> None:
+    fast, slow = NodeId(), NodeId()
+    timings = {
+        fast: _stage_timing(layers_held=5, compute_ms_per_token=5.0),
+        slow: _stage_timing(layers_held=5, compute_ms_per_token=20.0),
+    }
+    baseline = projected_decode_compute_ms(
+        node_ids=[fast, slow],
+        layer_counts={fast: 5, slow: 5},
+        stage_timings=timings,
+    )
+    shifted = projected_decode_compute_ms(
+        node_ids=[fast, slow],
+        layer_counts={fast: 7, slow: 3},
+        stage_timings=timings,
+    )
+    assert baseline is not None and abs(baseline - 25.0) < 1e-9
+    # fast: 7 layers at 1ms each, slow: 3 layers at 4ms each.
+    assert shifted is not None and abs(shifted - 19.0) < 1e-9
+
+
+def test_projected_compute_is_none_for_unusable_timings() -> None:
+    node_a, node_b = NodeId(), NodeId()
+    usable = _stage_timing(layers_held=5, compute_ms_per_token=5.0)
+    counts = {node_a: 5, node_b: 5}
+    assert (
+        projected_decode_compute_ms(
+            node_ids=[node_a, node_b],
+            layer_counts=counts,
+            stage_timings={node_a: usable},
+        )
+        is None
+    )
+    assert (
+        projected_decode_compute_ms(
+            node_ids=[node_a, node_b],
+            layer_counts=counts,
+            stage_timings={
+                node_a: usable,
+                node_b: _stage_timing(layers_held=0, compute_ms_per_token=5.0),
+            },
+        )
+        is None
+    )
+
+
+def test_layer_costs_ignore_measurement_window_length() -> None:
+    """Two layers routing identically must cost the same even when one was
+    sampled over fewer tokens — the confound that made short-window layers
+    look artificially cheap."""
+    card = _pipeline_model_card(storage_bytes=1000)
+    wide = LayerExpertActivity(
+        num_experts=10,
+        tokens_measured=32,
+        unique_experts_activated=8,
+        effective_experts=6.0,
+        top_activations={},
+    )
+    narrow = LayerExpertActivity(
+        num_experts=10,
+        tokens_measured=18,
+        unique_experts_activated=5,
+        effective_experts=6.0,
+        top_activations={},
+    )
+    costs = layer_expert_costs(card, {"0": wide, "1": narrow})
+    assert abs(costs[0] - costs[1]) < 1e-9

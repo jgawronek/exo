@@ -65,9 +65,7 @@ def test_stage_timing_recorded_per_instance_and_node() -> None:
         ),
         state,
     )
-    assert new_state.instance_stage_timings == {
-        instance.instance_id: {node_id: timing}
-    }
+    assert new_state.instance_stage_timings == {instance.instance_id: {node_id: timing}}
 
 
 def test_stage_timing_replaces_previous_measurement_for_node() -> None:
