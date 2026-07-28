@@ -49,6 +49,7 @@ from exo.shared.types.multiaddr import Multiaddr
 from exo.shared.types.state import State
 from exo.shared.types.tasks import (
     CancelTask,
+    ConnectToGroup,
     CreateRunner,
     DownloadModel,
     ImageEdits,
@@ -80,6 +81,14 @@ from exo.worker.runner.supervisor import RunnerSupervisor
 # after a generation was cancelled mid-prefill — and previously blocked the
 # worker's whole plan loop forever.
 RUNNER_TASK_ACK_TIMEOUT_SECONDS = 330
+# Ring formation normally completes in well under a second, so it must not
+# inherit the prefill-sized budget above: a connect that cannot complete —
+# a peer bound a different port after a stale socket held the instance's
+# ring port, a rank died mid-handshake — would otherwise hang the instance
+# for five and a half minutes before anything retried it. Failing fast lets
+# the planner recycle the runner onto a clean socket while the user is still
+# watching the progress bar.
+RUNNER_CONNECT_TIMEOUT_SECONDS = 90
 RUNNER_CANCEL_TIMEOUT_SECONDS = 10
 # How often each worker restates its runners' statuses. Ring formation is
 # sequenced on cluster-wide runner status — the last rank only dials once
@@ -508,15 +517,19 @@ class Worker:
         runner = self.runners.get(runner_id)
         if runner is None:
             return
+        timeout_seconds = (
+            RUNNER_CONNECT_TIMEOUT_SECONDS
+            if isinstance(task, ConnectToGroup)
+            else RUNNER_TASK_ACK_TIMEOUT_SECONDS
+        )
         try:
-            with fail_after(RUNNER_TASK_ACK_TIMEOUT_SECONDS):
+            with fail_after(timeout_seconds):
                 await runner.start_task(task)
         except TimeoutError:
             await self._fail_unresponsive_runner(
                 runner_id,
                 f"Runner {runner_id} did not acknowledge task {task.task_id} "
-                f"within {RUNNER_TASK_ACK_TIMEOUT_SECONDS}s; treating it as "
-                "wedged",
+                f"within {timeout_seconds}s; treating it as wedged",
             )
 
     async def _fail_unresponsive_runner(self, runner_id: RunnerId, reason: str):
