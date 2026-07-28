@@ -1017,16 +1017,23 @@ class Master:
         for task_id, task in self.state.tasks.items():
             if task_id in self._task_deletion_requested:
                 continue
+            instance_gone = task.instance_id not in self.state.instances
+            if instance_gone:
+                # Nothing can ever advance a task whose instance is gone —
+                # including one still marked Running, which would otherwise
+                # linger in state forever.
+                self._task_deletion_requested.add(task_id)
+                await self.event_sender.send(TaskDeleted(task_id=task_id))
+                continue
             if task.task_status not in terminal_statuses:
                 self._task_terminal_since.pop(task_id, None)
                 continue
             terminal_since = self._task_terminal_since.setdefault(task_id, now)
-            instance_gone = task.instance_id not in self.state.instances
             is_generation = isinstance(
                 task, (TextGenerationTask, ImageGenerationTask, ImageEditsTask)
             )
             expired = now - terminal_since > TERMINAL_GENERATION_TASK_RETENTION
-            if instance_gone or (is_generation and expired):
+            if is_generation and expired:
                 self._task_deletion_requested.add(task_id)
                 await self.event_sender.send(TaskDeleted(task_id=task_id))
         for task_id in list(self._task_terminal_since):

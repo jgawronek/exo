@@ -532,8 +532,15 @@ class Worker:
         try:
             with move_on_after(RUNNER_REAP_TIMEOUT_SECONDS):
                 _ = await runner.runner_process.wait()
+        except Exception as exception:
+            # Never let reaping a dead runner escape into the worker's task
+            # group: that would take the whole worker down and strand the
+            # node, which is far worse than an unreaped bookkeeping entry.
+            logger.opt(exception=exception).warning(
+                f"Failed while awaiting runner {runner_id} termination"
+            )
         finally:
-            del self.terminating_runners[runner_id]
+            _ = self.terminating_runners.pop(runner_id, None)
 
     async def _create_supervisor(self, task: CreateRunner) -> RunnerSupervisor:
         """Creates and stores a new AssignedRunner with initial downloading status."""
