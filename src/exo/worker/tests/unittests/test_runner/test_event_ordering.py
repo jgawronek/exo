@@ -368,3 +368,46 @@ def test_events_processed_in_correct_order(patch_out_mlx: pytest.MonkeyPatch):
             RunnerStatusUpdated(runner_id=RUNNER_1_ID, runner_status=RunnerShutdown()),
         ],
     )
+
+
+def test_duplicate_connect_to_group_is_acknowledged_not_fatal(
+    patch_out_mlx: pytest.MonkeyPatch,
+):
+    """
+    A second ConnectToGroup for a ring this runner already joined must be
+    acknowledged and completed, not raised on.
+
+    Every rank plans its own ConnectToGroup and each retry mints a fresh task
+    id, so duplicates are reachable. Without acknowledgement the submitting
+    worker blocks out its whole connect budget and then kills a healthy runner
+    as "wedged"; raising instead tears the runner process down outright.
+    """
+    duplicate_task_id = TaskId("initialisation-duplicate")
+    events = _run(
+        [
+            INIT_TASK,
+            ConnectToGroup(task_id=duplicate_task_id, instance_id=INSTANCE_1_ID),
+            LOAD_TASK,
+            WARMUP_TASK,
+            SHUTDOWN_TASK,
+        ]
+    )
+
+    assert any(
+        isinstance(event, TaskAcknowledged) and event.task_id == duplicate_task_id
+        for event in events
+    ), "duplicate ConnectToGroup was never acknowledged"
+
+    assert any(
+        isinstance(event, TaskStatusUpdated)
+        and event.task_id == duplicate_task_id
+        and event.task_status == TaskStatus.Complete
+        for event in events
+    ), "duplicate ConnectToGroup never reached a terminal status"
+
+    # The runner survived the duplicate and still completed its ladder.
+    assert any(
+        isinstance(event, RunnerStatusUpdated)
+        and isinstance(event.runner_status, RunnerReady)
+        for event in events
+    ), "runner never became ready after a duplicate ConnectToGroup"

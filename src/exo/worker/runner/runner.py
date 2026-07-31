@@ -265,6 +265,20 @@ class Runner:
                 self.update_status(RunnerConnected())
                 logger.info("runner connected")
 
+            # Every rank plans its own ConnectToGroup and each retry mints a
+            # fresh task id, so a duplicate can arrive for a ring this runner
+            # has already joined. Acknowledging it is what keeps the submitting
+            # worker from blocking out its whole connect budget and then
+            # killing a healthy runner as "wedged".
+            case ConnectToGroup() if isinstance(
+                self.current_status, (RunnerConnecting, RunnerConnected)
+            ):
+                logger.warning(
+                    f"Ignoring duplicate ConnectToGroup in {self.current_status=}"
+                )
+                self.acknowledge_task(task)
+                self.send_task_status(task.task_id, TaskStatus.Complete)
+
             # we load the model if it's connected with a group, or idle without a group. we should never tell a model to connect if it doesn't need to
             case LoadModel() if isinstance(self.generator, Builder) and (
                 isinstance(self.current_status, (RunnerConnected, RunnerIdle))

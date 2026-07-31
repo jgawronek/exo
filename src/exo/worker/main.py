@@ -539,10 +539,20 @@ class Worker:
         for the instance, and the supervisor shutdown escalates through
         SIGTERM to SIGKILL, so a runner stuck in an abandoned collective
         cannot hold the node (or its memory) hostage.
+
+        The runner is tracked as terminating for exactly the same reason the
+        graceful Shutdown path does it: its process still holds the instance's
+        fixed ring port until it exits. Registering it before anything is
+        awaited means no plan tick can observe the instance as free and build
+        a replacement onto the still-held port — which does not even fail
+        loudly, because the ring listener sets SO_REUSEPORT, so the successor
+        binds successfully alongside the zombie and the kernel splits inbound
+        connections between them until the predecessor is killed.
         """
         runner = self.runners.pop(runner_id, None)
         if runner is None:
             return
+        self.terminating_runners[runner_id] = runner
         logger.error(reason)
         await self.event_sender.send(
             RunnerStatusUpdated(
@@ -550,7 +560,14 @@ class Worker:
                 runner_status=RunnerFailed(error_message=reason, diagnostics=[]),
             )
         )
+        # The runner never reports on work it was killed mid-flight, so its
+        # tasks would otherwise sit non-terminal in cluster state forever.
+        for task_id in list(runner.in_progress):
+            await self.event_sender.send(
+                TaskStatusUpdated(task_id=task_id, task_status=TaskStatus.Failed)
+            )
         runner.shutdown()
+        self._tg.start_soon(self._reap_runner, runner_id, runner)
 
     async def _republish_runner_statuses(self) -> None:
         """Periodically restate local runner statuses so state self-heals.
