@@ -21,6 +21,7 @@ from exo.api.types import (
     TopLogprobItem,
     Usage,
 )
+from exo.shared.constants import EXO_PREFILL_STEP_SIZE
 from exo.shared.types.common import ModelId
 from exo.shared.types.memory import Memory
 from exo.shared.types.text_generation import (
@@ -349,7 +350,7 @@ def prefill(
 
     is_pipeline = _has_pipeline_communication_layer(model)
 
-    prefill_step_size = 4096
+    prefill_step_size = EXO_PREFILL_STEP_SIZE
 
     try:
         if is_pipeline and num_tokens >= PIPELINE_PREFILL_MIN_TOKENS:

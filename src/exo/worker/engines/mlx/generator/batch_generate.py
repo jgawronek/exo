@@ -23,6 +23,7 @@ from exo.api.types import (
     TopLogprobItem,
     Usage,
 )
+from exo.shared.constants import EXO_PREFILL_STEP_SIZE
 from exo.shared.types.memory import Memory
 from exo.shared.types.text_generation import TextGenerationTaskParams
 from exo.shared.types.worker.runner_response import GenerationResponse
@@ -119,7 +120,7 @@ class ExoBatchGenerator:
         self._mlx_gen = MlxBatchGenerator(
             model=self.model,
             stop_tokens=[[t] for t in eos_ids_from_tokenizer(self.tokenizer)],
-            prefill_step_size=4096,
+            prefill_step_size=EXO_PREFILL_STEP_SIZE,
         )
         self._step_count = 0
         self._supports_token_relay = self.group is not None and any(

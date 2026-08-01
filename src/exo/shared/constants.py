@@ -171,4 +171,18 @@ EXO_MAX_CONCURRENT_REQUESTS = int(
     )
 )
 
+# Nominal prompt tokens per prefill forward pass, before the pipeline wavefront
+# divides it by the stage count. Large chunks prefill fastest, but one chunk is
+# one GPU command buffer: past a certain size Metal's watchdog kills it with
+# kIOGPUCommandBufferCallbackErrorTimeout, taking the runner and the instance
+# with it. Exposed so the ceiling can be found and lowered per deployment
+# rather than rediscovered as a crash on a long prompt.
+EXO_PREFILL_STEP_SIZE = int(
+    get_compatible_environment_value(
+        os.environ,
+        "EXO_PREFILL_STEP_SIZE",
+        "4096",
+    )
+)
+
 EXO_MAX_INSTANCE_RETRIES = 5
