@@ -29,6 +29,7 @@ from exo.shared.types.worker.runner_response import (
 )
 from exo.shared.types.worker.shards import PipelineShardMetadata
 from exo.utils.channels import MpReceiver, MpSender
+from exo.utils.step_profiler import StepProfiler
 from exo.worker.disaggregated.server import PrefillRequest
 from exo.worker.engines.base import Engine
 from exo.worker.engines.mlx.auto_parallel import decode_timings, shift_pipeline_layers
@@ -368,6 +369,7 @@ class BatchGenerator(Engine):
     _shift_queue: deque[ShiftLayers] = field(default_factory=deque, init=False)
     _pending_shift: ShiftLayers | None = field(default=None, init=False)
     _gen: ExoBatchGenerator = field(init=False)
+    _profiler: StepProfiler = field(init=False)
     _steps_until_task_agreement: int = field(default=0, init=False)
     _active_tasks: dict[
         int,
@@ -379,6 +381,7 @@ class BatchGenerator(Engine):
     ] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
+        self._profiler = StepProfiler(f"engine-rank{self.device_rank}")
         self._gen = ExoBatchGenerator(
             model=self.model,
             tokenizer=self.tokenizer,
@@ -486,7 +489,8 @@ class BatchGenerator(Engine):
             # tasks start without waiting out the countdown.
             self._steps_until_task_agreement -= 1
             if self._steps_until_task_agreement <= 0 or not self._gen.has_work:
-                self.agree_on_tasks()
+                with self._profiler.bucket("agree_on_tasks"):
+                    self.agree_on_tasks()
                 self._steps_until_task_agreement = TASK_AGREEMENT_INTERVAL_STEPS
 
         if self._pending_shift is None and self._shift_queue:
@@ -543,35 +547,42 @@ class BatchGenerator(Engine):
         if not self._gen.has_work:
             return self._apply_cancellations()
 
-        results = self._gen.step()
+        with self._profiler.bucket("mlx_step"):
+            results = self._gen.step()
 
         output: list[
             tuple[TaskId, GenerationChunk | CancelledResponse | FinishedResponse]
         ] = []
-        for uid, response in results:
-            if uid not in self._active_tasks:
-                # should we error here?
-                logger.warning(f"{uid=} not found in active tasks")
-                continue
+        with self._profiler.bucket("parse_detokenize"):
+            for uid, response in results:
+                if uid not in self._active_tasks:
+                    # should we error here?
+                    logger.warning(f"{uid=} not found in active tasks")
+                    continue
 
-            task, queue, output_generator = self._active_tasks[uid]
-            if self.device_rank == 0:
-                queue.push(response)
-                # If a generator fails to parse for some reason and returns
-                # early, we should not crash
-                while (parsed := next(output_generator, None)) is not None:
-                    output.append((task.task_id, parsed))
+                task, queue, output_generator = self._active_tasks[uid]
+                if self.device_rank == 0:
+                    queue.push(response)
+                    # If a generator fails to parse for some reason and returns
+                    # early, we should not crash
+                    while (parsed := next(output_generator, None)) is not None:
+                        output.append((task.task_id, parsed))
 
-            # check if original response was terminal and append a Finished()
-            if response.finish_reason is not None:
-                output.append((task.task_id, FinishedResponse()))
-                del self._active_tasks[uid]
+                # check if original response was terminal and append a Finished()
+                if response.finish_reason is not None:
+                    output.append((task.task_id, FinishedResponse()))
+                    del self._active_tasks[uid]
+
+        with self._profiler.bucket("apply_cancellations"):
+            cancellations = list(self._apply_cancellations())
+
+        self._profiler.end_step(len(output))
 
         return filter(
             lambda chunk: (
                 not isinstance(chunk[1], GenerationChunk) or self.device_rank == 0
             ),
-            itertools.chain(output, self._apply_cancellations()),
+            itertools.chain(output, cancellations),
         )
 
     def _apply_cancellations(

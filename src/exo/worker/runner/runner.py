@@ -56,6 +56,7 @@ from exo.shared.types.worker.runners import (
 )
 from exo.utils.channels import MpReceiver, MpSender
 from exo.utils.ports import random_ephemeral_port
+from exo.utils.step_profiler import StepProfiler
 from exo.worker.disaggregated.server import (
     PrefillRequest,
     PrefillServer,
@@ -140,6 +141,7 @@ class Runner:
         self._work_queue: queue.Queue[WorkItem] = queue.Queue()
         self._task_reader_thread: threading.Thread | None = None
         self._steps_since_timing_publish = 0
+        self._decode_profiler = StepProfiler(f"rank{self.device_rank}")
 
         logger.info("runner created")
         self.update_status(RunnerIdle())
@@ -381,22 +383,27 @@ class Runner:
         self.submit_generation(starting_task)
 
         while self.active_tasks:
-            results = self.generator.step()
+            profiler = self._decode_profiler
+            with profiler.bucket("generator_step"):
+                results = self.generator.step()
 
             finished: list[TaskId] = []
-            for task_id, result in results:
-                match result:
-                    case CancelledResponse():
-                        finished.append(task_id)
-                    case FinishedResponse():
-                        self._finalize_task(task_id)
-                        finished.append(task_id)
-                    case other:
-                        active_task = self.active_tasks[task_id]
-                        assert not isinstance(active_task, ShiftLayers), (
-                            "shard updates produce no generation chunks"
-                        )
-                        self.send_chunk(other, active_task.command_id)
+            chunks_emitted = 0
+            with profiler.bucket("emit_chunks"):
+                for task_id, result in results:
+                    match result:
+                        case CancelledResponse():
+                            finished.append(task_id)
+                        case FinishedResponse():
+                            self._finalize_task(task_id)
+                            finished.append(task_id)
+                        case other:
+                            active_task = self.active_tasks[task_id]
+                            assert not isinstance(active_task, ShiftLayers), (
+                                "shard updates produce no generation chunks"
+                            )
+                            self.send_chunk(other, active_task.command_id)
+                            chunks_emitted += 1
 
             for task_id in finished:
                 self.active_tasks.pop(task_id, None)
@@ -407,7 +414,10 @@ class Runner:
                 or self._steps_since_timing_publish
                 >= DECODE_TIMING_PUBLISH_INTERVAL_STEPS
             ):
-                self._publish_stage_timing()
+                with profiler.bucket("publish_stage_timing"):
+                    self._publish_stage_timing()
+
+            profiler.end_step(chunks_emitted)
 
             try:
                 item = self._work_queue.get_nowait()
