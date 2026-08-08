@@ -15,7 +15,8 @@
   const fallbackApiUrl = browser
     ? window.location.origin.replace("localhost", "127.0.0.1")
     : "http://127.0.0.1:52415";
-  const apiPort = browser && window.location.port ? window.location.port : "52415";
+  const apiPort =
+    browser && window.location.port ? window.location.port : "52415";
 
   const instancesData = $derived(instances());
 
@@ -459,8 +460,77 @@
   const selectClass =
     "bg-black/30 border border-xeo-light-gray/20 rounded px-2 py-1.5 text-white font-mono text-xs focus:border-xeo-green/50 focus:outline-none appearance-none cursor-pointer";
 
+  // --- Hugging Face token -------------------------------------------------
+  // The token is stored per node (never in cluster state, which is served
+  // unauthenticated at /state), so this only configures the node serving this
+  // page. The API never returns the token itself, only a masked hint.
+  interface HfTokenStatus {
+    configured: boolean;
+    source: "env" | "file" | "none";
+    hint: string | null;
+    username: string | null;
+    warning?: string | null;
+  }
+
+  let hfStatus = $state<HfTokenStatus | null>(null);
+  let hfInput = $state("");
+  let hfBusy = $state(false);
+  let hfError = $state<string | null>(null);
+  let hfNotice = $state<string | null>(null);
+
+  async function loadHfToken() {
+    try {
+      const resp = await fetch("/v1/hf-token");
+      if (resp.ok) hfStatus = (await resp.json()) as HfTokenStatus;
+    } catch {
+      /* leave status null; the section renders as "not configured" */
+    }
+  }
+
+  async function saveHfToken() {
+    if (!hfInput.trim() || hfBusy) return;
+    hfBusy = true;
+    hfError = null;
+    hfNotice = null;
+    try {
+      const resp = await fetch("/v1/hf-token", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: hfInput.trim() }),
+      });
+      const data = (await resp.json()) as HfTokenStatus & { detail?: string };
+      if (!resp.ok) {
+        hfError = data.detail ?? "Could not save token";
+      } else {
+        hfStatus = data;
+        hfInput = "";
+        hfNotice = data.warning ?? null;
+      }
+    } catch {
+      hfError = "Could not reach the server";
+    } finally {
+      hfBusy = false;
+    }
+  }
+
+  async function clearHfToken() {
+    if (hfBusy) return;
+    hfBusy = true;
+    hfError = null;
+    hfNotice = null;
+    try {
+      const resp = await fetch("/v1/hf-token", { method: "DELETE" });
+      if (resp.ok) hfStatus = (await resp.json()) as HfTokenStatus;
+    } catch {
+      hfError = "Could not reach the server";
+    } finally {
+      hfBusy = false;
+    }
+  }
+
   onMount(async () => {
     refreshState();
+    void loadHfToken();
     try {
       const resp = await fetch("/v1/models");
       const data = (await resp.json()) as {
@@ -604,6 +674,91 @@
           >
           <span class="text-white/80">{apiUrl}/ollama</span>
         </div>
+      </div>
+    </div>
+
+    <!-- Hugging Face Token -->
+    <div class="mb-8">
+      <span
+        class="text-xeo-light-gray/70 text-xs uppercase tracking-wider block mb-2"
+        >Hugging Face Access Token</span
+      >
+      <div
+        class="bg-black/20 border border-xeo-light-gray/10 rounded px-3 py-3"
+      >
+        <p class="text-xeo-light-gray/50 text-xs mb-3">
+          Needed for gated and private repos, and raises the Hub rate limit so
+          large downloads are not throttled. Applies to this node only — set it
+          on each node that downloads models. Create one at
+          <a
+            href="https://huggingface.co/settings/tokens"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-xeo-green/80 hover:text-xeo-green underline"
+            >huggingface.co/settings/tokens</a
+          >.
+        </p>
+
+        {#if hfStatus?.configured}
+          <div class="flex items-center gap-2 mb-3 flex-wrap">
+            <span class="w-1.5 h-1.5 rounded-full bg-xeo-green"></span>
+            <span class="text-white/80 text-xs font-mono"
+              >{hfStatus.hint ?? "configured"}</span
+            >
+            {#if hfStatus.username}
+              <span class="text-xeo-light-gray/50 text-xs"
+                >as {hfStatus.username}</span
+              >
+            {/if}
+            <span
+              class="text-xeo-light-gray/40 text-[10px] uppercase border border-xeo-light-gray/20 rounded px-1.5 py-0.5"
+              >{hfStatus.source === "env" ? "from HF_TOKEN env" : "saved"}</span
+            >
+          </div>
+        {:else}
+          <div class="flex items-center gap-2 mb-3">
+            <span class="w-1.5 h-1.5 rounded-full bg-xeo-light-gray/30"></span>
+            <span class="text-xeo-light-gray/50 text-xs">Not configured</span>
+          </div>
+        {/if}
+
+        <div class="flex flex-col sm:flex-row gap-2">
+          <input
+            type="password"
+            bind:value={hfInput}
+            disabled={hfBusy}
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="hf_..."
+            onkeydown={(e) => {
+              if (e.key === "Enter") void saveHfToken();
+            }}
+            class="flex-1 bg-black/30 border border-xeo-light-gray/20 rounded px-2 py-1.5 text-white font-mono text-xs focus:border-xeo-green/50 focus:outline-none disabled:opacity-50"
+          />
+          <button
+            onclick={() => void saveHfToken()}
+            disabled={hfBusy || !hfInput.trim()}
+            class="rounded px-3 py-1.5 text-xs font-medium border border-xeo-green/40 text-xeo-green hover:bg-xeo-green/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {hfBusy ? "Checking…" : "Save"}
+          </button>
+          {#if hfStatus?.configured && hfStatus.source === "file"}
+            <button
+              onclick={() => void clearHfToken()}
+              disabled={hfBusy}
+              class="rounded px-3 py-1.5 text-xs font-medium border border-xeo-light-gray/20 text-xeo-light-gray/70 hover:bg-white/5 transition-colors disabled:opacity-40 cursor-pointer"
+            >
+              Clear
+            </button>
+          {/if}
+        </div>
+
+        {#if hfError}
+          <p class="text-red-400/80 text-xs mt-2">{hfError}</p>
+        {/if}
+        {#if hfNotice}
+          <p class="text-yellow-400/80 text-xs mt-2">{hfNotice}</p>
+        {/if}
       </div>
     </div>
 

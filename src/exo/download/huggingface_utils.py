@@ -1,13 +1,17 @@
+import asyncio
 import os
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Callable, Generator, Iterable
+from typing import Callable, Generator, Iterable, Literal
 
 import aiofiles
 import aiofiles.os as aios
 from loguru import logger
 
 from exo.shared.types.worker.shards import ShardMetadata
+
+# Where the active Hugging Face token comes from. "env" wins over "file".
+TokenSource = Literal["env", "file", "none"]
 
 
 def filter_repo_objects[T](
@@ -86,6 +90,64 @@ async def get_auth_headers() -> dict[str, str]:
     if token:
         return {"Authorization": f"Bearer {token}"}
     return {}
+
+
+def get_hf_token_path() -> Path:
+    """Location of the file-based token, shared with the `hf` CLI."""
+    return get_hf_home() / "token"
+
+
+async def get_hf_token_source() -> TokenSource:
+    """Where the active token comes from, without revealing it.
+
+    ``HF_TOKEN`` shadows the file in :func:`get_hf_token`, so a token written
+    from the dashboard has no effect while the env var is set. Callers surface
+    this so the UI can say so rather than silently ignoring the saved token.
+    """
+    if os.environ.get("HF_TOKEN"):
+        return "env"
+    if await aios.path.exists(get_hf_token_path()):
+        return "file"
+    return "none"
+
+
+def mask_hf_token(token: str) -> str:
+    """Render a token as a non-recoverable hint, e.g. ``hf_ab…7f9c``."""
+    if len(token) <= 8:
+        return "…"
+    return f"{token[:5]}…{token[-4:]}"
+
+
+def _write_token_file(token_path: Path, token: str) -> None:
+    """Write the token 0600, never leaving it briefly world-readable.
+
+    O_CREAT's mode only applies when the file is created, so an existing file
+    with laxer permissions is tightened explicitly afterwards.
+    """
+    fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        _ = os.write(fd, token.encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(token_path, 0o600)
+
+
+async def set_hf_token(token: str) -> None:
+    """Persist a token to the shared HF location with owner-only permissions."""
+    token_path = get_hf_token_path()
+    await aios.makedirs(token_path.parent, exist_ok=True)
+    await asyncio.to_thread(_write_token_file, token_path, token.strip())
+    logger.info(f"Stored Hugging Face token at {token_path}")
+
+
+async def delete_hf_token() -> bool:
+    """Remove the file-based token. Returns whether a file was removed."""
+    token_path = get_hf_token_path()
+    if not await aios.path.exists(token_path):
+        return False
+    await aios.remove(token_path)
+    logger.info(f"Removed Hugging Face token at {token_path}")
+    return True
 
 
 def extract_layer_num(tensor_name: str) -> int | None:

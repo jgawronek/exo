@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
+from exo.download.huggingface_utils import TokenSource
 from exo.shared.models.model_cards import ModelCard, ModelId
 from exo.shared.types.common import CommandId, NodeId
 from exo.shared.types.memory import Memory
@@ -501,6 +502,31 @@ class SetModelsStorageParams(FrozenModel):
 class SetModelsStorageResponse(FrozenModel):
     command_id: CommandId
     path: str | None
+
+
+class HuggingFaceTokenResponse(FrozenModel):
+    """Status of this node's Hugging Face token. Never carries the token itself."""
+
+    configured: bool
+    # "env" means HF_TOKEN is set and shadows anything saved from the dashboard.
+    source: TokenSource
+    # Non-recoverable hint such as "hf_ab…7f9c", for confirming which token is in use.
+    hint: str | None = None
+    # Hub username the token authenticates as, when it could be verified.
+    username: str | None = None
+
+
+class SetHuggingFaceTokenParams(FrozenModel):
+    token: str
+
+
+class SetHuggingFaceTokenResponse(FrozenModel):
+    configured: bool
+    source: TokenSource
+    hint: str | None = None
+    username: str | None = None
+    # Set when the token was saved but HF_TOKEN in the environment will win.
+    warning: str | None = None
 
 
 class StartDownloadParams(FrozenModel):

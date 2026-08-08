@@ -2,6 +2,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import os
 import random
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping
@@ -74,6 +75,7 @@ from exo.api.types import (
     FinishReason,
     GenerationStats,
     HuggingFaceSearchResult,
+    HuggingFaceTokenResponse,
     ImageData,
     ImageEditsTaskParams,
     ImageGenerationResponse,
@@ -92,6 +94,8 @@ from exo.api.types import (
     PlacementPreview,
     PlacementPreviewResponse,
     RebalanceInstanceResponse,
+    SetHuggingFaceTokenParams,
+    SetHuggingFaceTokenResponse,
     SetModelsStorageParams,
     SetModelsStorageResponse,
     StartDownloadParams,
@@ -127,6 +131,15 @@ from exo.api.types.ollama_api import (
 from exo.api.types.openai_responses import (
     ResponsesRequest,
     ResponsesResponse,
+)
+from exo.download.download_utils import create_http_session
+from exo.download.huggingface_utils import (
+    delete_hf_token,
+    get_hf_endpoint,
+    get_hf_token,
+    get_hf_token_source,
+    mask_hf_token,
+    set_hf_token,
 )
 from exo.master.image_store import ImageStore
 from exo.master.placement import place_instance as get_instance_placements
@@ -267,6 +280,35 @@ def _require_disaggregation_enabled() -> None:
                 "Set ENABLE_DISAGGREGATION=true to enable."
             ),
         )
+
+
+async def _hugging_face_username(token: str | None) -> str | None:
+    """Resolve a token to its Hub username, or None if it is not usable.
+
+    Used both to validate before saving and to show which account is in use.
+    Network failures are indistinguishable from bad tokens here, so callers
+    treat None as "could not verify" and must not cache it as a hard failure.
+    """
+    if not token:
+        return None
+    try:
+        async with (
+            create_http_session(timeout_profile="short") as session,
+            session.get(
+                f"{get_hf_endpoint()}/api/whoami-v2",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as response,
+        ):
+            if response.status != 200:
+                return None
+            body = cast(object, await response.json())
+            if not isinstance(body, dict):
+                return None
+            name: object = cast(dict[str, object], body).get("name")
+            return name if isinstance(name, str) else None
+    except Exception:
+        logger.warning("Could not reach Hugging Face to verify token")
+        return None
 
 
 class API:
@@ -427,6 +469,9 @@ class API:
         self.app.get("/models/search")(self.search_models)
         self.app.get("/models/storage")(self.get_models_storage)
         self.app.put("/models/storage")(self.set_models_storage)
+        self.app.get("/v1/hf-token")(self.get_hugging_face_token)
+        self.app.put("/v1/hf-token")(self.set_hugging_face_token)
+        self.app.delete("/v1/hf-token")(self.delete_hugging_face_token)
         self.app.post("/v1/chat/completions", response_model=None)(
             self.chat_completions
         )
@@ -2444,6 +2489,68 @@ class API:
         command = SetSharedModelsDirectory(path=path_text)
         await self._send(command)
         return SetModelsStorageResponse(command_id=command.command_id, path=path_text)
+
+    async def get_hugging_face_token(self) -> HuggingFaceTokenResponse:
+        """Report token status for THIS node only.
+
+        The token is deliberately kept out of cluster state: /state is
+        unauthenticated, and events are gossiped to peers and persisted to the
+        event log, so a token there would leak three ways. Each node therefore
+        holds its own, and the response never contains the token itself.
+        """
+        source = await get_hf_token_source()
+        token = await get_hf_token()
+        return HuggingFaceTokenResponse(
+            configured=token is not None,
+            source=source,
+            hint=mask_hf_token(token) if token else None,
+            username=await _hugging_face_username(token) if token else None,
+        )
+
+    async def set_hugging_face_token(
+        self, payload: SetHuggingFaceTokenParams
+    ) -> SetHuggingFaceTokenResponse:
+        token = payload.token.strip()
+        if not token:
+            raise HTTPException(status_code=400, detail="Token must not be empty")
+
+        username = await _hugging_face_username(token)
+        if username is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Hugging Face rejected this token. Check it was copied in full "
+                    "from https://huggingface.co/settings/tokens and has read access."
+                ),
+            )
+
+        await set_hf_token(token)
+        # An existing HF_TOKEN env var shadows the file we just wrote, so the
+        # save silently would not take effect. Say so instead.
+        env_shadowed = os.environ.get("HF_TOKEN") is not None
+        return SetHuggingFaceTokenResponse(
+            configured=True,
+            source="env" if env_shadowed else "file",
+            hint=mask_hf_token(token),
+            username=username,
+            warning=(
+                "Saved, but the HF_TOKEN environment variable is set on this node "
+                "and takes precedence. Unset it for the saved token to be used."
+                if env_shadowed
+                else None
+            ),
+        )
+
+    async def delete_hugging_face_token(self) -> HuggingFaceTokenResponse:
+        _ = await delete_hf_token()
+        source = await get_hf_token_source()
+        token = await get_hf_token()
+        return HuggingFaceTokenResponse(
+            configured=token is not None,
+            source=source,
+            hint=mask_hf_token(token) if token else None,
+            username=None,
+        )
 
     async def start_download(
         self, payload: StartDownloadParams
