@@ -479,27 +479,43 @@
   });
 
   /** Classify one socket connection by the interface that carries its IP. */
-  function classifySocketLink(nodeId: string, ip?: string): LinkKind {
+  function classifySocketLink(
+    sinkId: string,
+    sourceId: string,
+    ip?: string,
+  ): LinkKind {
     if (!ip || ip === "?") return LINK_UNKNOWN;
     const clean = ip.includes(":") && !ip.includes("[") ? ip.split(":")[0] : ip;
-    const node = data?.nodes?.[nodeId];
-    const iface = node?.network_interfaces?.find((candidate) =>
-      (candidate.addresses || []).some((addr) => addr === clean),
-    );
-    if (!iface) return LINK_UNKNOWN;
 
-    // A NIC that also exposes an RDMA device is the Thunderbolt fabric, even
-    // when this particular connection is plain IP over it.
-    if (
-      iface.name &&
-      rdmaIfaceSpeedByNode[nodeId]?.[iface.name] !== undefined
-    ) {
-      return LINK_THUNDERBOLT;
+    // The address comes from the edge's sinkMultiaddr, so it belongs to the
+    // sink; check there first, then the source, then any node, so an
+    // asymmetric report still resolves.
+    for (const nodeId of [
+      sinkId,
+      sourceId,
+      ...Object.keys(data?.nodes ?? {}),
+    ]) {
+      const iface = data?.nodes?.[nodeId]?.network_interfaces?.find((entry) =>
+        (entry.addresses || []).some((addr) => addr === clean),
+      );
+      if (!iface) continue;
+
+      // A NIC that also exposes an RDMA device is the Thunderbolt fabric,
+      // even when this particular connection is plain IP over it.
+      if (
+        iface.name &&
+        rdmaIfaceSpeedByNode[nodeId]?.[iface.name] !== undefined
+      ) {
+        return LINK_THUNDERBOLT;
+      }
+      if (iface.interfaceType === "wifi") return LINK_WIFI;
+      // macOS reports no rate, so speed banding only applies on Linux.
+      const speed = iface.linkSpeedMegabits;
+      if (typeof speed === "number" && speed > 0) return ethernetKind(speed);
+      // Owner found but unrated (macOS): stop rather than match the same
+      // address on another node and infer the wrong rate.
+      return LINK_UNKNOWN;
     }
-    if (iface.interfaceType === "wifi") return LINK_WIFI;
-    // macOS reports no rate, so speed-based banding only applies on Linux.
-    const speed = iface.linkSpeedMegabits;
-    if (typeof speed === "number" && speed > 0) return ethernetKind(speed);
     return LINK_UNKNOWN;
   }
 
@@ -868,7 +884,7 @@
         const ifaceInfo = getInterfaceLabel(edge.source, ip);
         ifaceLabel = ifaceInfo.label;
         missingIface = ifaceInfo.missing;
-        kind = classifySocketLink(edge.source, ip);
+        kind = classifySocketLink(edge.target, edge.source, ip);
       }
       // A pair is drawn once, so show the best transport available to it.
       if (!entry.kind || kind.rank > entry.kind.rank) entry.kind = kind;
