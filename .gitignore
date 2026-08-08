@@ -43,3 +43,6 @@ tmp/models
 /.claude
 /.codex
 skills-lock.json
+
+# Playwright MCP session artifacts
+.playwright-mcp/
