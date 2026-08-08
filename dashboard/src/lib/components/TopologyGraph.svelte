@@ -6,6 +6,7 @@
     isTopologyMinimized,
     debugMode,
     nodeThunderboltBridge,
+    nodeThunderbolt,
     nodeRdmaCtl,
     nodeIdentities,
     instances,
@@ -390,6 +391,118 @@
     return node?.friendly_name || nodeId.slice(0, 8);
   }
 
+  /** Visual identity for each class of physical link between two nodes. */
+  type LinkKind = {
+    id: string;
+    label: string;
+    color: string;
+    /** Higher wins when a pair is reachable over several transports. */
+    rank: number;
+  };
+
+  const LINK_RDMA: LinkKind = {
+    id: "rdma",
+    label: "RDMA",
+    color: "oklch(0.72 0.19 300)",
+    rank: 100,
+  };
+  const LINK_THUNDERBOLT: LinkKind = {
+    id: "tb",
+    label: "Thunderbolt",
+    color: "oklch(0.70 0.16 265)",
+    rank: 90,
+  };
+  const LINK_UNKNOWN: LinkKind = {
+    id: "unknown",
+    label: "Unknown",
+    color: "rgba(179,179,179,0.8)",
+    rank: 0,
+  };
+  const LINK_WIFI: LinkKind = {
+    id: "wifi",
+    label: "Wi-Fi",
+    color: "oklch(0.70 0.14 60)",
+    rank: 5,
+  };
+
+  /** Bucket a negotiated ethernet rate into a labelled colour band. */
+  function ethernetKind(megabits: number): LinkKind {
+    if (megabits >= 100000)
+      return {
+        id: `eth${megabits}`,
+        label: `${Math.round(megabits / 1000)}GbE`,
+        color: "oklch(0.78 0.17 145)",
+        rank: 80,
+      };
+    if (megabits >= 25000)
+      return {
+        id: `eth${megabits}`,
+        label: `${Math.round(megabits / 1000)}GbE`,
+        color: "oklch(0.80 0.15 195)",
+        rank: 60,
+      };
+    if (megabits >= 10000)
+      return {
+        id: "eth10g",
+        label: "10GbE",
+        color: "oklch(0.75 0.13 230)",
+        rank: 40,
+      };
+    if (megabits >= 1000)
+      return {
+        id: "eth1g",
+        label: "1GbE",
+        color: "oklch(0.65 0.10 250)",
+        rank: 20,
+      };
+    return {
+      id: "ethslow",
+      label: `${megabits}Mb`,
+      color: "rgba(150,150,150,0.8)",
+      rank: 10,
+    };
+  }
+
+  /** Interfaces that carry RDMA, keyed by node then bare interface name. */
+  const rdmaIfaceSpeedByNode = $derived.by(() => {
+    const out: Record<string, Record<string, string>> = {};
+    for (const [nodeId, info] of Object.entries(nodeThunderbolt() ?? {})) {
+      const perNode: Record<string, string> = {};
+      for (const iface of info?.interfaces ?? []) {
+        // "rdma_en5" names the same NIC the network list calls "en5".
+        const bare = (iface.rdmaInterface ?? "").replace(/^rdma_/, "");
+        if (bare) perNode[bare] = iface.linkSpeed ?? "";
+      }
+      out[nodeId] = perNode;
+    }
+    return out;
+  });
+
+  /** Classify one socket connection by the interface that carries its IP. */
+  function classifySocketLink(nodeId: string, ip?: string): LinkKind {
+    if (!ip || ip === "?") return LINK_UNKNOWN;
+    const clean = ip.includes(":") && !ip.includes("[") ? ip.split(":")[0] : ip;
+    const node = data?.nodes?.[nodeId];
+    const iface = node?.network_interfaces?.find((candidate) =>
+      (candidate.addresses || []).some((addr) => addr === clean),
+    );
+    if (!iface) return LINK_UNKNOWN;
+
+    // A NIC that also exposes an RDMA device is the Thunderbolt fabric, even
+    // when this particular connection is plain IP over it.
+    if (
+      iface.name &&
+      rdmaIfaceSpeedByNode[nodeId]?.[iface.name] !== undefined
+    ) {
+      return LINK_THUNDERBOLT;
+    }
+    if (iface.interfaceType === "wifi") return LINK_WIFI;
+    // macOS reports no rate, so speed-based banding only applies on Linux.
+    const speed = iface.linkSpeedMegabits;
+    if (typeof speed === "number" && speed > 0) return ethernetKind(speed);
+    return LINK_UNKNOWN;
+  }
+
   function getInterfaceLabel(
     nodeId: string,
     ip?: string,
@@ -711,6 +824,7 @@
       aToB: boolean;
       bToA: boolean;
       connections: ConnectionInfo[];
+      kind?: LinkKind;
     };
     type DebugEdgeLabelEntry = {
       connections: ConnectionInfo[];
@@ -743,16 +857,21 @@
       let ifaceLabel: string;
       let missingIface: boolean;
 
+      let kind: LinkKind;
       if (edge.sourceRdmaIface || edge.sinkRdmaIface) {
         ip = "RDMA";
         ifaceLabel = `${edge.sourceRdmaIface || "?"} \u2192 ${edge.sinkRdmaIface || "?"}`;
         missingIface = false;
+        kind = LINK_RDMA;
       } else {
         ip = edge.sendBackIp || "?";
         const ifaceInfo = getInterfaceLabel(edge.source, ip);
         ifaceLabel = ifaceInfo.label;
         missingIface = ifaceInfo.missing;
+        kind = classifySocketLink(edge.source, ip);
       }
+      // A pair is drawn once, so show the best transport available to it.
+      if (!entry.kind || kind.rank > entry.kind.rank) entry.kind = kind;
 
       entry.connections.push({
         from: edge.source,
@@ -811,6 +930,9 @@
           .attr("x2", posB.x)
           .attr("y2", posB.y)
           .attr("class", hasRingRoute ? "graph-link-mesh-dim" : "graph-link");
+        // Colour by physical transport so RDMA, Thunderbolt and each ethernet
+        // rate are distinguishable at a glance.
+        if (entry.kind) meshLink.style("stroke", entry.kind.color);
         // Phase-lock so full redraws don't snap dash animation back to 0
         if (!hasRingRoute) {
           meshLink.style("animation-delay", flowAnimationDelayMs());
@@ -839,6 +961,43 @@
         });
       }
     });
+
+    // Legend for the link colours, listing only transports actually present
+    // so a homogeneous cluster is not cluttered with irrelevant entries.
+    const presentKinds = new Map<string, LinkKind>();
+    pairMap.forEach((entry) => {
+      if (entry.kind && entry.kind.id !== LINK_UNKNOWN.id) {
+        presentKinds.set(entry.kind.id, entry.kind);
+      }
+    });
+    if (presentKinds.size > 1 && !isMinimized) {
+      const legend = svg.append("g").attr("class", "link-legend");
+      const entries = Array.from(presentKinds.values()).sort(
+        (x, y) => y.rank - x.rank,
+      );
+      const lineHeight = 14;
+      const baseY = height - entries.length * lineHeight - 6;
+      entries.forEach((kind, index) => {
+        const y = baseY + index * lineHeight;
+        legend
+          .append("line")
+          .attr("x1", 10)
+          .attr("y1", y)
+          .attr("x2", 26)
+          .attr("y2", y)
+          .attr("stroke", kind.color)
+          .attr("stroke-width", 2)
+          .attr("stroke-dasharray", "4 4");
+        legend
+          .append("text")
+          .attr("x", 31)
+          .attr("y", y + 3.5)
+          .attr("font-size", 10)
+          .attr("font-family", "ui-monospace, monospace")
+          .attr("fill", "rgba(255,255,255,0.55)")
+          .text(kind.label);
+      });
+    }
 
     // Placement-chosen ring route: accent directed hops + transport labels
     if (hasRingRoute) {

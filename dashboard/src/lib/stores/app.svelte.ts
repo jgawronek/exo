@@ -34,6 +34,9 @@ export interface NodeInfo {
   network_interfaces?: Array<{
     name?: string;
     addresses?: string[];
+    interfaceType?: string;
+    /** Negotiated link rate. Populated on Linux; null on macOS. */
+    linkSpeedMegabits?: number | null;
   }>;
   ip_to_interface?: Record<string, string>;
   macmon_info?: {
@@ -128,6 +131,8 @@ interface RawNetworkInterfaceInfo {
   ipAddresses?: string[];
   ips?: string[];
   interfaceType?: string;
+  /** Negotiated link rate. Populated on Linux; null on macOS. */
+  linkSpeedMegabits?: number | null;
 }
 
 interface RawNodeNetworkInfo {
@@ -435,6 +440,8 @@ interface GranularNodeState {
 function transformNetworkInterface(iface: RawNetworkInterfaceInfo): {
   name?: string;
   addresses: string[];
+  interfaceType?: string;
+  linkSpeedMegabits?: number | null;
 } {
   const addresses: string[] = [];
   if (iface.ipAddress && typeof iface.ipAddress === "string") {
@@ -463,6 +470,8 @@ function transformNetworkInterface(iface: RawNetworkInterfaceInfo): {
   return {
     name: iface.name,
     addresses: Array.from(new Set(addresses)),
+    interfaceType: iface.interfaceType,
+    linkSpeedMegabits: iface.linkSpeedMegabits ?? null,
   };
 }
 
