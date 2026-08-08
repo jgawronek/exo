@@ -3685,6 +3685,21 @@
   // Available min nodes options based on topology (like old dashboard)
   const availableMinNodes = $derived(Math.max(1, nodeCount));
 
+  // Devices that can take part in an RDMA (MlxJaccl) instance. Placement needs
+  // every node in the cycle to report rdma_ctl enabled AND to support the
+  // MlxMetal backend, so a mixed Metal/CUDA cluster can only build an RDMA
+  // instance out of its Metal subset — asking for more devices than that fails
+  // with "No cycle where every node supports a backend in ['MlxMetal']".
+  const rdmaCapableNodeIds = $derived(
+    Object.keys(data?.nodes ?? {}).filter(
+      (id) => nodeRdmaCtl()[id]?.enabled === true,
+    ),
+  );
+  const rdmaCapableNames = $derived(rdmaCapableNodeIds.map(getNodeName));
+  const rdmaExcludedCount = $derived(
+    Math.max(0, nodeCount - rdmaCapableNodeIds.length),
+  );
+
   // Compute which min node values have valid previews for the current model/sharding/instance type
   // A minNodes value N is valid if there exists a placement with nodeCount >= N
   // Note: previewsData already contains previews for the selected model (fetched via API)
@@ -3755,6 +3770,21 @@
     } else if (selectedMinNodes > maxNodes) {
       // If current selection exceeds available nodes, cap it
       selectedMinNodes = maxNodes;
+    }
+  });
+
+  // An RDMA instance can only use devices that support RDMA, so asking for
+  // more than that is guaranteed to fail placement. Clamp on selection rather
+  // than letting the user launch into
+  // "No cycle where every node supports a backend in ['MlxMetal']".
+  $effect(() => {
+    const capable = rdmaCapableNodeIds.length;
+    if (
+      selectedInstanceType === "MlxJaccl" &&
+      capable > 0 &&
+      selectedMinNodes > capable
+    ) {
+      selectedMinNodes = capable;
     }
   });
 
@@ -6580,6 +6610,28 @@
                         RDMA (Fast)
                       </button>
                     </div>
+                    {#if selectedInstanceType === "MlxJaccl"}
+                      {#if rdmaCapableNodeIds.length === 0}
+                        <div
+                          class="mt-2 text-[11px] font-mono text-amber-400/70 leading-relaxed"
+                        >
+                          No device reports RDMA support. RDMA needs Apple
+                          Silicon devices linked by Thunderbolt.
+                        </div>
+                      {:else if rdmaExcludedCount > 0}
+                        <div
+                          class="mt-2 text-[11px] font-mono text-white/40 leading-relaxed"
+                        >
+                          Runs on the {rdmaCapableNodeIds.length} device{rdmaCapableNodeIds.length ===
+                          1
+                            ? ""
+                            : "s"} that support RDMA ({rdmaCapableNames.join(
+                            ", ",
+                          )}). The other {rdmaExcludedCount} are excluded, so Minimum
+                          Devices caps at {rdmaCapableNodeIds.length}.
+                        </div>
+                      {/if}
+                    {/if}
                   </div>
 
                   <!-- Minimum Devices -->
