@@ -431,7 +431,10 @@
       return {
         id: `eth${megabits}`,
         label: `${Math.round(megabits / 1000)}GbE`,
-        color: "oklch(0.78 0.17 145)",
+        // Deliberately NOT --xeo-green (oklch(0.78 0.17 145)): that is the
+        // accent used for ring-route hops and node highlights, so a fast link
+        // painted in it reads as "selected" rather than "fast".
+        color: "oklch(0.88 0.19 118)",
         rank: 80,
       };
     if (megabits >= 25000)
