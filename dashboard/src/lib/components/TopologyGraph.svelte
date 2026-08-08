@@ -981,6 +981,13 @@
       }
     });
 
+    /** Transport for an unordered node pair, so the route layer colours hops
+     * identically to the mesh underneath. */
+    function kindForPair(x: string, y: string): LinkKind | undefined {
+      const key = x < y ? `${x}|${y}` : `${y}|${x}`;
+      return pairMap.get(key)?.kind;
+    }
+
     // Legend for the link colours, listing only transports actually present
     // so a homogeneous cluster is not cluttered with irrelevant entries.
     const presentKinds = new Map<string, LinkKind>();
@@ -1028,14 +1035,18 @@
         const to = positionById[hop.target];
         if (!from || !to) continue;
 
-        linksGroup
+        const routeLink = linksGroup
           .append("line")
           .attr("x1", from.x)
           .attr("y1", from.y)
           .attr("x2", to.x)
           .attr("y2", to.y)
-          .attr("class", "graph-link-route")
-          .style("animation-delay", flowAnimationDelayMs());
+          .attr("class", "graph-link-route");
+        // Keep the transport colour on the selected route: which hops ride
+        // RDMA vs 10GbE is exactly what matters once a cluster is chosen.
+        const hopKind = kindForPair(hop.source, hop.target);
+        if (hopKind) routeLink.style("stroke", hopKind.color);
+        routeLink.style("animation-delay", flowAnimationDelayMs());
 
         drawDirectedArrow(from, to, "arrowhead-route");
 
