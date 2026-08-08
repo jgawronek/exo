@@ -156,6 +156,13 @@ class Worker:
         self.image_cache: dict[Base64ImageHash, Base64Image] = {}
 
         self._download_backoff: KeyedBackoff[ModelId] = KeyedBackoff(base=0.5, cap=10.0)
+        # Retries after a *failed* download need a far slower schedule than the
+        # 10 s ceiling above, which exists for ordinary plan churn. A model that
+        # cannot download (no disk, no network) would otherwise be re-attempted
+        # every 10 s forever.
+        self._download_retry_backoff: KeyedBackoff[ModelId] = KeyedBackoff(
+            base=5.0, cap=300.0
+        )
         self._instance_backoff: KeyedBackoff[InstanceId] = KeyedBackoff(
             base=0.5, cap=10.0
         )
@@ -330,6 +337,7 @@ class Worker:
                 self.image_cache,
                 self._instance_backoff,
                 self._download_backoff,
+                self._download_retry_backoff,
                 self._terminating_instance_ids(),
             )
             if task is None:
@@ -366,6 +374,8 @@ class Worker:
                 case DownloadModel(shard_metadata=shard):
                     model_id = shard.model_card.model_id
                     self._download_backoff.record_attempt(model_id)
+                    # Escalates only while attempts keep failing; reset on load.
+                    self._download_retry_backoff.record_attempt(model_id)
 
                     found_path = await to_thread.run_sync(
                         resolve_existing_model, model_id, shard.model_card
@@ -501,6 +511,7 @@ class Worker:
                     if (instance := self.state.instances.get(instance_id)) is not None:
                         model_id = instance.shard_assignments.model_id
                         self._download_backoff.reset(model_id)
+                        self._download_retry_backoff.reset(model_id)
 
                     await self._start_runner_task(task)
                 case task:

@@ -1,13 +1,19 @@
 import exo.worker.plan as plan_mod
+from exo.shared.models.model_cards import ModelId
 from exo.shared.types.common import NodeId
 from exo.shared.types.memory import Memory
-from exo.shared.types.tasks import LoadModel
-from exo.shared.types.worker.downloads import DownloadCompleted, DownloadProgress
-from exo.shared.types.worker.instances import BoundInstance
+from exo.shared.types.tasks import LoadModel, Task
+from exo.shared.types.worker.downloads import (
+    DownloadCompleted,
+    DownloadFailed,
+    DownloadProgress,
+)
+from exo.shared.types.worker.instances import BoundInstance, Instance
 from exo.shared.types.worker.runners import (
     RunnerConnected,
     RunnerIdle,
 )
+from exo.shared.types.worker.shards import ShardMetadata
 from exo.utils.keyed_backoff import KeyedBackoff
 from exo.worker.tests.constants import (
     INSTANCE_1_ID,
@@ -57,6 +63,7 @@ def test_plan_requests_download_when_waiting_and_shard_not_downloaded():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert isinstance(result, plan_mod.DownloadModel)
@@ -113,6 +120,7 @@ def test_plan_loads_model_when_all_shards_downloaded_and_waiting():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert isinstance(result, LoadModel)
@@ -159,6 +167,7 @@ def test_plan_does_not_request_download_when_shard_already_downloaded():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert not isinstance(result, plan_mod.DownloadModel)
@@ -210,6 +219,7 @@ def test_plan_does_not_load_model_until_all_shards_downloaded_globally():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None
@@ -234,6 +244,89 @@ def test_plan_does_not_load_model_until_all_shards_downloaded_globally():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is not None
+
+
+def _idle_runner_setup() -> tuple[ShardMetadata, Instance, FakeRunnerSupervisor]:
+    """Single idle runner on NODE_A waiting on MODEL_A, ready to download."""
+    shard = get_pipeline_shard_metadata(MODEL_A_ID, device_rank=0)
+    instance = get_mlx_ring_instance(
+        instance_id=INSTANCE_1_ID,
+        model_id=MODEL_A_ID,
+        node_to_runner={NODE_A: RUNNER_1_ID},
+        runner_to_shard={RUNNER_1_ID: shard},
+    )
+    bound_instance = BoundInstance(
+        instance=instance, bound_runner_id=RUNNER_1_ID, bound_node_id=NODE_A
+    )
+    runner = FakeRunnerSupervisor(bound_instance=bound_instance, status=RunnerIdle())
+    return shard, instance, runner
+
+
+def _plan_with(
+    instance: Instance,
+    runner: FakeRunnerSupervisor,
+    local_status: list[DownloadProgress],
+    retry_backoff: KeyedBackoff[ModelId],
+) -> Task | None:
+    return plan_mod.plan(
+        node_id=NODE_A,
+        runners={RUNNER_1_ID: runner},  # type: ignore
+        global_download_status={NODE_A: local_status, NODE_B: []},
+        instances={INSTANCE_1_ID: instance},
+        all_runners={RUNNER_1_ID: RunnerIdle()},
+        tasks={},
+        input_chunk_buffer={},
+        image_cache={},
+        instance_backoff=KeyedBackoff(),
+        download_backoff=KeyedBackoff(),
+        download_retry_backoff=retry_backoff,
+    )
+
+
+def test_plan_retries_download_after_failure():
+    """
+    A failed download must not be terminal. A full disk that later frees up, or
+    a transient network error, previously stranded the instance in WAITING
+    forever because DownloadFailed suppressed all further DownloadModel tasks.
+    """
+    shard, instance, runner = _idle_runner_setup()
+    failed = DownloadFailed(
+        shard_metadata=shard, node_id=NODE_A, error_message="No writable model dir"
+    )
+
+    result = _plan_with(instance, runner, [failed], KeyedBackoff())
+
+    assert isinstance(result, plan_mod.DownloadModel)
+    assert result.shard_metadata == shard
+
+
+def test_plan_does_not_retry_failed_download_before_backoff_elapses():
+    """
+    Retries are rate-limited by their own slower backoff, so a download that
+    keeps failing cannot be re-attempted on every planning pass.
+    """
+    shard, instance, runner = _idle_runner_setup()
+    failed = DownloadFailed(
+        shard_metadata=shard, node_id=NODE_A, error_message="No writable model dir"
+    )
+
+    retry_backoff: KeyedBackoff[ModelId] = KeyedBackoff(base=5.0, cap=300.0)
+    retry_backoff.record_attempt(MODEL_A_ID)
+
+    result = _plan_with(instance, runner, [failed], retry_backoff)
+
+    assert not isinstance(result, plan_mod.DownloadModel)
+
+
+def test_plan_still_never_redownloads_completed_model():
+    """The retry path must not weaken the completed-model guard."""
+    shard, instance, runner = _idle_runner_setup()
+    completed = DownloadCompleted(shard_metadata=shard, node_id=NODE_A, total=Memory())
+
+    result = _plan_with(instance, runner, [completed], KeyedBackoff())
+
+    assert not isinstance(result, plan_mod.DownloadModel)

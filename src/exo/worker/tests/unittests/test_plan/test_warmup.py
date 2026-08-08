@@ -66,6 +66,7 @@ def test_plan_starts_warmup_for_accepting_rank_when_all_loaded_or_warming():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert isinstance(result, StartWarmup)
@@ -111,6 +112,7 @@ def test_plan_starts_warmup_for_rank_zero_after_others_warming():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert isinstance(result, StartWarmup)
@@ -155,6 +157,7 @@ def test_plan_does_not_start_warmup_for_non_zero_rank_until_all_loaded_or_warmin
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None
@@ -203,6 +206,7 @@ def test_plan_does_not_start_warmup_for_rank_zero_until_others_warming():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None
@@ -223,6 +227,7 @@ def test_plan_does_not_start_warmup_for_rank_zero_until_others_warming():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert isinstance(result, StartWarmup)
@@ -270,6 +275,7 @@ def test_plan_starts_warmup_for_connecting_rank_after_others_warming():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert isinstance(result, StartWarmup)
@@ -316,6 +322,7 @@ def test_plan_does_not_start_warmup_for_accepting_rank_until_all_loaded_or_warmi
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None
@@ -361,6 +368,7 @@ def test_plan_does_not_start_warmup_for_connecting_rank_until_others_warming():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None

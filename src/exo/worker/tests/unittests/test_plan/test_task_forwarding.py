@@ -81,6 +81,7 @@ def test_plan_forwards_pending_chat_completion_when_runner_ready():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is task
@@ -135,6 +136,7 @@ def test_plan_does_not_forward_chat_completion_if_any_runner_not_ready():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None
@@ -186,6 +188,7 @@ def test_plan_does_not_forward_tasks_for_other_instances():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None
@@ -255,6 +258,7 @@ def test_plan_ignores_non_pending_or_non_chat_tasks():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None
@@ -298,6 +302,7 @@ def test_plan_returns_none_when_nothing_to_do():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None

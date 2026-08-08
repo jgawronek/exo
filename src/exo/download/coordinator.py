@@ -387,8 +387,15 @@ class DownloadCoordinator:
                     elif progress.status in ["in_progress", "not_started"]:
                         # TODO(ciaran): temporary solution
                         # Don't downgrade a model that is already confirmed complete.
+                        # A failure must survive too: this scan derives status
+                        # purely from bytes on disk, so it would rewrite a
+                        # DownloadFailed as DownloadPending and destroy the
+                        # error_message with it — leaving the dashboard showing
+                        # a bare "WAITING" with no reason. The failure stays
+                        # until the next attempt reports a new outcome.
                         if isinstance(
-                            self.download_status.get(model_id), DownloadCompleted
+                            self.download_status.get(model_id),
+                            (DownloadCompleted, DownloadFailed),
                         ):
                             continue
                         # The per-file size check compares local files against

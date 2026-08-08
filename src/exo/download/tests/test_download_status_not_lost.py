@@ -26,6 +26,7 @@ from exo.shared.types.events import Event, NodeDownloadProgress
 from exo.shared.types.memory import Memory
 from exo.shared.types.worker.downloads import (
     DownloadCompleted,
+    DownloadFailed,
     DownloadPending,
 )
 from exo.shared.types.worker.shards import PipelineShardMetadata, ShardMetadata
@@ -281,3 +282,50 @@ async def test_genuinely_incomplete_model_stays_pending() -> None:
             coordinator_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await coordinator_task
+
+
+async def test_failed_status_not_overwritten_by_rescan() -> None:
+    """A DownloadFailed must survive the periodic rescan.
+
+    The rescan derives status purely from bytes on disk, so a partially
+    written model would be rewritten as DownloadPending — destroying the
+    error_message with it. That left an instance sitting at "WAITING" with no
+    reason shown, because the dashboard reads errorMessage off DownloadFailed.
+    """
+    downloader = FakeShardDownloader(status="not_started")
+    coordinator, _cmd_send, event_recv = _setup_coordinator(downloader)
+
+    failed = DownloadFailed(
+        node_id=NODE_ID,
+        shard_metadata=SHARD,
+        error_message="No writable model directory has 247.1 GiB free.",
+        model_directory=str(MODEL_DIR),
+    )
+    coordinator.download_status[MODEL_ID] = failed
+
+    coordinator_task = asyncio.create_task(coordinator.run())
+    try:
+        events = await _collect_events(event_recv, timeout=1.5)
+
+        current = coordinator.download_status[MODEL_ID]
+        assert isinstance(current, DownloadFailed), (
+            f"Expected DownloadFailed to survive rescan, got {type(current).__name__}"
+        )
+        # The reason is the whole point — it must not be lost.
+        assert "247.1 GiB" in current.error_message
+
+        pending_events = [
+            e
+            for e in events
+            if isinstance(e, NodeDownloadProgress)
+            and isinstance(e.download_progress, DownloadPending)
+            and e.download_progress.shard_metadata.model_card.model_id == MODEL_ID
+        ]
+        assert len(pending_events) == 0, (
+            f"Rescan must not downgrade a failure to pending, got {len(pending_events)}"
+        )
+    finally:
+        await coordinator.shutdown()
+        coordinator_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await coordinator_task

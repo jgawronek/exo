@@ -57,6 +57,7 @@ def plan(
     image_cache: Mapping[Base64ImageHash, Base64Image],
     instance_backoff: KeyedBackoff[InstanceId],
     download_backoff: KeyedBackoff[ModelId],
+    download_retry_backoff: KeyedBackoff[ModelId],
     terminating_instance_ids: frozenset[InstanceId] = frozenset(),
 ) -> Task | None:
     # Python short circuiting OR logic should evaluate these sequentially.
@@ -72,7 +73,11 @@ def plan(
             terminating_instance_ids,
         )
         or _model_needs_download(
-            node_id, runners, global_download_status, download_backoff
+            node_id,
+            runners,
+            global_download_status,
+            download_backoff,
+            download_retry_backoff,
         )
         or _init_distributed_backend(runners, all_runners)
         or _load_model(runners, all_runners, global_download_status)
@@ -157,6 +162,7 @@ def _model_needs_download(
     runners: Mapping[RunnerId, RunnerSupervisor],
     global_download_status: Mapping[NodeId, Sequence[DownloadProgress]],
     download_backoff: KeyedBackoff[ModelId],
+    download_retry_backoff: KeyedBackoff[ModelId],
 ) -> DownloadModel | None:
     local_downloads = global_download_status.get(node_id, [])
     download_status = {
@@ -165,22 +171,33 @@ def _model_needs_download(
 
     for runner in runners.values():
         model_id = runner.bound_instance.bound_shard.model_card.model_id
-        if (
-            isinstance(runner.status, RunnerIdle)
-            and (
-                model_id not in download_status
-                or not isinstance(
-                    download_status[model_id],
-                    (DownloadOngoing, DownloadCompleted, DownloadFailed),
-                )
-            )
-            and download_backoff.should_proceed(model_id)
-        ):
-            # We don't invalidate download_status randomly in case a file gets deleted on disk
-            return DownloadModel(
-                instance_id=runner.bound_instance.instance.instance_id,
-                shard_metadata=runner.bound_instance.bound_shard,
-            )
+        if not isinstance(runner.status, RunnerIdle):
+            continue
+
+        status = download_status.get(model_id)
+
+        # Already in flight or already here: nothing to issue.
+        # We don't invalidate download_status randomly in case a file gets deleted on disk
+        if isinstance(status, (DownloadOngoing, DownloadCompleted)):
+            continue
+
+        if isinstance(status, DownloadFailed):
+            # A failure used to be terminal, which meant a transient cause — a
+            # full disk that later freed up, a network blip — stranded the
+            # instance in WAITING indefinitely with no further attempts. Retry,
+            # but on a much slower schedule than ordinary plan churn so a
+            # repeatedly failing download cannot spin. DownloadModel re-checks
+            # the disk first (resolve_existing_model), so a retry is cheap and
+            # picks up files that arrived by other means.
+            if not download_retry_backoff.should_proceed(model_id):
+                continue
+        elif not download_backoff.should_proceed(model_id):
+            continue
+
+        return DownloadModel(
+            instance_id=runner.bound_instance.instance.instance_id,
+            shard_metadata=runner.bound_instance.bound_shard,
+        )
 
 
 def _init_distributed_backend(

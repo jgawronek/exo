@@ -63,6 +63,7 @@ def test_plan_kills_runner_when_instance_missing():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert isinstance(result, Shutdown)
@@ -106,6 +107,7 @@ def test_plan_kills_runner_when_sibling_failed():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert isinstance(result, Shutdown)
@@ -141,6 +143,7 @@ def test_plan_creates_runner_when_missing_for_node():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     # We patched plan_mod.CreateRunner → CreateRunner
@@ -183,6 +186,7 @@ def test_plan_does_not_create_runner_when_supervisor_already_present():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None
@@ -216,6 +220,7 @@ def test_plan_does_not_create_runner_for_unassigned_node():
         image_cache={},
         instance_backoff=KeyedBackoff(),
         download_backoff=KeyedBackoff(),
+        download_retry_backoff=KeyedBackoff(),
     )
 
     assert result is None
@@ -248,6 +253,7 @@ def test_plan_defers_runner_creation_while_predecessor_terminates():
             image_cache={},
             instance_backoff=KeyedBackoff(),
             download_backoff=KeyedBackoff(),
+            download_retry_backoff=KeyedBackoff(),
             terminating_instance_ids=terminating,
         )
 
@@ -365,6 +371,7 @@ async def test_wedged_runner_is_reaped_before_a_replacement_is_planned():
                 image_cache={},
                 instance_backoff=KeyedBackoff(),
                 download_backoff=KeyedBackoff(),
+                download_retry_backoff=KeyedBackoff(),
                 terminating_instance_ids=worker._terminating_instance_ids(),  # pyright: ignore[reportPrivateUsage]
             )
             is None
