@@ -3700,6 +3700,36 @@
     Math.max(0, nodeCount - rdmaCapableNodeIds.length),
   );
 
+  /** Devices offered in Advanced settings, so choosing which nodes form the
+   * cluster sits next to the transport that constrains them rather than being
+   * hidden behind clicking the topology graph. */
+  const selectableDevices = $derived(
+    Object.keys(data?.nodes ?? {})
+      .map((id) => ({
+        id,
+        name: getNodeName(id),
+        rdma: rdmaCapableNodeIds.includes(id),
+      }))
+      .sort((x, y) => x.name.localeCompare(y.name)),
+  );
+
+  /** An RDMA cluster cannot include a device without RDMA, so those cannot be
+   * picked while RDMA is selected. */
+  function deviceSelectable(device: { rdma: boolean }): boolean {
+    return selectedInstanceType !== "MlxJaccl" || device.rdma;
+  }
+
+  // Switching to RDMA must drop any already-selected non-RDMA device,
+  // otherwise the filter silently asks for a placement that cannot exist.
+  $effect(() => {
+    if (selectedInstanceType !== "MlxJaccl") return;
+    for (const device of selectableDevices) {
+      if (!device.rdma && nodeFilter.has(device.id)) {
+        togglePreviewNodeFilter(device.id);
+      }
+    }
+  });
+
   // Compute which min node values have valid previews for the current model/sharding/instance type
   // A minNodes value N is valid if there exists a placement with nodeCount >= N
   // Note: previewsData already contains previews for the selected model (fetched via API)
@@ -6633,6 +6663,55 @@
                       {/if}
                     {/if}
                   </div>
+
+                  <!-- Devices -->
+                  {#if selectableDevices.length > 1}
+                    <div>
+                      <div
+                        class="text-xs text-white/50 font-mono mb-2 flex items-center gap-2"
+                      >
+                        <span>Devices:</span>
+                        {#if nodeFilter.size > 0}
+                          <button
+                            onclick={clearPreviewNodeFilter}
+                            class="text-[10px] text-xeo-green/70 hover:text-xeo-green underline cursor-pointer"
+                          >
+                            use all
+                          </button>
+                        {:else}
+                          <span class="text-[10px] text-white/30"
+                            >all eligible</span
+                          >
+                        {/if}
+                      </div>
+                      <div class="flex flex-wrap gap-2">
+                        {#each selectableDevices as device (device.id)}
+                          {@const allowed = deviceSelectable(device)}
+                          {@const picked = nodeFilter.has(device.id)}
+                          <button
+                            disabled={!allowed}
+                            title={allowed
+                              ? "Require this device in the cluster"
+                              : "This device has no RDMA support"}
+                            onclick={() => togglePreviewNodeFilter(device.id)}
+                            class="flex items-center gap-2 py-1.5 px-3 text-xs font-mono border rounded transition-all duration-200 {!allowed
+                              ? 'text-white/25 border-xeo-medium-gray/30 cursor-not-allowed line-through'
+                              : picked
+                                ? 'text-xeo-green border-xeo-green cursor-pointer'
+                                : 'text-white/70 border-xeo-medium-gray/50 hover:border-xeo-green/50 cursor-pointer'}"
+                          >
+                            <span
+                              class="w-3 h-3 rounded-sm border flex items-center justify-center {picked &&
+                              allowed
+                                ? 'border-xeo-green bg-xeo-green/30'
+                                : 'border-xeo-medium-gray'}"
+                            ></span>
+                            {device.name}
+                          </button>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
 
                   <!-- Minimum Devices -->
                   <div>
