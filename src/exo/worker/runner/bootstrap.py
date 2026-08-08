@@ -9,22 +9,32 @@ import loguru
 from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.events import Event
 from exo.shared.types.tasks import Task, TaskId
-from exo.shared.types.worker.instances import BoundInstance, Instance, MlxJacclInstance
+from exo.shared.types.worker.instances import BoundInstance
 from exo.utils.channels import ClosedResourceError, MpReceiver, MpSender
 from exo.worker.engines.base import Builder
 
 logger: "loguru.Logger" = loguru.logger
 
 
-def resolve_metal_fast_synchronization(
-    instance: Instance,
-    override: str | None,
-) -> Literal["0", "1"]:
+def resolve_metal_fast_synchronization(override: str | None) -> Literal["0", "1"]:
+    """Resolve MLX_METAL_FAST_SYNCH. Off unless explicitly asked for.
+
+    This used to default to "1" for MlxJaccl instances, which made every
+    RDMA-backed instance deadlock. MLX's fast fence (mlx/backend/metal/fence.cpp)
+    swaps Metal's SharedEvent for a raw shared counter whose CPU wait is an
+    unbounded `while (cpu_value()[0] < count) {}` — with no equivalent of the
+    SharedEvent path's `waitUntilSignaledValue(count, -1)` timeout. When the
+    counter is never signalled the runner hangs forever in Fence::wait with no
+    error, which surfaced as instances stuck at LOADING or WARMING UP.
+
+    Because the old default keyed off the instance type, selecting the RDMA
+    interconnect silently opted users into that broken path, so an unrelated
+    Metal synchronization bug looked like an RDMA bug. Fast synch is now
+    opt-in via EXO_FAST_SYNCH=true for anyone benchmarking a fixed MLX.
+    """
     if override == "true":
         return "1"
-    if override == "false":
-        return "0"
-    return "1" if isinstance(instance, MlxJacclInstance) else "0"
+    return "0"
 
 
 @dataclass(frozen=True)
@@ -67,8 +77,7 @@ def entrypoint(
         "EXO_FAST_SYNCH",
     )
     os.environ["MLX_METAL_FAST_SYNCH"] = resolve_metal_fast_synchronization(
-        bound_instance.instance,
-        fast_synch_override,
+        fast_synch_override
     )
 
     logger.info(f"Fast synch flag: {os.environ['MLX_METAL_FAST_SYNCH']}")
