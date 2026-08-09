@@ -277,12 +277,29 @@ def apply_instance_deleted(event: InstanceDeleted, state: State) -> State:
         for iid, activity in state.instance_expert_activity.items()
         if iid != event.instance_id
     }
+    # Runners are keyed by RunnerId with no back-reference to their instance, so
+    # deleting an instance used to abandon its runner statuses permanently. They
+    # accumulated as RunnerShuttingDown entries that no live instance owned,
+    # inflating every /state poll and making the dashboard's runner counts
+    # meaningless.
+    deleted_instance = state.instances.get(event.instance_id)
+    orphaned_runner_ids: set[RunnerId] = (
+        set(deleted_instance.shard_assignments.node_to_runner.values())
+        if deleted_instance is not None
+        else set()
+    )
+    new_runners = {
+        runner_id: status
+        for runner_id, status in state.runners.items()
+        if runner_id not in orphaned_runner_ids
+    }
     return state.model_copy(
         update={
             "instances": new_instances,
             "instance_links": new_links,
             "instance_stage_timings": new_stage_timings,
             "instance_expert_activity": new_expert_activity,
+            "runners": new_runners,
         }
     )
 
@@ -436,6 +453,31 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
         for key, value in state.shared_models_dir_statuses.items()
         if key != event.node_id
     }
+    # These three were missing from the cleanup above. Node IDs are regenerated
+    # on every process start (get_node_zid in routing/router.py returns random
+    # bytes while persistence is disabled), so a node that merely restarts
+    # arrives under a new id and leaves its old identity, backend list and
+    # runner statuses behind forever. Four machines had accumulated 31
+    # identities and 97 runner records this way.
+    node_identities = {
+        key: value
+        for key, value in state.node_identities.items()
+        if key != event.node_id
+    }
+    node_backends = {
+        key: value for key, value in state.node_backends.items() if key != event.node_id
+    }
+    departing_runner_ids = {
+        runner_id
+        for instance in state.instances.values()
+        for node_id, runner_id in instance.shard_assignments.node_to_runner.items()
+        if node_id == event.node_id
+    }
+    runners = {
+        runner_id: status
+        for runner_id, status in state.runners.items()
+        if runner_id not in departing_runner_ids
+    }
     # Only recompute cycles if the leaving node had TB bridge enabled
     leaving_node_status = state.node_thunderbolt_bridge.get(event.node_id)
     leaving_node_had_tb_enabled = (
@@ -460,6 +502,9 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
             "node_rdma_ctl": node_rdma_ctl,
             "thunderbolt_bridge_cycles": thunderbolt_bridge_cycles,
             "shared_models_dir_statuses": shared_models_dir_statuses,
+            "node_identities": node_identities,
+            "node_backends": node_backends,
+            "runners": runners,
         }
     )
 
