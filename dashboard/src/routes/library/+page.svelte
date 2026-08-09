@@ -409,13 +409,15 @@
       if (!response.ok) {
         throw new Error(`Browse failed (HTTP ${response.status})`);
       }
+      // The API serialises with a camelCase alias generator, so these keys are
+      // camelCase even though the Python fields are snake_case.
       const data = (await response.json()) as {
         path: string;
-        parent_path: string | null;
+        parentPath: string | null;
         entries: Array<{ name: string; path: string; hidden?: boolean }>;
         error?: string | null;
         truncated?: boolean;
-        network_volumes?: Array<{
+        networkVolumes?: Array<{
           path: string;
           source: string;
           filesystem: string;
@@ -424,10 +426,10 @@
       };
       browsePath = data.path;
       browsePathDraft = data.path;
-      browseParentPath = data.parent_path;
+      browseParentPath = data.parentPath;
       browseEntries = data.entries ?? [];
       browseTruncated = data.truncated ?? false;
-      browseNetworkVolumes = data.network_volumes ?? [];
+      browseNetworkVolumes = data.networkVolumes ?? [];
       if (data.error) {
         browseError = data.error;
       }
