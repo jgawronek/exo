@@ -507,6 +507,7 @@ class SetModelsStorageResponse(FrozenModel):
 class ModelsStorageBrowseEntry(FrozenModel):
     name: str
     path: str
+    hidden: bool = False
 
 
 class ModelsStorageBrowseResponse(FrozenModel):
@@ -514,6 +515,7 @@ class ModelsStorageBrowseResponse(FrozenModel):
     parent_path: str | None
     entries: list[ModelsStorageBrowseEntry]
     error: str | None = None
+    truncated: bool = False
 
 
 class HuggingFaceTokenResponse(FrozenModel):

@@ -13,6 +13,7 @@ from exo.download.download_utils import (
     select_download_dir,
 )
 from exo.download.shared_models_dir import (
+    _BROWSE_ENTRY_LIMIT,  # pyright: ignore[reportPrivateUsage]
     browse_shared_models_directories,
     get_shared_models_dir,
     set_shared_models_dir,
@@ -148,6 +149,41 @@ class TestBrowseSharedModelsDirectories:
         assert result.path == ""
         assert result.error is None
         assert isinstance(result.entries, tuple)
+
+    def test_shortcuts_lead_with_the_filesystem_root(self) -> None:
+        """Every folder on the node has to be reachable, so / comes first."""
+        result = browse_shared_models_directories(None)
+        anchor = Path(Path.home().anchor or "/")
+        assert result.entries[0].path == str(anchor)
+
+    def test_hidden_directories_are_listed_on_request(self, tmp_path: Path) -> None:
+        (tmp_path / "visible").mkdir()
+        (tmp_path / ".cache").mkdir()
+
+        without_hidden = browse_shared_models_directories(str(tmp_path))
+        assert [entry.name for entry in without_hidden.entries] == ["visible"]
+
+        with_hidden = browse_shared_models_directories(
+            str(tmp_path), include_hidden=True
+        )
+        assert [entry.name for entry in with_hidden.entries] == [".cache", "visible"]
+        assert [entry.hidden for entry in with_hidden.entries] == [True, False]
+
+    def test_overlong_listing_reports_truncation(self, tmp_path: Path) -> None:
+        for index in range(_BROWSE_ENTRY_LIMIT + 5):
+            (tmp_path / f"dir-{index:04d}").mkdir()
+        result = browse_shared_models_directories(str(tmp_path))
+        assert result.truncated
+        assert len(result.entries) == _BROWSE_ENTRY_LIMIT
+
+    def test_listing_within_the_limit_is_not_flagged_truncated(
+        self, tmp_path: Path
+    ) -> None:
+        for index in range(3):
+            (tmp_path / f"dir-{index}").mkdir()
+        result = browse_shared_models_directories(str(tmp_path))
+        assert not result.truncated
+        assert len(result.entries) == 3
 
     def test_stale_mount_root_does_not_sink_the_listing(self, tmp_path: Path) -> None:
         """A dead NFS/SMB mount raises from is_dir(); the other roots survive it."""

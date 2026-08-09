@@ -2497,21 +2497,27 @@ class API:
     async def browse_models_storage(
         self,
         path: Annotated[str | None, Query()] = None,
+        include_hidden: Annotated[bool, Query()] = False,
     ) -> ModelsStorageBrowseResponse:
         """List directories for the Shared Model Storage folder picker.
 
-        Browses the API node's local filesystem (including mounted network
-        volumes). The chosen path must exist at the same location on every node.
+        Browses the API node's whole local filesystem, mounted network volumes
+        included — an empty path returns the filesystem root plus shortcuts, and
+        every directory is reachable from there. The chosen path must exist at
+        the same location on every node.
         """
-        result = browse_shared_models_directories(path)
+        result = browse_shared_models_directories(path, include_hidden=include_hidden)
         return ModelsStorageBrowseResponse(
             path=result.path,
             parent_path=result.parent_path,
             entries=[
-                ModelsStorageBrowseEntry(name=entry.name, path=entry.path)
+                ModelsStorageBrowseEntry(
+                    name=entry.name, path=entry.path, hidden=entry.hidden
+                )
                 for entry in result.entries
             ],
             error=result.error,
+            truncated=result.truncated,
         )
 
     async def get_hugging_face_token(self) -> HuggingFaceTokenResponse:

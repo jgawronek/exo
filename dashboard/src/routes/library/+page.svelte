@@ -367,7 +367,12 @@
   let browseError = $state<string | null>(null);
   let browsePath = $state("");
   let browseParentPath = $state<string | null>(null);
-  let browseEntries = $state<Array<{ name: string; path: string }>>([]);
+  let browseEntries = $state<
+    Array<{ name: string; path: string; hidden?: boolean }>
+  >([]);
+  let browseTruncated = $state(false);
+  let browseShowHidden = $state(false);
+  let browsePathDraft = $state("");
 
   function beginEditSharedDir() {
     sharedDirInput = sharedDir ?? "";
@@ -386,26 +391,34 @@
     browseLoading = true;
     browseError = null;
     try {
-      const query =
-        path && path.length > 0 ? `?path=${encodeURIComponent(path)}` : "";
-      const response = await fetch(`/models/storage/browse${query}`);
+      const params = new URLSearchParams();
+      if (path && path.length > 0) params.set("path", path);
+      if (browseShowHidden) params.set("include_hidden", "true");
+      const query = params.toString();
+      const response = await fetch(
+        `/models/storage/browse${query ? `?${query}` : ""}`,
+      );
       if (!response.ok) {
         throw new Error(`Browse failed (HTTP ${response.status})`);
       }
       const data = (await response.json()) as {
         path: string;
         parent_path: string | null;
-        entries: Array<{ name: string; path: string }>;
+        entries: Array<{ name: string; path: string; hidden?: boolean }>;
         error?: string | null;
+        truncated?: boolean;
       };
       browsePath = data.path;
+      browsePathDraft = data.path;
       browseParentPath = data.parent_path;
       browseEntries = data.entries ?? [];
+      browseTruncated = data.truncated ?? false;
       if (data.error) {
         browseError = data.error;
       }
     } catch (err) {
       browseEntries = [];
+      browseTruncated = false;
       browseError =
         err instanceof Error ? err.message : "Failed to browse folders";
     } finally {
@@ -417,6 +430,19 @@
     browsingSharedDir = true;
     await loadBrowseEntries(sharedDirInput.trim() || null);
   }
+
+  async function goToTypedPath() {
+    await loadBrowseEntries(browsePathDraft.trim() || null);
+  }
+
+  async function toggleBrowseHidden() {
+    browseShowHidden = !browseShowHidden;
+    await loadBrowseEntries(browsePath || null);
+  }
+
+  // Whatever the path bar shows wins, so a typed path can be used without
+  // navigating to it first.
+  const chosenBrowsePath = $derived(browsePathDraft.trim() || browsePath);
 
   function closeSharedDirBrowser() {
     browsingSharedDir = false;
@@ -1009,24 +1035,55 @@
       </button>
     </div>
 
-    <div
-      class="flex items-center gap-2 px-4 py-3 border-b border-xeo-medium-gray/30"
-    >
-      {#if browsePath !== ""}
+    <div class="px-4 py-3 border-b border-xeo-medium-gray/30 space-y-2">
+      <form
+        class="flex items-center gap-2"
+        onsubmit={(event) => {
+          event.preventDefault();
+          goToTypedPath();
+        }}
+      >
+        {#if browsePath !== ""}
+          <button
+            type="button"
+            disabled={browseLoading}
+            onclick={() => loadBrowseEntries(browseParentPath)}
+            class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-xeo-medium-gray/40 text-xeo-light-gray hover:text-white transition-colors disabled:opacity-50 cursor-pointer flex-shrink-0"
+          >
+            Up
+          </button>
+        {/if}
+        <input
+          type="text"
+          bind:value={browsePathDraft}
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="Type or paste any path, e.g. /mnt/models"
+          aria-label="Path to browse"
+          class="flex-1 min-w-0 px-3 py-1.5 rounded bg-xeo-black/50 border border-xeo-medium-gray/40 text-xs font-mono text-white/85 placeholder:text-white/25 focus:outline-none focus:border-xeo-green/60"
+        />
+        <button
+          type="submit"
+          disabled={browseLoading}
+          class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-xeo-green/40 text-xeo-green hover:bg-xeo-green/10 transition-colors disabled:opacity-50 cursor-pointer flex-shrink-0"
+        >
+          Go
+        </button>
+      </form>
+      <div class="flex items-center justify-between gap-3">
+        <div class="text-[10px] font-mono text-white/35 truncate">
+          {browsePath || "Shortcuts — open / to reach any folder"}
+        </div>
         <button
           type="button"
           disabled={browseLoading}
-          onclick={() => loadBrowseEntries(browseParentPath)}
-          class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-xeo-medium-gray/40 text-xeo-light-gray hover:text-white transition-colors disabled:opacity-50 cursor-pointer flex-shrink-0"
+          onclick={toggleBrowseHidden}
+          class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border transition-colors disabled:opacity-50 cursor-pointer flex-shrink-0 {browseShowHidden
+            ? 'border-xeo-green/50 text-xeo-green bg-xeo-green/10'
+            : 'border-xeo-medium-gray/40 text-xeo-light-gray hover:text-white'}"
         >
-          Up
+          {browseShowHidden ? "Hiding nothing" : "Show hidden"}
         </button>
-      {/if}
-      <div
-        class="flex-1 min-w-0 px-3 py-1.5 rounded bg-xeo-black/50 border border-xeo-medium-gray/40 text-xs font-mono text-white/80 truncate"
-        title={browsePath || "Mount points & home"}
-      >
-        {browsePath || "Mount points & home"}
       </div>
     </div>
 
@@ -1069,7 +1126,9 @@
                 d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
               />
             </svg>
-            <span class="truncate">{entry.name}</span>
+            <span class="truncate {entry.hidden ? 'text-white/50' : ''}"
+              >{entry.name}</span
+            >
           </button>
         {/each}
       {/if}
@@ -1080,6 +1139,15 @@
         class="px-4 py-2 text-[11px] font-mono text-yellow-400 border-t border-xeo-medium-gray/30"
       >
         {browseError}
+      </div>
+    {/if}
+
+    {#if browseTruncated}
+      <div
+        class="px-4 py-2 text-[11px] font-mono text-yellow-400 border-t border-xeo-medium-gray/30"
+      >
+        Showing the first {browseEntries.length} folders — type a path above to jump
+        further in.
       </div>
     {/if}
 
@@ -1099,8 +1167,8 @@
         </button>
         <button
           type="button"
-          disabled={browseLoading || !browsePath || !!browseError}
-          onclick={() => selectBrowseFolder(browsePath)}
+          disabled={browseLoading || !chosenBrowsePath}
+          onclick={() => selectBrowseFolder(chosenBrowsePath)}
           class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded bg-xeo-green text-xeo-black hover:bg-xeo-green-darker transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           Use this folder

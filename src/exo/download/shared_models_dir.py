@@ -35,6 +35,7 @@ _BROWSE_ROOT_CANDIDATES = (
 class SharedModelsDirectoryBrowseEntry(FrozenModel):
     name: str
     path: str
+    hidden: bool = False
 
 
 class SharedModelsDirectoryBrowseResult(FrozenModel):
@@ -42,6 +43,7 @@ class SharedModelsDirectoryBrowseResult(FrozenModel):
     parent_path: str | None
     entries: tuple[SharedModelsDirectoryBrowseEntry, ...]
     error: str | None = None
+    truncated: bool = False
 
 
 @final
@@ -145,22 +147,32 @@ def _is_listable_directory(path: Path) -> bool:
         return False
 
 
-def _browse_root_entries() -> tuple[SharedModelsDirectoryBrowseEntry, ...]:
-    """Top-level folders users commonly mount network drives under."""
+def _browse_shortcut_entries() -> tuple[SharedModelsDirectoryBrowseEntry, ...]:
+    """Shortcuts the picker opens on: the filesystem root, home, and mounts.
+
+    These are a starting point, not a boundary — the root is listed first so
+    every directory on the node is reachable by walking down from it, and the
+    rest are shortcuts to where network drives usually land.
+    """
     entries: list[SharedModelsDirectoryBrowseEntry] = []
     seen: set[str] = set()
 
-    def add(path: Path) -> None:
+    def add(path: Path, name: str | None = None) -> None:
         resolved = str(path)
         if resolved in seen or not _is_listable_directory(path):
             return
         seen.add(resolved)
         entries.append(
-            SharedModelsDirectoryBrowseEntry(name=path.name or resolved, path=resolved)
+            SharedModelsDirectoryBrowseEntry(
+                name=name or path.name or resolved,
+                path=resolved,
+                hidden=path.name.startswith("."),
+            )
         )
 
-    home = Path.home()
-    add(home)
+    filesystem_root = Path(Path.home().anchor or "/")
+    add(filesystem_root, name=f"{filesystem_root} (whole filesystem)")
+    add(Path.home(), name=f"{Path.home().name} (home)")
     for candidate in _BROWSE_ROOT_CANDIDATES:
         if not _is_listable_directory(candidate):
             continue
@@ -180,18 +192,22 @@ def _browse_root_entries() -> tuple[SharedModelsDirectoryBrowseEntry, ...]:
 
 def browse_shared_models_directories(
     path_text: str | None = None,
+    include_hidden: bool = False,
 ) -> SharedModelsDirectoryBrowseResult:
     """List child directories for the shared-models folder picker.
 
-    An empty path returns mount-oriented roots (``/Volumes``, ``/mnt``, home,
-    etc.) so the dashboard can open on network drives without free-form typing.
-    Only directory names are returned — never file contents.
+    An empty path returns shortcuts — the filesystem root first, then home and
+    any mount points — from which any directory on the node can be reached by
+    walking down. Hidden directories are listed only when ``include_hidden`` is
+    set, so caches like ``~/.cache/huggingface`` stay reachable without
+    cluttering the common case. Only directory names are returned — never file
+    contents.
     """
     if path_text is None or path_text.strip() == "":
         return SharedModelsDirectoryBrowseResult(
             path="",
             parent_path=None,
-            entries=_browse_root_entries(),
+            entries=_browse_shortcut_entries(),
         )
 
     path = Path(path_text).expanduser()
@@ -241,19 +257,21 @@ def browse_shared_models_directories(
             error=f"Cannot list directory: {list_error.strerror or list_error}",
         )
 
+    truncated = False
     for child in children:
-        if child.name.startswith("."):
+        hidden = child.name.startswith(".")
+        if hidden and not include_hidden:
             continue
-        try:
-            if not child.is_dir():
-                continue
-        except OSError:
+        if not _is_listable_directory(child):
             continue
-        entries.append(
-            SharedModelsDirectoryBrowseEntry(name=child.name, path=str(child))
-        )
         if len(entries) >= _BROWSE_ENTRY_LIMIT:
+            truncated = True
             break
+        entries.append(
+            SharedModelsDirectoryBrowseEntry(
+                name=child.name, path=str(child), hidden=hidden
+            )
+        )
 
     parent = path.parent
     parent_path = str(parent) if parent != path else None
@@ -261,4 +279,5 @@ def browse_shared_models_directories(
         path=str(path),
         parent_path=parent_path,
         entries=tuple(entries),
+        truncated=truncated,
     )
