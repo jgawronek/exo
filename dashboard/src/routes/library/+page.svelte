@@ -418,10 +418,22 @@
     await loadBrowseEntries(sharedDirInput.trim() || null);
   }
 
-  function selectBrowseFolder(path: string) {
-    sharedDirInput = path;
+  function closeSharedDirBrowser() {
     browsingSharedDir = false;
     browseError = null;
+  }
+
+  function selectBrowseFolder(path: string) {
+    sharedDirInput = path;
+    closeSharedDirBrowser();
+  }
+
+  function handleBrowseKeydown(event: KeyboardEvent) {
+    if (!browsingSharedDir) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeSharedDirBrowser();
+    }
   }
 
   async function saveSharedDir(path: string | null) {
@@ -451,6 +463,8 @@
     refreshState();
   });
 </script>
+
+<svelte:window onkeydown={handleBrowseKeydown} />
 
 {#snippet trashIcon()}
   <svg
@@ -602,90 +616,6 @@
             Cancel
           </button>
         </form>
-
-        {#if browsingSharedDir}
-          <div
-            class="rounded border border-xeo-medium-gray/40 bg-xeo-black/50 overflow-hidden"
-          >
-            <div
-              class="flex items-center justify-between gap-2 px-3 py-2 border-b border-xeo-medium-gray/30"
-            >
-              <div class="min-w-0">
-                <div
-                  class="text-[10px] font-mono uppercase tracking-wider text-xeo-light-gray/70"
-                >
-                  Select folder on this API node
-                </div>
-                <div
-                  class="text-xs font-mono text-white/80 truncate"
-                  title={browsePath || "Mount points & home"}
-                >
-                  {browsePath || "Mount points & home"}
-                </div>
-              </div>
-              <div class="flex items-center gap-2 flex-shrink-0">
-                {#if browsePath !== ""}
-                  <button
-                    type="button"
-                    disabled={browseLoading}
-                    onclick={() => loadBrowseEntries(browseParentPath)}
-                    class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-xeo-medium-gray/40 text-xeo-light-gray hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    Up
-                  </button>
-                {/if}
-                {#if browsePath}
-                  <button
-                    type="button"
-                    disabled={browseLoading || !!browseError}
-                    onclick={() => selectBrowseFolder(browsePath)}
-                    class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded bg-xeo-green text-xeo-black hover:bg-xeo-green-darker transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    Use this folder
-                  </button>
-                {/if}
-              </div>
-            </div>
-            <div class="max-h-56 overflow-y-auto">
-              {#if browseLoading}
-                <div class="px-3 py-4 text-xs font-mono text-white/50">
-                  Loading folders&hellip;
-                </div>
-              {:else if browseError && browseEntries.length === 0}
-                <div class="px-3 py-4 text-xs font-mono text-red-400">
-                  {browseError}
-                </div>
-              {:else if browseEntries.length === 0}
-                <div class="px-3 py-4 text-xs font-mono text-white/40">
-                  No subfolders here
-                </div>
-              {:else}
-                {#each browseEntries as entry (entry.path)}
-                  <button
-                    type="button"
-                    onclick={() => loadBrowseEntries(entry.path)}
-                    class="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-mono text-white/80 hover:bg-xeo-green/10 hover:text-xeo-green transition-colors border-b border-xeo-medium-gray/20 last:border-b-0 cursor-pointer"
-                  >
-                    <span class="text-xeo-green/70">▸</span>
-                    <span class="truncate">{entry.name}</span>
-                  </button>
-                {/each}
-              {/if}
-            </div>
-            {#if browseError && browseEntries.length > 0}
-              <div
-                class="px-3 py-2 text-[11px] font-mono text-yellow-400 border-t border-xeo-medium-gray/30"
-              >
-                {browseError}
-              </div>
-            {/if}
-            <div
-              class="px-3 py-2 text-[10px] font-mono text-white/40 border-t border-xeo-medium-gray/30"
-            >
-              Path must be mounted at the same location on every cluster node.
-            </div>
-          </div>
-        {/if}
       {:else}
         <div class="flex items-center gap-3 flex-wrap">
           {#if sharedDir}
@@ -1035,6 +965,150 @@
     {/if}
   </div>
 </div>
+
+<!-- Shared models folder browse modal -->
+{#if browsingSharedDir}
+  <div
+    class="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm"
+    transition:fade={{ duration: 150 }}
+    onclick={closeSharedDirBrowser}
+    role="presentation"
+  ></div>
+  <div
+    class="fixed z-[60] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(92vw,560px)] h-[min(80vh,640px)] bg-xeo-dark-gray border border-xeo-green/10 rounded-lg shadow-2xl overflow-hidden flex flex-col"
+    transition:fly={{ y: 16, duration: 220, easing: cubicOut }}
+    role="dialog"
+    aria-modal="true"
+    aria-label="Browse shared model folder"
+  >
+    <div
+      class="flex items-start justify-between gap-3 p-4 border-b border-xeo-green/10 bg-xeo-medium-gray/30"
+    >
+      <div class="min-w-0">
+        <h3
+          class="text-sm font-mono tracking-[0.15em] uppercase text-xeo-green"
+        >
+          Browse Folder
+        </h3>
+        <p class="mt-1 text-[11px] font-mono text-white/45">
+          Select a folder on this API node. Same path must exist on every node.
+        </p>
+      </div>
+      <button
+        type="button"
+        class="p-1 rounded hover:bg-white/10 transition-colors text-white/50 cursor-pointer"
+        onclick={closeSharedDirBrowser}
+        title="Close"
+        aria-label="Close browse dialog"
+      >
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+          <path
+            d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"
+          />
+        </svg>
+      </button>
+    </div>
+
+    <div
+      class="flex items-center gap-2 px-4 py-3 border-b border-xeo-medium-gray/30"
+    >
+      {#if browsePath !== ""}
+        <button
+          type="button"
+          disabled={browseLoading}
+          onclick={() => loadBrowseEntries(browseParentPath)}
+          class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-xeo-medium-gray/40 text-xeo-light-gray hover:text-white transition-colors disabled:opacity-50 cursor-pointer flex-shrink-0"
+        >
+          Up
+        </button>
+      {/if}
+      <div
+        class="flex-1 min-w-0 px-3 py-1.5 rounded bg-xeo-black/50 border border-xeo-medium-gray/40 text-xs font-mono text-white/80 truncate"
+        title={browsePath || "Mount points & home"}
+      >
+        {browsePath || "Mount points & home"}
+      </div>
+    </div>
+
+    <div class="flex-1 overflow-y-auto">
+      {#if browseLoading}
+        <div
+          class="h-full flex items-center justify-center text-xs font-mono text-white/50"
+        >
+          Loading folders&hellip;
+        </div>
+      {:else if browseError && browseEntries.length === 0}
+        <div
+          class="h-full flex items-center justify-center px-6 text-center text-xs font-mono text-red-400"
+        >
+          {browseError}
+        </div>
+      {:else if browseEntries.length === 0}
+        <div
+          class="h-full flex items-center justify-center text-xs font-mono text-white/40"
+        >
+          No subfolders here
+        </div>
+      {:else}
+        {#each browseEntries as entry (entry.path)}
+          <button
+            type="button"
+            onclick={() => loadBrowseEntries(entry.path)}
+            class="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm font-mono text-white/85 hover:bg-xeo-green/10 hover:text-xeo-green transition-colors border-b border-xeo-medium-gray/15 last:border-b-0 cursor-pointer"
+          >
+            <svg
+              class="w-4 h-4 text-xeo-green/70 flex-shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.75"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
+              />
+            </svg>
+            <span class="truncate">{entry.name}</span>
+          </button>
+        {/each}
+      {/if}
+    </div>
+
+    {#if browseError && browseEntries.length > 0}
+      <div
+        class="px-4 py-2 text-[11px] font-mono text-yellow-400 border-t border-xeo-medium-gray/30"
+      >
+        {browseError}
+      </div>
+    {/if}
+
+    <div
+      class="flex items-center justify-between gap-3 p-4 border-t border-xeo-green/10 bg-xeo-medium-gray/20"
+    >
+      <p class="text-[10px] font-mono text-white/40 max-w-[55%]">
+        Network drives must be mounted at the same path on every node.
+      </p>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        <button
+          type="button"
+          onclick={closeSharedDirBrowser}
+          class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded border border-xeo-medium-gray/50 text-xeo-light-gray hover:text-white transition-colors cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={browseLoading || !browsePath || !!browseError}
+          onclick={() => selectBrowseFolder(browsePath)}
+          class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded bg-xeo-green text-xeo-black hover:bg-xeo-green-darker transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+        >
+          Use this folder
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <!-- Info modal -->
 {#if infoRow}
