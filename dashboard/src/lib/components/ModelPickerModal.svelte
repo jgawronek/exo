@@ -12,6 +12,7 @@
   } from "$lib/utils/downloads";
   import { getRecentEntries } from "$lib/stores/recents.svelte";
   import { addToast } from "$lib/stores/toast.svelte";
+  import { sharedModelsDir } from "$lib/stores/app.svelte";
 
   interface ModelInfo {
     id: string;
@@ -178,6 +179,32 @@
     return result;
   });
 
+  // Models sitting in the configured shared folder. The folder is a per-node
+  // setting, so a model counts as shared when any node reports it under that
+  // path — that is exactly the copy every node can read.
+  const sharedDir = $derived(sharedModelsDir());
+
+  const sharedModelIds = $derived.by(() => {
+    const ids = new Set<string>();
+    const root = sharedDir?.replace(/\/+$/, "");
+    if (!root || !downloadsData) return ids;
+    const prefix = `${root}/`;
+    for (const model of models) {
+      const inShared = getDownloadedModelLocations(
+        downloadsData,
+        model.id,
+      ).some(
+        (location) =>
+          location.modelDirectory === root ||
+          location.modelDirectory?.startsWith(prefix),
+      );
+      if (inShared) ids.add(model.id);
+    }
+    return ids;
+  });
+
+  const hasShared = $derived(sharedModelIds.size > 0);
+
   // Aggregate download availability per group (available if ANY variant is available)
   function getGroupDownloadAvailability(
     group: ModelGroup,
@@ -260,6 +287,7 @@
       selectedFamily === "huggingface" ||
       selectedFamily === "recents" ||
       selectedFamily === "favorites" ||
+      selectedFamily === "shared" ||
       query.length < 2 ||
       !noLocalResults
     ) {
@@ -516,6 +544,27 @@
             variants: downloadedVariants,
             smallestVariant,
             hasMultipleVariants: downloadedVariants.length > 1,
+          },
+        ];
+      });
+    } else if (selectedFamily === "shared") {
+      result = result.flatMap((group) => {
+        const sharedVariants = group.variants.filter((variant) =>
+          sharedModelIds.has(variant.id),
+        );
+        if (sharedVariants.length === 0) return [];
+        const smallestVariant = sharedVariants.reduce((smallest, variant) =>
+          (variant.storage_size_megabytes ?? Number.POSITIVE_INFINITY) <
+          (smallest.storage_size_megabytes ?? Number.POSITIVE_INFINITY)
+            ? variant
+            : smallest,
+        );
+        return [
+          {
+            ...group,
+            variants: sharedVariants,
+            smallestVariant,
+            hasMultipleVariants: sharedVariants.length > 1,
           },
         ];
       });
@@ -825,6 +874,8 @@
         {selectedFamily}
         {hasFavorites}
         hasRecents={hasRecentsTab}
+        {hasShared}
+        sharedDirectory={sharedDir}
         onSelect={(family) => (selectedFamily = family)}
       />
 

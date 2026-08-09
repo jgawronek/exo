@@ -373,6 +373,14 @@
   let browseTruncated = $state(false);
   let browseShowHidden = $state(false);
   let browsePathDraft = $state("");
+  let browseNetworkVolumes = $state<
+    Array<{
+      path: string;
+      source: string;
+      filesystem: string;
+      reachable: boolean;
+    }>
+  >([]);
 
   function beginEditSharedDir() {
     sharedDirInput = sharedDir ?? "";
@@ -407,12 +415,19 @@
         entries: Array<{ name: string; path: string; hidden?: boolean }>;
         error?: string | null;
         truncated?: boolean;
+        network_volumes?: Array<{
+          path: string;
+          source: string;
+          filesystem: string;
+          reachable: boolean;
+        }>;
       };
       browsePath = data.path;
       browsePathDraft = data.path;
       browseParentPath = data.parent_path;
       browseEntries = data.entries ?? [];
       browseTruncated = data.truncated ?? false;
+      browseNetworkVolumes = data.network_volumes ?? [];
       if (data.error) {
         browseError = data.error;
       }
@@ -1088,6 +1103,69 @@
     </div>
 
     <div class="flex-1 overflow-y-auto">
+      {#if browsePath === "" && !browseLoading}
+        <div class="border-b border-xeo-medium-gray/30 bg-xeo-black/30">
+          <div
+            class="px-4 pt-3 pb-1 text-[10px] font-mono uppercase tracking-wider text-cyan-300/70"
+          >
+            Network volumes on this node
+          </div>
+          {#if browseNetworkVolumes.length === 0}
+            <div class="px-4 pb-3 text-[11px] font-mono text-white/35">
+              None mounted. A share has to be mounted here before it can be
+              picked — there is no path to point the cluster at otherwise.
+            </div>
+          {:else}
+            {#each browseNetworkVolumes as volume (volume.path)}
+              <button
+                type="button"
+                disabled={!volume.reachable}
+                onclick={() => loadBrowseEntries(volume.path)}
+                class="w-full flex items-start gap-3 px-4 py-2 text-left transition-colors border-t border-xeo-medium-gray/15 {volume.reachable
+                  ? 'hover:bg-cyan-400/10 cursor-pointer'
+                  : 'opacity-60 cursor-not-allowed'}"
+              >
+                <svg
+                  class="w-4 h-4 mt-0.5 flex-shrink-0 {volume.reachable
+                    ? 'text-cyan-300/80'
+                    : 'text-red-400/70'}"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M4 5h16v6H4zM4 15h16v4H4zM8 8h.01M8 17h.01"
+                  />
+                </svg>
+                <span class="min-w-0 flex-1">
+                  <span class="flex items-center gap-2">
+                    <span class="text-sm font-mono text-white/85 truncate"
+                      >{volume.path}</span
+                    >
+                    <span
+                      class="flex-shrink-0 rounded-sm border border-cyan-400/30 bg-cyan-400/10 px-1 py-0.5 text-[9px] font-mono tracking-wider text-cyan-300"
+                      >{volume.filesystem.toUpperCase()}</span
+                    >
+                    {#if !volume.reachable}
+                      <span
+                        class="flex-shrink-0 rounded-sm border border-red-400/30 bg-red-400/10 px-1 py-0.5 text-[9px] font-mono tracking-wider text-red-300"
+                        >UNREACHABLE</span
+                      >
+                    {/if}
+                  </span>
+                  <span
+                    class="block text-[10px] font-mono text-white/40 truncate"
+                    title={volume.source}>← {volume.source}</span
+                  >
+                </span>
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
       {#if browseLoading}
         <div
           class="h-full flex items-center justify-center text-xs font-mono text-white/50"

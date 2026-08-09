@@ -90,6 +90,7 @@ from exo.api.types import (
     ModelListModel,
     ModelsStorageBrowseEntry,
     ModelsStorageBrowseResponse,
+    ModelsStorageNetworkVolume,
     ModelsStorageNodeStatus,
     ModelsStorageResponse,
     PlaceInstanceParams,
@@ -2518,6 +2519,15 @@ class API:
             ],
             error=result.error,
             truncated=result.truncated,
+            network_volumes=[
+                ModelsStorageNetworkVolume(
+                    path=volume.path,
+                    source=volume.source,
+                    filesystem=volume.filesystem,
+                    reachable=volume.reachable,
+                )
+                for volume in result.network_volumes
+            ],
         )
 
     async def get_hugging_face_token(self) -> HuggingFaceTokenResponse:

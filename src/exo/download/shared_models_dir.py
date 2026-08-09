@@ -17,6 +17,8 @@ import uuid
 from pathlib import Path
 from typing import final
 
+import psutil
+
 from exo.shared.constants import EXO_SHARED_MODELS_DIR_FILE
 from exo.shared.environment import get_compatible_environment_value
 from exo.shared.types.storage import SharedDirectoryStatus
@@ -30,6 +32,31 @@ _BROWSE_ROOT_CANDIDATES = (
     Path("/media"),
     Path("/run/media"),
 )
+# Filesystem types served over a network rather than by a local device. Listed
+# per-platform spelling: Linux reports "nfs4"/"cifs", macOS "nfs"/"smbfs".
+_NETWORK_FILESYSTEMS = frozenset(
+    {
+        "9p",
+        "afpfs",
+        "afs",
+        "beegfs",
+        "ceph",
+        "cifs",
+        "davfs",
+        "davfs2",
+        "ftp",
+        "fuse.sshfs",
+        "glusterfs",
+        "lustre",
+        "nfs",
+        "nfs4",
+        "smb2",
+        "smb3",
+        "smbfs",
+        "sshfs",
+        "webdav",
+    }
+)
 
 
 class SharedModelsDirectoryBrowseEntry(FrozenModel):
@@ -38,12 +65,22 @@ class SharedModelsDirectoryBrowseEntry(FrozenModel):
     hidden: bool = False
 
 
+class NetworkVolume(FrozenModel):
+    """A mounted network filesystem on this node."""
+
+    path: str
+    source: str
+    filesystem: str
+    reachable: bool
+
+
 class SharedModelsDirectoryBrowseResult(FrozenModel):
     path: str
     parent_path: str | None
     entries: tuple[SharedModelsDirectoryBrowseEntry, ...]
     error: str | None = None
     truncated: bool = False
+    network_volumes: tuple[NetworkVolume, ...] = ()
 
 
 @final
@@ -147,6 +184,35 @@ def _is_listable_directory(path: Path) -> bool:
         return False
 
 
+def list_network_volumes() -> tuple[NetworkVolume, ...]:
+    """Network filesystems mounted on this node, newest-style names included.
+
+    These are the shares the node can actually reach — a share sitting on the
+    LAN but not mounted here is invisible, because only a mount gives it a path
+    the cluster can be pointed at.
+    """
+    try:
+        partitions = psutil.disk_partitions(all=True)
+    except OSError:
+        return ()
+
+    volumes: list[NetworkVolume] = []
+    for partition in partitions:
+        filesystem = partition.fstype.lower()
+        if filesystem not in _NETWORK_FILESYSTEMS:
+            continue
+        mount_path = Path(partition.mountpoint)
+        volumes.append(
+            NetworkVolume(
+                path=partition.mountpoint,
+                source=partition.device,
+                filesystem=partition.fstype,
+                reachable=_is_listable_directory(mount_path),
+            )
+        )
+    return tuple(sorted(volumes, key=lambda volume: volume.path.lower()))
+
+
 def _browse_shortcut_entries() -> tuple[SharedModelsDirectoryBrowseEntry, ...]:
     """Shortcuts the picker opens on: the filesystem root, home, and mounts.
 
@@ -203,11 +269,13 @@ def browse_shared_models_directories(
     cluttering the common case. Only directory names are returned — never file
     contents.
     """
+    network_volumes = list_network_volumes()
     if path_text is None or path_text.strip() == "":
         return SharedModelsDirectoryBrowseResult(
             path="",
             parent_path=None,
             entries=_browse_shortcut_entries(),
+            network_volumes=network_volumes,
         )
 
     path = Path(path_text).expanduser()
@@ -219,6 +287,7 @@ def browse_shared_models_directories(
             parent_path=None,
             entries=(),
             error=f"Invalid path: {resolve_error}",
+            network_volumes=network_volumes,
         )
 
     try:
@@ -229,6 +298,7 @@ def browse_shared_models_directories(
             parent_path=str(path.parent) if path.parent != path else None,
             entries=(),
             error=f"Cannot reach path: {stat_error.strerror or stat_error}",
+            network_volumes=network_volumes,
         )
 
     if not path_exists:
@@ -237,6 +307,7 @@ def browse_shared_models_directories(
             parent_path=str(path.parent) if path.parent != path else None,
             entries=(),
             error="Path does not exist",
+            network_volumes=network_volumes,
         )
     if not _is_listable_directory(path):
         return SharedModelsDirectoryBrowseResult(
@@ -244,6 +315,7 @@ def browse_shared_models_directories(
             parent_path=str(path.parent) if path.parent != path else None,
             entries=(),
             error="Path is not a directory",
+            network_volumes=network_volumes,
         )
 
     entries: list[SharedModelsDirectoryBrowseEntry] = []
@@ -255,6 +327,7 @@ def browse_shared_models_directories(
             parent_path=str(path.parent) if path.parent != path else None,
             entries=(),
             error=f"Cannot list directory: {list_error.strerror or list_error}",
+            network_volumes=network_volumes,
         )
 
     truncated = False
@@ -280,4 +353,5 @@ def browse_shared_models_directories(
         parent_path=parent_path,
         entries=tuple(entries),
         truncated=truncated,
+        network_volumes=network_volumes,
     )

@@ -6,6 +6,8 @@
     selectedFamily: string | null;
     hasFavorites: boolean;
     hasRecents: boolean;
+    hasShared?: boolean;
+    sharedDirectory?: string | null;
     onSelect: (family: string | null) => void;
   };
 
@@ -14,6 +16,8 @@
     selectedFamily,
     hasFavorites,
     hasRecents,
+    hasShared = false,
+    sharedDirectory = null,
     onSelect,
   }: FamilySidebarProps = $props();
 
@@ -94,6 +98,42 @@
         : 'text-white/40 group-hover:text-white/60'}">Saved</span
     >
   </button>
+
+  <!-- Shared folder (only once a shared folder holds models) -->
+  {#if hasShared}
+    <button
+      type="button"
+      onclick={() => onSelect("shared")}
+      class="group flex flex-col items-center justify-center p-2 rounded transition-all duration-200 cursor-pointer {selectedFamily ===
+      'shared'
+        ? 'bg-cyan-400/20 border-l-2 border-cyan-400'
+        : 'hover:bg-white/5 border-l-2 border-transparent'}"
+      title={sharedDirectory
+        ? `Models in shared storage — ${sharedDirectory}`
+        : "Models in shared storage"}
+    >
+      <svg
+        class="w-5 h-5 {selectedFamily === 'shared'
+          ? 'text-cyan-300'
+          : 'text-white/50 group-hover:text-cyan-300/70'}"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M4 5h16v6H4zM4 15h16v4H4z" />
+        <path d="M8 8h.01M8 17h.01" />
+      </svg>
+      <span
+        class="text-[11px] font-mono mt-0.5 {selectedFamily === 'shared'
+          ? 'text-cyan-300'
+          : 'text-white/40 group-hover:text-white/60'}">Shared</span
+      >
+    </button>
+  {/if}
 
   <!-- Favorites (only show if has favorites) -->
   {#if hasFavorites}

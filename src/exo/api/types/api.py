@@ -510,12 +510,20 @@ class ModelsStorageBrowseEntry(FrozenModel):
     hidden: bool = False
 
 
+class ModelsStorageNetworkVolume(FrozenModel):
+    path: str
+    source: str
+    filesystem: str
+    reachable: bool
+
+
 class ModelsStorageBrowseResponse(FrozenModel):
     path: str
     parent_path: str | None
     entries: list[ModelsStorageBrowseEntry]
     error: str | None = None
     truncated: bool = False
+    network_volumes: list[ModelsStorageNetworkVolume] = []
 
 
 class HuggingFaceTokenResponse(FrozenModel):

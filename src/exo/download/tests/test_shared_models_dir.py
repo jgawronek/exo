@@ -3,6 +3,7 @@
 import json
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +17,7 @@ from exo.download.shared_models_dir import (
     _BROWSE_ENTRY_LIMIT,  # pyright: ignore[reportPrivateUsage]
     browse_shared_models_directories,
     get_shared_models_dir,
+    list_network_volumes,
     set_shared_models_dir,
     validate_shared_models_directory,
 )
@@ -23,6 +25,14 @@ from exo.shared.types.common import ModelId
 
 MODEL_ID = ModelId("test-org/test-model")
 NORMALIZED = MODEL_ID.normalize()
+
+
+class _Partition(NamedTuple):
+    """Stands in for ``psutil.disk_partitions()`` entries."""
+
+    device: str
+    mountpoint: str
+    fstype: str
 
 
 def _create_complete_model(model_dir: Path) -> None:
@@ -184,6 +194,52 @@ class TestBrowseSharedModelsDirectories:
         result = browse_shared_models_directories(str(tmp_path))
         assert not result.truncated
         assert len(result.entries) == 3
+
+
+class TestListNetworkVolumes:
+    def test_keeps_network_filesystems_and_drops_local_ones(
+        self, tmp_path: Path
+    ) -> None:
+        mounted = tmp_path / "huggingface"
+        mounted.mkdir()
+        partitions = [
+            _Partition("/dev/disk3s1s1", "/", "apfs"),
+            _Partition("10.0.10.44:/export/models", str(mounted), "nfs"),
+            _Partition("//jay@nas/media", "/Volumes/media", "smbfs"),
+            _Partition("tmpfs", "/run", "tmpfs"),
+        ]
+        with patch(
+            "exo.download.shared_models_dir.psutil.disk_partitions",
+            return_value=partitions,
+        ):
+            volumes = list_network_volumes()
+
+        by_path = {volume.path: volume for volume in volumes}
+        assert set(by_path) == {str(mounted), "/Volumes/media"}
+        assert by_path[str(mounted)].filesystem == "nfs"
+        assert by_path["/Volumes/media"].filesystem == "smbfs"
+        assert by_path[str(mounted)].source == "10.0.10.44:/export/models"
+        assert by_path[str(mounted)].reachable
+        # The SMB mount point does not exist in the sandbox, so it reads as down.
+        assert not by_path["/Volumes/media"].reachable
+
+    def test_unreadable_partition_table_yields_nothing(self) -> None:
+        with patch(
+            "exo.download.shared_models_dir.psutil.disk_partitions",
+            side_effect=OSError("nope"),
+        ):
+            assert list_network_volumes() == ()
+
+    def test_browse_result_carries_volumes_even_on_error(self, tmp_path: Path) -> None:
+        partitions = [_Partition("10.0.10.44:/export", "/mnt/models", "nfs4")]
+        with patch(
+            "exo.download.shared_models_dir.psutil.disk_partitions",
+            return_value=partitions,
+        ):
+            result = browse_shared_models_directories(str(tmp_path / "missing"))
+
+        assert result.error == "Path does not exist"
+        assert [volume.path for volume in result.network_volumes] == ["/mnt/models"]
 
     def test_stale_mount_root_does_not_sink_the_listing(self, tmp_path: Path) -> None:
         """A dead NFS/SMB mount raises from is_dir(); the other roots survive it."""
