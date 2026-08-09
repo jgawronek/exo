@@ -133,6 +133,18 @@ def load_persisted_shared_models_dir() -> str | None:
     return content or None
 
 
+def _is_listable_directory(path: Path) -> bool:
+    """Whether the path is a directory, treating unreachable mounts as not one.
+
+    A dead network mount raises rather than answering — ESTALE on NFS, ENOTCONN
+    on a dropped SMB share — and one such mount must not sink the whole listing.
+    """
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 def _browse_root_entries() -> tuple[SharedModelsDirectoryBrowseEntry, ...]:
     """Top-level folders users commonly mount network drives under."""
     entries: list[SharedModelsDirectoryBrowseEntry] = []
@@ -140,7 +152,7 @@ def _browse_root_entries() -> tuple[SharedModelsDirectoryBrowseEntry, ...]:
 
     def add(path: Path) -> None:
         resolved = str(path)
-        if resolved in seen or not path.is_dir():
+        if resolved in seen or not _is_listable_directory(path):
             return
         seen.add(resolved)
         entries.append(
@@ -150,7 +162,7 @@ def _browse_root_entries() -> tuple[SharedModelsDirectoryBrowseEntry, ...]:
     home = Path.home()
     add(home)
     for candidate in _BROWSE_ROOT_CANDIDATES:
-        if not candidate.is_dir():
+        if not _is_listable_directory(candidate):
             continue
         add(candidate)
         try:
@@ -193,14 +205,24 @@ def browse_shared_models_directories(
             error=f"Invalid path: {resolve_error}",
         )
 
-    if not path.exists():
+    try:
+        path_exists = path.exists()
+    except OSError as stat_error:
+        return SharedModelsDirectoryBrowseResult(
+            path=str(path),
+            parent_path=str(path.parent) if path.parent != path else None,
+            entries=(),
+            error=f"Cannot reach path: {stat_error.strerror or stat_error}",
+        )
+
+    if not path_exists:
         return SharedModelsDirectoryBrowseResult(
             path=str(path),
             parent_path=str(path.parent) if path.parent != path else None,
             entries=(),
             error="Path does not exist",
         )
-    if not path.is_dir():
+    if not _is_listable_directory(path):
         return SharedModelsDirectoryBrowseResult(
             path=str(path),
             parent_path=str(path.parent) if path.parent != path else None,

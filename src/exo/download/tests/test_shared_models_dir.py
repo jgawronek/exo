@@ -148,3 +148,46 @@ class TestBrowseSharedModelsDirectories:
         assert result.path == ""
         assert result.error is None
         assert isinstance(result.entries, tuple)
+
+    def test_stale_mount_root_does_not_sink_the_listing(self, tmp_path: Path) -> None:
+        """A dead NFS/SMB mount raises from is_dir(); the other roots survive it."""
+        mount_root = tmp_path / "mnt"
+        mount_root.mkdir()
+        (mount_root / "healthy").mkdir()
+        stale = mount_root / "stale"
+        stale.mkdir()
+
+        real_is_dir = Path.is_dir
+
+        def is_dir_with_stale_mount(
+            self: Path, *args: object, **kwargs: object
+        ) -> bool:
+            if self == stale:
+                raise OSError(116, "Stale file handle")
+            return real_is_dir(self, *args, **kwargs)
+
+        with (
+            patch(
+                "exo.download.shared_models_dir._BROWSE_ROOT_CANDIDATES",
+                (mount_root,),
+            ),
+            patch.object(Path, "is_dir", is_dir_with_stale_mount),
+        ):
+            result = browse_shared_models_directories(None)
+
+        names = [entry.name for entry in result.entries]
+        assert "healthy" in names
+        assert "stale" not in names
+
+    def test_unreachable_path_reports_error_instead_of_raising(
+        self, tmp_path: Path
+    ) -> None:
+        def exists_raising_stale(self: Path, *args: object, **kwargs: object) -> bool:
+            raise OSError(116, "Stale file handle")
+
+        with patch.object(Path, "exists", exists_raising_stale):
+            result = browse_shared_models_directories(str(tmp_path))
+
+        assert result.entries == ()
+        assert result.error is not None
+        assert "Stale file handle" in result.error
