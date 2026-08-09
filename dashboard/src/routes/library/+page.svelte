@@ -533,9 +533,24 @@
     }
   }
 
+  // Which field the picker writes back to. The picker always browses the node
+  // serving the dashboard, so for another node's row it is a way to find a path
+  // visually rather than proof that node has it — that node's own status badge
+  // is what confirms it.
+  let browseTarget = $state<
+    { kind: "legacy" } | { kind: "share"; nodeId: string }
+  >({ kind: "legacy" });
+
   async function openSharedDirBrowser() {
+    browseTarget = { kind: "legacy" };
     browsingSharedDir = true;
     await loadBrowseEntries(sharedDirInput.trim() || null);
+  }
+
+  async function openShareMountBrowser(nodeId: string) {
+    browseTarget = { kind: "share", nodeId };
+    browsingSharedDir = true;
+    await loadBrowseEntries(shareMountInputs[nodeId]?.trim() || null);
   }
 
   async function goToTypedPath() {
@@ -557,7 +572,11 @@
   }
 
   function selectBrowseFolder(path: string) {
-    sharedDirInput = path;
+    if (browseTarget.kind === "share") {
+      shareMountInputs = { ...shareMountInputs, [browseTarget.nodeId]: path };
+    } else {
+      sharedDirInput = path;
+    }
     closeSharedDirBrowser();
   }
 
@@ -756,6 +775,10 @@
             >
               Where each node reaches it — paths do not need to match
             </div>
+            <div class="text-[10px] font-mono text-white/35">
+              Browse lists drives and network volumes on the node serving this
+              page; each node confirms its own path below once saved.
+            </div>
             {#each clusterNodeIds as nodeId (nodeId)}
               <div class="flex items-center gap-2">
                 <span
@@ -768,6 +791,14 @@
                   placeholder="not mounted on this node"
                   class="flex-1 min-w-0 bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
                 />
+                <button
+                  type="button"
+                  disabled={browseLoading}
+                  onclick={() => openShareMountBrowser(nodeId)}
+                  class="flex-shrink-0 text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  Browse
+                </button>
               </div>
             {/each}
           </div>
@@ -822,6 +853,11 @@
               >
             </div>
           </div>
+          <div class="text-[10px] font-mono text-white/40">
+            Models here are available on top of each node's own downloads.
+            Choose one and every node loads it from the share instead of
+            downloading its own copy.
+          </div>
           <div class="space-y-1">
             {#each storageNodes as node (node.nodeId)}
               <div class="flex items-center gap-2 text-[11px] font-mono">
@@ -857,7 +893,7 @@
           onclick={beginEditShare}
           class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 transition-colors cursor-pointer"
         >
-          Use a share instead
+          Add shared storage
         </button>
       {/if}
 
