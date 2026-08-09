@@ -6,7 +6,11 @@ from datetime import datetime, timedelta, timezone
 import anyio
 from loguru import logger
 
-from exo.download.shared_models_dir import load_persisted_shared_models_dir
+from exo.download.shared_models_dir import (
+    load_persisted_shared_models_dir,
+    load_persisted_shared_storage,
+    persist_shared_storage,
+)
 from exo.master.placement import (
     add_instance_to_placements,
     cancel_unnecessary_downloads,
@@ -42,6 +46,7 @@ from exo.shared.types.commands import (
     SendInputChunk,
     SetInstanceLink,
     SetSharedModelsDirectory,
+    SetSharedStorage,
     ShiftInstanceLayers,
     TaskCancelled,
     TaskFinished,
@@ -66,6 +71,7 @@ from exo.shared.types.events import (
     NodeGatheredInfo,
     NodeTimedOut,
     SharedModelsDirectorySet,
+    SharedStorageSet,
     TaskCreated,
     TaskDeleted,
     TaskStatusUpdated,
@@ -466,6 +472,11 @@ class Master:
                     await self.event_sender.send(
                         SharedModelsDirectorySet(path=persisted_shared_dir)
                     )
+                persisted_shared_storage = load_persisted_shared_storage()
+                if persisted_shared_storage is not None:
+                    await self.event_sender.send(
+                        SharedStorageSet(storage=persisted_shared_storage)
+                    )
                 for instance_id in sorted(self._recovered_instance_deletions):
                     await self.event_sender.send(
                         InstanceDeleted(instance_id=instance_id)
@@ -768,6 +779,11 @@ class Master:
                         case SetSharedModelsDirectory():
                             generated_events.append(
                                 SharedModelsDirectorySet(path=command.path)
+                            )
+                        case SetSharedStorage():
+                            persist_shared_storage(command.storage)
+                            generated_events.append(
+                                SharedStorageSet(storage=command.storage)
                             )
                         case AddCustomModelCard():
                             generated_events.append(

@@ -123,6 +123,7 @@ EXO_CONFIG_FILE = EXO_CONFIG_HOME / "config.toml"
 
 # Persisted cluster-wide shared models directory (set from the dashboard).
 EXO_SHARED_MODELS_DIR_FILE = EXO_CONFIG_HOME / "shared_models_dir"
+EXO_SHARED_STORAGE_FILE = EXO_CONFIG_HOME / "shared_storage.json"
 
 # libp2p topics for event forwarding
 LIBP2P_LOCAL_EVENTS_TOPIC = "worker_events"

@@ -18,10 +18,15 @@ from pathlib import Path
 from typing import final
 
 import psutil
+from pydantic import ValidationError
 
-from exo.shared.constants import EXO_SHARED_MODELS_DIR_FILE
+from exo.shared.constants import (
+    EXO_SHARED_MODELS_DIR_FILE,
+    EXO_SHARED_STORAGE_FILE,
+)
 from exo.shared.environment import get_compatible_environment_value
-from exo.shared.types.storage import SharedDirectoryStatus
+from exo.shared.types.common import NodeId
+from exo.shared.types.storage import SharedDirectoryStatus, SharedStorage
 from exo.utils.pydantic_ext import FrozenModel
 
 _SHARED_MODELS_DIR_ENVIRONMENT_NAME = "XEO_SHARED_MODELS_DIR"
@@ -133,10 +138,25 @@ def validate_shared_models_directory(path_text: str) -> SharedDirectoryStatus:
     can report the outcome to the cluster.
     """
     path = Path(path_text).expanduser()
-    if not path.exists():
-        return SharedDirectoryStatus(valid=False, error="Path does not exist")
-    if not path.is_dir():
-        return SharedDirectoryStatus(valid=False, error="Path is not a directory")
+    reported = str(path)
+    if not _is_listable_directory(path):
+        # exists() and is_dir() both raise on a dead mount, so distinguish
+        # "missing" from "unreachable" without letting either escape.
+        try:
+            exists = path.exists()
+        except OSError as stat_error:
+            return SharedDirectoryStatus(
+                valid=False,
+                error=f"Cannot reach path: {stat_error.strerror or stat_error}",
+                path=reported,
+            )
+        if not exists:
+            return SharedDirectoryStatus(
+                valid=False, error="Path does not exist", path=reported
+            )
+        return SharedDirectoryStatus(
+            valid=False, error="Path is not a directory", path=reported
+        )
 
     probe = path / f".exo-write-probe-{uuid.uuid4().hex}"
     try:
@@ -144,14 +164,16 @@ def validate_shared_models_directory(path_text: str) -> SharedDirectoryStatus:
         probe.unlink()
     except OSError as write_error:
         return SharedDirectoryStatus(
-            valid=False, error=f"Not writable: {write_error.strerror or write_error}"
+            valid=False,
+            error=f"Not writable: {write_error.strerror or write_error}",
+            path=reported,
         )
 
     try:
         free_bytes = shutil.disk_usage(path).free
     except OSError:
         free_bytes = None
-    return SharedDirectoryStatus(valid=True, free_bytes=free_bytes)
+    return SharedDirectoryStatus(valid=True, free_bytes=free_bytes, path=reported)
 
 
 def persist_shared_models_dir(path_text: str | None) -> None:
@@ -170,6 +192,51 @@ def load_persisted_shared_models_dir() -> str | None:
     except OSError:
         return None
     return content or None
+
+
+def persist_shared_storage(storage: SharedStorage | None) -> None:
+    """Persist the share definition so a master restart can re-announce it."""
+    if storage is None:
+        EXO_SHARED_STORAGE_FILE.unlink(missing_ok=True)
+        return
+    EXO_SHARED_STORAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    EXO_SHARED_STORAGE_FILE.write_text(storage.model_dump_json())
+
+
+def load_persisted_shared_storage() -> SharedStorage | None:
+    """Read the persisted share definition, if this node has one.
+
+    A file written by a newer or broken version must not stop the node from
+    starting, so anything unreadable is treated as "no share configured".
+    """
+    try:
+        content = EXO_SHARED_STORAGE_FILE.read_text().strip()
+    except OSError:
+        return None
+    if not content:
+        return None
+    try:
+        return SharedStorage.model_validate_json(content)
+    except ValidationError:
+        return None
+
+
+def resolve_shared_models_path(
+    storage: SharedStorage | None,
+    legacy_path: str | None,
+    node_id: NodeId,
+) -> str | None:
+    """The path *this* node should use for shared models.
+
+    A configured share is authoritative: the node uses its own entry, and a
+    node with no entry simply has no shared storage. Falling back to the legacy
+    single path there would silently point one node somewhere else, which is the
+    class of mismatch the share exists to prevent. Without a share, the legacy
+    path applies unchanged.
+    """
+    if storage is not None:
+        return storage.path_for(node_id)
+    return legacy_path
 
 
 def _is_listable_directory(path: Path) -> bool:

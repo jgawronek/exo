@@ -10,7 +10,7 @@ from exo.shared.types.chunks import Chunk, InputImageChunk
 from exo.shared.types.common import CommandId, Id, ModelId, NodeId, SessionId, SystemId
 from exo.shared.types.instance_link import InstanceLink, InstanceLinkId
 from exo.shared.types.profiling import LayerExpertActivity, StageTiming
-from exo.shared.types.storage import SharedDirectoryStatus
+from exo.shared.types.storage import SharedDirectoryStatus, SharedStorage
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.worker.downloads import DownloadProgress
 from exo.shared.types.worker.instances import Instance, InstanceId
@@ -165,6 +165,16 @@ class SharedModelsDirectorySet(BaseEvent):
     path: str | None
 
 
+class SharedStorageSet(BaseEvent):
+    """The named shared storage changed (``None`` clears it).
+
+    Indexed by the master; every node looks up its own entry, validates that
+    path locally, and answers with :class:`NodeSharedDirectoryStatusUpdated`.
+    """
+
+    storage: SharedStorage | None
+
+
 class NodeSharedDirectoryStatusUpdated(BaseEvent):
     """One node's local validation result for the shared models directory."""
 
@@ -228,6 +238,7 @@ Event = (
     | CustomModelCardAdded
     | CustomModelCardDeleted
     | SharedModelsDirectorySet
+    | SharedStorageSet
     | NodeSharedDirectoryStatusUpdated
     | InstanceLinkCreated
     | InstanceLinkDeleted

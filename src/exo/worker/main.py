@@ -13,6 +13,7 @@ from exo.download.download_utils import is_read_only_model_dir, resolve_existing
 from exo.download.shared_models_dir import (
     load_persisted_shared_models_dir,
     persist_shared_models_dir,
+    resolve_shared_models_path,
     set_shared_models_dir,
     validate_shared_models_directory,
 )
@@ -256,12 +257,14 @@ class Worker:
                             ] = img
 
     async def _reconcile_shared_models_dir(self) -> None:
-        """Track the cluster's shared models directory setting.
+        """Track the cluster's shared models storage.
 
-        Validates the configured path locally, installs it as the preferred
-        models directory when usable, reports the outcome to the cluster, and
-        persists the setting so it survives restarts (any node can become
-        master and re-announce it).
+        Resolves the setting to *this node's own* path — its entry in the
+        configured share, or the legacy single path when no share is set — then
+        validates that path locally, installs it as the preferred models
+        directory when usable, reports the outcome to the cluster, and persists
+        it so it survives restarts (any node can become master and re-announce
+        it). Nodes are never required to resolve to the same path.
         """
         # Preload the locally persisted value so models on the share resolve
         # before the master re-announces the setting after a restart.
@@ -277,7 +280,11 @@ class Worker:
         reported: str | None = None
         while True:
             await anyio.sleep(1)
-            target = self.state.shared_models_dir
+            target = resolve_shared_models_path(
+                self.state.shared_storage,
+                self.state.shared_models_dir,
+                self.node_id,
+            )
             if target is not None and target != reported:
                 status = await to_thread.run_sync(
                     validate_shared_models_directory, target
@@ -304,6 +311,8 @@ class Worker:
                 # announced itself; before that, state is still recovering.
                 and self.state.master_node_id is not None
             ):
+                # Reached when the setting is cleared outright, and also when a
+                # share is configured that has no entry for this node.
                 set_shared_models_dir(None)
                 await to_thread.run_sync(persist_shared_models_dir, None)
                 applied = None

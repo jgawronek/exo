@@ -48,6 +48,7 @@ from .api import ModelsStorageBrowseResponse as ModelsStorageBrowseResponse
 from .api import ModelsStorageNetworkVolume as ModelsStorageNetworkVolume
 from .api import ModelsStorageNodeStatus as ModelsStorageNodeStatus
 from .api import ModelsStorageResponse as ModelsStorageResponse
+from .api import ModelsStorageShare as ModelsStorageShare
 from .api import NodePowerStats as NodePowerStats
 from .api import PlaceInstanceParams as PlaceInstanceParams
 from .api import PlacementPreview as PlacementPreview
@@ -59,6 +60,8 @@ from .api import SetHuggingFaceTokenParams as SetHuggingFaceTokenParams
 from .api import SetHuggingFaceTokenResponse as SetHuggingFaceTokenResponse
 from .api import SetModelsStorageParams as SetModelsStorageParams
 from .api import SetModelsStorageResponse as SetModelsStorageResponse
+from .api import SetModelsStorageShareParams as SetModelsStorageShareParams
+from .api import SetModelsStorageShareResponse as SetModelsStorageShareResponse
 from .api import StartDownloadParams as StartDownloadParams
 from .api import StartDownloadResponse as StartDownloadResponse
 from .api import StreamingChoiceResponse as StreamingChoiceResponse

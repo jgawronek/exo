@@ -22,7 +22,7 @@ from exo.shared.types.profiling import (
     SystemPerformanceProfile,
     ThunderboltBridgeStatus,
 )
-from exo.shared.types.storage import SharedDirectoryStatus
+from exo.shared.types.storage import SharedDirectoryStatus, SharedStorage
 from exo.shared.types.tasks import Task, TaskId
 from exo.shared.types.worker.downloads import DownloadProgress
 from exo.shared.types.worker.instances import Instance, InstanceId
@@ -89,8 +89,12 @@ class State(FrozenModel):
     # User-added model cards. Workers can reconcile their on-disk custom card cache
     custom_model_cards: Mapping[ModelId, ModelCard] = {}
 
-    # Cluster-wide shared models directory (a mount path identical on every
-    # node). Each node validates it locally and reports its status below.
+    # Shared models storage, in one of two modes. ``shared_storage`` is a named
+    # share each node maps to its own local path; ``shared_models_dir`` is the
+    # older single-path mode, kept working for clusters already using it. The
+    # share wins where both are set. Either way each node validates whatever it
+    # resolved and reports its status below.
+    shared_storage: SharedStorage | None = None
     shared_models_dir: str | None = None
     shared_models_dir_statuses: Mapping[NodeId, SharedDirectoryStatus] = {}
 

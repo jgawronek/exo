@@ -8,6 +8,7 @@ from exo.shared.models.model_cards import ModelCard, ModelId
 from exo.shared.types.chunks import InputImageChunk
 from exo.shared.types.common import CommandId, NodeId, SystemId
 from exo.shared.types.instance_link import InstanceLinkId
+from exo.shared.types.storage import SharedStorage
 from exo.shared.types.text_generation import TextGenerationTaskParams
 from exo.shared.types.worker.instances import Instance, InstanceId, InstanceMeta
 from exo.shared.types.worker.shards import Sharding, ShardMetadata
@@ -104,6 +105,16 @@ class SetSharedModelsDirectory(BaseCommand):
     path: str | None
 
 
+class SetSharedStorage(BaseCommand):
+    """Set (or clear, with ``None``) the named shared storage.
+
+    Carries each node's own local path for the share, so nodes are never asked
+    to agree on one path.
+    """
+
+    storage: SharedStorage | None
+
+
 class AddCustomModelCard(BaseCommand):
     model_card: ModelCard
 
@@ -139,6 +150,7 @@ Command = (
     | TaskFinished
     | SendInputChunk
     | SetSharedModelsDirectory
+    | SetSharedStorage
     | AddCustomModelCard
     | DeleteCustomModelCard
     | SetInstanceLink

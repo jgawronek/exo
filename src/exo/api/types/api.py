@@ -488,11 +488,26 @@ class ModelsStorageNodeStatus(FrozenModel):
     valid: bool
     error: str | None = None
     free_bytes: int | None = None
+    # The path this node resolved. Under a share it differs per node, so the
+    # dashboard cannot infer it from the cluster-wide setting.
+    path: str | None = None
+    # This node's configured entry in the share, even when it never validated.
+    mount_path: str | None = None
+
+
+class ModelsStorageShare(FrozenModel):
+    share_id: str
+    mounts: dict[NodeId, str] = {}
+    source: str | None = None
+    label: str | None = None
 
 
 class ModelsStorageResponse(FrozenModel):
     path: str | None
     per_node: list[ModelsStorageNodeStatus]
+    share: ModelsStorageShare | None = None
+    # Which mode is in effect: a share overrides the legacy single path.
+    mode: Literal["share", "path", "none"] = "none"
 
 
 class SetModelsStorageParams(FrozenModel):
@@ -502,6 +517,20 @@ class SetModelsStorageParams(FrozenModel):
 class SetModelsStorageResponse(FrozenModel):
     command_id: CommandId
     path: str | None
+
+
+class SetModelsStorageShareParams(FrozenModel):
+    """Set the named share, or clear it by omitting ``share_id``."""
+
+    share_id: str | None = None
+    mounts: dict[NodeId, str] = {}
+    source: str | None = None
+    label: str | None = None
+
+
+class SetModelsStorageShareResponse(FrozenModel):
+    command_id: CommandId
+    share: ModelsStorageShare | None
 
 
 class ModelsStorageBrowseEntry(FrozenModel):

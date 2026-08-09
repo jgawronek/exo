@@ -26,6 +26,7 @@ from exo.shared.types.events import (
     NodeTimedOut,
     RunnerStatusUpdated,
     SharedModelsDirectorySet,
+    SharedStorageSet,
     StageTimingsUpdated,
     TaskAcknowledged,
     TaskCreated,
@@ -107,6 +108,8 @@ def event_apply(event: Event, state: State) -> State:
             return apply_custom_model_card_deleted(event, state)
         case SharedModelsDirectorySet():
             return apply_shared_models_directory_set(event, state)
+        case SharedStorageSet():
+            return apply_shared_storage_set(event, state)
         case NodeSharedDirectoryStatusUpdated():
             return apply_node_shared_directory_status_updated(event, state)
         case InstanceCreated():
@@ -688,11 +691,26 @@ def apply_shared_models_directory_set(
     )
 
 
+def apply_shared_storage_set(event: SharedStorageSet, state: State) -> State:
+    if event.storage == state.shared_storage:
+        # Re-announcement of the current value (e.g. after a master restart);
+        # keep the statuses nodes already reported.
+        return state
+    # Old validation results describe the previous share, so drop them and let
+    # every node re-validate whatever it now resolves.
+    return state.model_copy(
+        update={
+            "shared_storage": event.storage,
+            "shared_models_dir_statuses": {},
+        }
+    )
+
+
 def apply_node_shared_directory_status_updated(
     event: NodeSharedDirectoryStatusUpdated, state: State
 ) -> State:
-    if state.shared_models_dir is None:
-        # Stale report from before the setting was cleared.
+    if state.shared_models_dir is None and state.shared_storage is None:
+        # Stale report from before shared storage was cleared.
         return state
     new_statuses: Mapping[NodeId, SharedDirectoryStatus] = {
         **state.shared_models_dir_statuses,

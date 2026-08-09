@@ -93,6 +93,7 @@ from exo.api.types import (
     ModelsStorageNetworkVolume,
     ModelsStorageNodeStatus,
     ModelsStorageResponse,
+    ModelsStorageShare,
     PlaceInstanceParams,
     PlacementPreview,
     PlacementPreviewResponse,
@@ -101,6 +102,8 @@ from exo.api.types import (
     SetHuggingFaceTokenResponse,
     SetModelsStorageParams,
     SetModelsStorageResponse,
+    SetModelsStorageShareParams,
+    SetModelsStorageShareResponse,
     StartDownloadParams,
     StartDownloadResponse,
     ToolCall,
@@ -144,7 +147,10 @@ from exo.download.huggingface_utils import (
     mask_hf_token,
     set_hf_token,
 )
-from exo.download.shared_models_dir import browse_shared_models_directories
+from exo.download.shared_models_dir import (
+    browse_shared_models_directories,
+    resolve_shared_models_path,
+)
 from exo.master.image_store import ImageStore
 from exo.master.placement import place_instance as get_instance_placements
 from exo.master.placement_utils import (
@@ -201,6 +207,7 @@ from exo.shared.types.commands import (
     SendInputChunk,
     SetInstanceLink,
     SetSharedModelsDirectory,
+    SetSharedStorage,
     ShiftInstanceLayers,
     StartDownload,
     TaskCancelled,
@@ -218,6 +225,7 @@ from exo.shared.types.instance_link import InstanceLink, InstanceLinkId
 from exo.shared.types.memory import Memory
 from exo.shared.types.profiling import StageTiming
 from exo.shared.types.state import State
+from exo.shared.types.storage import SharedStorage
 from exo.shared.types.tasks import (
     ImageEdits as ImageEditsTask,
 )
@@ -474,6 +482,7 @@ class API:
         self.app.get("/models/storage")(self.get_models_storage)
         self.app.get("/models/storage/browse")(self.browse_models_storage)
         self.app.put("/models/storage")(self.set_models_storage)
+        self.app.put("/models/storage/share")(self.set_models_storage_share)
         self.app.get("/v1/hf-token")(self.get_hugging_face_token)
         self.app.put("/v1/hf-token")(self.set_hugging_face_token)
         self.app.delete("/v1/hf-token")(self.delete_hugging_face_token)
@@ -2472,17 +2481,98 @@ class API:
         )
 
     async def get_models_storage(self) -> ModelsStorageResponse:
-        return ModelsStorageResponse(
-            path=self.state.shared_models_dir,
-            per_node=[
+        """Report shared storage: the share (or legacy path) and per-node health.
+
+        Every node in the cluster is listed, not just the ones that answered, so
+        a node missing an entry in the share is visible as such rather than
+        silently absent.
+        """
+        share = self.state.shared_storage
+        statuses = self.state.shared_models_dir_statuses
+        node_ids = sorted({*self.state.topology.list_nodes(), *statuses})
+        per_node: list[ModelsStorageNodeStatus] = []
+        for node_id in node_ids:
+            status = statuses.get(node_id)
+            mount_path = share.path_for(node_id) if share is not None else None
+            if status is None and mount_path is None and share is not None:
+                per_node.append(
+                    ModelsStorageNodeStatus(
+                        node_id=node_id,
+                        valid=False,
+                        error="No path configured for this node",
+                    )
+                )
+                continue
+            if status is None:
+                continue
+            per_node.append(
                 ModelsStorageNodeStatus(
                     node_id=node_id,
                     valid=status.valid,
                     error=status.error,
                     free_bytes=status.free_bytes,
+                    path=status.path,
+                    mount_path=mount_path,
                 )
-                for node_id, status in self.state.shared_models_dir_statuses.items()
-            ],
+            )
+        return ModelsStorageResponse(
+            path=self.state.shared_models_dir,
+            per_node=per_node,
+            share=(
+                None
+                if share is None
+                else ModelsStorageShare(
+                    share_id=share.share_id,
+                    mounts=dict(share.mounts),
+                    source=share.source,
+                    label=share.label,
+                )
+            ),
+            mode=(
+                "share"
+                if share is not None
+                else ("path" if self.state.shared_models_dir else "none")
+            ),
+        )
+
+    async def set_models_storage_share(
+        self, payload: SetModelsStorageShareParams
+    ) -> SetModelsStorageShareResponse:
+        """Define the named share, or clear it by sending no ``share_id``.
+
+        Node paths are stored exactly as given: they are deliberately not
+        compared with each other, since the whole point of the share is that a
+        Linux mount and a macOS mount of the same export have different paths.
+        """
+        share_id = payload.share_id.strip() if payload.share_id else None
+        if not share_id:
+            command = SetSharedStorage(storage=None)
+            await self._send(command)
+            return SetModelsStorageShareResponse(
+                command_id=command.command_id, share=None
+            )
+
+        mounts = {
+            node_id: path.strip()
+            for node_id, path in payload.mounts.items()
+            if path.strip()
+        }
+        storage = SharedStorage(
+            share_id=share_id,
+            mounts=mounts,
+            source=payload.source.strip() if payload.source else None,
+            label=payload.label.strip() if payload.label else None,
+        )
+        command = SetSharedStorage(storage=storage)
+        await self._send(command)
+        return SetModelsStorageShareResponse(
+            command_id=command.command_id,
+            share=ModelsStorageShare(
+                share_id=storage.share_id,
+                mounts=dict(storage.mounts),
+                source=storage.source,
+                label=storage.label,
+            ),
         )
 
     async def set_models_storage(
@@ -2507,7 +2597,21 @@ class API:
         every directory is reachable from there. The chosen path must exist at
         the same location on every node.
         """
-        result = browse_shared_models_directories(path, include_hidden=include_hidden)
+        # With shared storage configured, an empty path means "the share",
+        # not this node's filesystem root: the browser must show what the
+        # cluster will actually read, not whichever disk happens to back the
+        # dashboard. Falls back to the local roots when this node cannot
+        # resolve the share, so the picker still works during setup.
+        target = path
+        if target is None or target.strip() == "":
+            resolved = resolve_shared_models_path(
+                self.state.shared_storage,
+                self.state.shared_models_dir,
+                self.node_id,
+            )
+            if resolved:
+                target = resolved
+        result = browse_shared_models_directories(target, include_hidden=include_hidden)
         return ModelsStorageBrowseResponse(
             path=result.path,
             parent_path=result.parent_path,

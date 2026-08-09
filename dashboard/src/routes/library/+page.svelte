@@ -358,6 +358,96 @@
     Object.keys(sharedDirStatuses).length,
   );
 
+  // --- Share mode ---
+  // A share is one logical store that each node reaches by its own local path,
+  // so nothing here ever compares one node's path against another's.
+  type StorageNodeStatus = {
+    nodeId: string;
+    valid: boolean;
+    error?: string | null;
+    freeBytes?: number | null;
+    path?: string | null;
+    mountPath?: string | null;
+  };
+  type StorageShare = {
+    shareId: string;
+    mounts: Record<string, string>;
+    source?: string | null;
+    label?: string | null;
+  };
+
+  let storageShare = $state<StorageShare | null>(null);
+  let storageMode = $state<"share" | "path" | "none">("none");
+  let storageNodes = $state<StorageNodeStatus[]>([]);
+  let editingShare = $state(false);
+  let shareIdInput = $state("models");
+  let shareSourceInput = $state("");
+  let shareMountInputs = $state<Record<string, string>>({});
+  let shareSaving = $state(false);
+  let shareError = $state<string | null>(null);
+
+  async function loadStorageConfig() {
+    try {
+      const response = await fetch("/models/storage");
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        share?: StorageShare | null;
+        mode?: "share" | "path" | "none";
+        perNode?: StorageNodeStatus[];
+      };
+      storageShare = data.share ?? null;
+      storageMode = data.mode ?? "none";
+      storageNodes = data.perNode ?? [];
+    } catch {
+      // Leave the last known config in place; the poll below retries.
+    }
+  }
+
+  function beginEditShare() {
+    shareIdInput = storageShare?.shareId ?? "models";
+    shareSourceInput = storageShare?.source ?? "";
+    const mounts: Record<string, string> = {};
+    for (const nodeId of clusterNodeIds) {
+      mounts[nodeId] = storageShare?.mounts?.[nodeId] ?? "";
+    }
+    shareMountInputs = mounts;
+    shareError = null;
+    editingShare = true;
+  }
+
+  async function saveShare(clear: boolean) {
+    shareSaving = true;
+    shareError = null;
+    try {
+      const body = clear
+        ? { shareId: null, mounts: {} }
+        : {
+            shareId: shareIdInput.trim(),
+            source: shareSourceInput.trim() || null,
+            mounts: Object.fromEntries(
+              Object.entries(shareMountInputs).filter(([, path]) =>
+                path.trim(),
+              ),
+            ),
+          };
+      const response = await fetch("/models/storage/share", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        throw new Error(`Request failed (HTTP ${response.status})`);
+      }
+      editingShare = false;
+      await loadStorageConfig();
+      await refreshState();
+    } catch (err) {
+      shareError = err instanceof Error ? err.message : "Failed to save share";
+    } finally {
+      shareSaving = false;
+    }
+  }
+
   let editingSharedDir = $state(false);
   let sharedDirInput = $state("");
   let sharedDirSaving = $state(false);
@@ -504,6 +594,11 @@
 
   onMount(() => {
     refreshState();
+    loadStorageConfig();
+    // Nodes validate their own path asynchronously, so keep polling for their
+    // verdicts rather than showing a snapshot taken before they replied.
+    const storagePoll = setInterval(loadStorageConfig, 5000);
+    return () => clearInterval(storagePoll);
   });
 </script>
 
@@ -603,6 +698,12 @@
         >
           <span class="w-1.5 h-1.5 bg-xeo-green rounded-full"></span>
           Shared Model Storage
+          {#if storageMode === "share"}
+            <span
+              class="rounded-sm border border-cyan-400/30 bg-cyan-400/10 px-1 py-0.5 text-[9px] tracking-wider text-cyan-300"
+              >SHARE</span
+            >
+          {/if}
         </div>
         {#if sharedDir && sharedDirReportedCount > 0}
           <div
@@ -618,6 +719,147 @@
           </div>
         {/if}
       </div>
+
+      <!-- Share mode: one share, a different local path per node -->
+      {#if editingShare}
+        <div
+          class="rounded border border-cyan-400/25 bg-cyan-400/5 p-3 space-y-3"
+        >
+          <div class="flex items-center gap-2 flex-wrap">
+            <label
+              class="text-[10px] font-mono uppercase tracking-wider text-white/50"
+              for="share-id-input">Share</label
+            >
+            <input
+              id="share-id-input"
+              type="text"
+              bind:value={shareIdInput}
+              placeholder="models"
+              class="w-32 bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-cyan-400/60"
+            />
+            <label
+              class="text-[10px] font-mono uppercase tracking-wider text-white/50"
+              for="share-source-input">Source</label
+            >
+            <input
+              id="share-source-input"
+              type="text"
+              bind:value={shareSourceInput}
+              placeholder="nfs://10.0.10.44/mnt/models (optional)"
+              class="flex-1 min-w-[220px] bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
+            />
+          </div>
+
+          <div class="space-y-1.5">
+            <div
+              class="text-[10px] font-mono uppercase tracking-wider text-white/50"
+            >
+              Where each node reaches it — paths do not need to match
+            </div>
+            {#each clusterNodeIds as nodeId (nodeId)}
+              <div class="flex items-center gap-2">
+                <span
+                  class="w-40 flex-shrink-0 truncate text-xs font-mono text-white/70"
+                  title={nodeId}>{getNodeLabel(nodeId)}</span
+                >
+                <input
+                  type="text"
+                  bind:value={shareMountInputs[nodeId]}
+                  placeholder="not mounted on this node"
+                  class="flex-1 min-w-0 bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
+                />
+              </div>
+            {/each}
+          </div>
+
+          {#if shareError}
+            <div class="text-[11px] font-mono text-red-400">{shareError}</div>
+          {/if}
+
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={shareSaving || !shareIdInput.trim()}
+              onclick={() => saveShare(false)}
+              class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded bg-cyan-400 text-xeo-black hover:bg-cyan-300 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              {shareSaving ? "Saving…" : "Save share"}
+            </button>
+            <button
+              type="button"
+              disabled={shareSaving}
+              onclick={() => (editingShare = false)}
+              class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded border border-xeo-medium-gray/50 text-xeo-light-gray hover:text-white transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      {:else if storageMode === "share" && storageShare}
+        <div
+          class="rounded border border-cyan-400/25 bg-cyan-400/5 p-3 space-y-2"
+        >
+          <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div class="text-xs font-mono text-white/85">
+              {storageShare.shareId}
+              {#if storageShare.source}
+                <span class="text-white/40"> · {storageShare.source}</span>
+              {/if}
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                onclick={beginEditShare}
+                class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 transition-colors cursor-pointer"
+                >Edit</button
+              >
+              <button
+                type="button"
+                disabled={shareSaving}
+                onclick={() => saveShare(true)}
+                class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-xeo-medium-gray/50 text-xeo-light-gray hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
+                >Clear</button
+              >
+            </div>
+          </div>
+          <div class="space-y-1">
+            {#each storageNodes as node (node.nodeId)}
+              <div class="flex items-center gap-2 text-[11px] font-mono">
+                <span
+                  class="w-1.5 h-1.5 rounded-full flex-shrink-0 {node.valid
+                    ? 'bg-green-400'
+                    : 'bg-red-400'}"
+                ></span>
+                <span class="w-40 flex-shrink-0 truncate text-white/70"
+                  >{getNodeLabel(node.nodeId)}</span
+                >
+                <span class="flex-1 min-w-0 truncate text-white/50"
+                  >{node.path ?? node.mountPath ?? "—"}</span
+                >
+                <span
+                  class="flex-shrink-0 {node.valid
+                    ? 'text-green-400'
+                    : 'text-red-400'}"
+                >
+                  {node.valid
+                    ? node.freeBytes != null
+                      ? `${formatBytes(node.freeBytes)} free`
+                      : "ready"
+                    : (node.error ?? "unavailable")}
+                </span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {:else}
+        <button
+          type="button"
+          onclick={beginEditShare}
+          class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 transition-colors cursor-pointer"
+        >
+          Use a share instead
+        </button>
+      {/if}
 
       {#if editingSharedDir}
         <form
