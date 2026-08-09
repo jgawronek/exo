@@ -407,13 +407,19 @@
     shareIdInput = storageShare?.shareId ?? "models";
     shareSourceInput = storageShare?.source ?? "";
     const existing = Object.values(storageShare?.mounts ?? {});
-    shareRootInput =
-      existing.length > 0 && existing.every((path) => path === existing[0])
-        ? existing[0]
-        : "";
+    const commonest = existing
+      .slice()
+      .sort(
+        (a, b) =>
+          existing.filter((p) => p === b).length -
+          existing.filter((p) => p === a).length,
+      )[0];
+    shareRootInput = commonest ?? "";
+    showShareAdvanced = existing.some((path) => path !== commonest);
     const mounts: Record<string, string> = {};
     for (const nodeId of clusterNodeIds) {
-      mounts[nodeId] = storageShare?.mounts?.[nodeId] ?? "";
+      const configured = storageShare?.mounts?.[nodeId] ?? "";
+      mounts[nodeId] = configured === shareRootInput ? "" : configured;
     }
     shareMountInputs = mounts;
     shareError = null;
@@ -549,6 +555,7 @@
   >({ kind: "legacy" });
 
   let shareRootInput = $state("");
+  let showShareAdvanced = $state(false);
 
   async function openShareRootBrowser() {
     browseTarget = { kind: "shareRoot" };
@@ -567,13 +574,15 @@
     return `${scheme}://${volume.source}`;
   }
 
+  function deriveShareId(path: string): string {
+    const name = path.replace(/\/+$/, "").split("/").pop();
+    return name || "models";
+  }
+
   function applyShareRoot(path: string) {
     shareRootInput = path;
-    const mounts: Record<string, string> = {};
-    for (const nodeId of clusterNodeIds) mounts[nodeId] = path;
-    shareMountInputs = mounts;
     const derived = deriveShareSource(path);
-    if (derived && !shareSourceInput.trim()) shareSourceInput = derived;
+    if (derived) shareSourceInput = derived;
   }
 
   async function openSharedDirBrowser() {
@@ -787,31 +796,6 @@
           <div class="flex items-center gap-2 flex-wrap">
             <label
               class="text-[10px] font-mono uppercase tracking-wider text-white/50"
-              for="share-id-input">Share</label
-            >
-            <input
-              id="share-id-input"
-              type="text"
-              bind:value={shareIdInput}
-              placeholder="models"
-              class="w-32 bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-cyan-400/60"
-            />
-            <label
-              class="text-[10px] font-mono uppercase tracking-wider text-white/50"
-              for="share-source-input">Source</label
-            >
-            <input
-              id="share-source-input"
-              type="text"
-              bind:value={shareSourceInput}
-              placeholder="nfs://10.0.10.44/mnt/models (optional)"
-              class="flex-1 min-w-[220px] bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
-            />
-          </div>
-
-          <div class="flex items-center gap-2 flex-wrap">
-            <label
-              class="text-[10px] font-mono uppercase tracking-wider text-white/50"
               for="share-root-input">Shared folder</label
             >
             <input
@@ -820,8 +804,8 @@
               value={shareRootInput}
               oninput={(event) =>
                 applyShareRoot((event.currentTarget as HTMLInputElement).value)}
-              placeholder="pick the folder the nodes should share"
-              class="flex-1 min-w-[240px] bg-xeo-black/60 border border-cyan-400/30 rounded px-2 py-1 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
+              placeholder="pick a folder every node can read"
+              class="flex-1 min-w-[240px] bg-xeo-black/60 border border-cyan-400/30 rounded px-2 py-1.5 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
             />
             <button
               type="button"
@@ -833,53 +817,18 @@
             </button>
           </div>
 
-          <div class="space-y-1.5">
-            <div
-              class="text-[10px] font-mono uppercase tracking-wider text-white/50"
-            >
-              Per node — only change where a node reaches it elsewhere
-            </div>
-            <div class="text-[10px] font-mono text-white/35">
-              Picking above fills every node. Browse lists drives and network
-              volumes on the node serving this page; each node confirms its own
-              path below once saved.
-            </div>
-            {#each clusterNodeIds as nodeId (nodeId)}
-              <div class="flex items-center gap-2">
-                <span
-                  class="w-40 flex-shrink-0 truncate text-xs font-mono text-white/70"
-                  title={nodeId}>{getNodeLabel(nodeId)}</span
-                >
-                <input
-                  type="text"
-                  bind:value={shareMountInputs[nodeId]}
-                  placeholder="not mounted on this node"
-                  class="flex-1 min-w-0 bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
-                />
-                <button
-                  type="button"
-                  disabled={browseLoading}
-                  onclick={() => openShareMountBrowser(nodeId)}
-                  class="flex-shrink-0 text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 transition-colors disabled:opacity-50 cursor-pointer"
-                >
-                  Browse
-                </button>
-              </div>
-            {/each}
-          </div>
-
           {#if shareError}
             <div class="text-[11px] font-mono text-red-400">{shareError}</div>
           {/if}
 
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              disabled={shareSaving || !shareIdInput.trim()}
+              disabled={shareSaving || !shareRootInput.trim()}
               onclick={() => saveShare(false)}
               class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded bg-cyan-400 text-xeo-black hover:bg-cyan-300 transition-colors disabled:opacity-50 cursor-pointer"
             >
-              {shareSaving ? "Saving…" : "Save share"}
+              {shareSaving ? "Saving…" : "Save"}
             </button>
             <button
               type="button"
@@ -889,7 +838,47 @@
             >
               Cancel
             </button>
+            <button
+              type="button"
+              onclick={() => (showShareAdvanced = !showShareAdvanced)}
+              class="text-[10px] font-mono uppercase tracking-wider text-white/35 hover:text-white/60 transition-colors cursor-pointer"
+            >
+              {showShareAdvanced ? "Hide" : "Per-node paths"}
+            </button>
           </div>
+
+          <!-- Only for the uncommon case: a node that reaches the same share
+               at a different path. Hidden by default so the simple flow is
+               browse, select, save. -->
+          {#if showShareAdvanced}
+            <div class="space-y-1.5 pt-2 border-t border-xeo-medium-gray/30">
+              <div class="text-[10px] font-mono text-white/35">
+                Every node uses the folder above unless overridden here.
+              </div>
+              {#each clusterNodeIds as nodeId (nodeId)}
+                <div class="flex items-center gap-2">
+                  <span
+                    class="w-40 flex-shrink-0 truncate text-xs font-mono text-white/70"
+                    title={nodeId}>{getNodeLabel(nodeId)}</span
+                  >
+                  <input
+                    type="text"
+                    bind:value={shareMountInputs[nodeId]}
+                    placeholder="same as above"
+                    class="flex-1 min-w-0 bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
+                  />
+                  <button
+                    type="button"
+                    disabled={browseLoading}
+                    onclick={() => openShareMountBrowser(nodeId)}
+                    class="flex-shrink-0 text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    Browse
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       {:else if storageMode === "share" && storageShare}
         <div
