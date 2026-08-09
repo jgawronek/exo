@@ -406,6 +406,11 @@
   function beginEditShare() {
     shareIdInput = storageShare?.shareId ?? "models";
     shareSourceInput = storageShare?.source ?? "";
+    const existing = Object.values(storageShare?.mounts ?? {});
+    shareRootInput =
+      existing.length > 0 && existing.every((path) => path === existing[0])
+        ? existing[0]
+        : "";
     const mounts: Record<string, string> = {};
     for (const nodeId of clusterNodeIds) {
       mounts[nodeId] = storageShare?.mounts?.[nodeId] ?? "";
@@ -538,8 +543,38 @@
   // visually rather than proof that node has it — that node's own status badge
   // is what confirms it.
   let browseTarget = $state<
-    { kind: "legacy" } | { kind: "share"; nodeId: string }
+    | { kind: "legacy" }
+    | { kind: "share"; nodeId: string }
+    | { kind: "shareRoot" }
   >({ kind: "legacy" });
+
+  let shareRootInput = $state("");
+
+  async function openShareRootBrowser() {
+    browseTarget = { kind: "shareRoot" };
+    browsingSharedDir = true;
+    await loadBrowseEntries(shareRootInput.trim() || null);
+  }
+
+  // A folder on a network mount already knows where it came from, so fill the
+  // source in rather than making the user retype what the mount table says.
+  function deriveShareSource(path: string): string | null {
+    const volume = browseNetworkVolumes
+      .filter((v) => path === v.path || path.startsWith(`${v.path}/`))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    if (!volume) return null;
+    const scheme = /smb|cifs/i.test(volume.filesystem) ? "smb" : "nfs";
+    return `${scheme}://${volume.source}`;
+  }
+
+  function applyShareRoot(path: string) {
+    shareRootInput = path;
+    const mounts: Record<string, string> = {};
+    for (const nodeId of clusterNodeIds) mounts[nodeId] = path;
+    shareMountInputs = mounts;
+    const derived = deriveShareSource(path);
+    if (derived && !shareSourceInput.trim()) shareSourceInput = derived;
+  }
 
   async function openSharedDirBrowser() {
     browseTarget = { kind: "legacy" };
@@ -572,6 +607,11 @@
   }
 
   function selectBrowseFolder(path: string) {
+    if (browseTarget.kind === "shareRoot") {
+      applyShareRoot(path);
+      closeSharedDirBrowser();
+      return;
+    }
     if (browseTarget.kind === "share") {
       shareMountInputs = { ...shareMountInputs, [browseTarget.nodeId]: path };
     } else {
@@ -769,15 +809,40 @@
             />
           </div>
 
+          <div class="flex items-center gap-2 flex-wrap">
+            <label
+              class="text-[10px] font-mono uppercase tracking-wider text-white/50"
+              for="share-root-input">Shared folder</label
+            >
+            <input
+              id="share-root-input"
+              type="text"
+              value={shareRootInput}
+              oninput={(event) =>
+                applyShareRoot((event.currentTarget as HTMLInputElement).value)}
+              placeholder="pick the folder the nodes should share"
+              class="flex-1 min-w-[240px] bg-xeo-black/60 border border-cyan-400/30 rounded px-2 py-1 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
+            />
+            <button
+              type="button"
+              disabled={browseLoading}
+              onclick={openShareRootBrowser}
+              class="flex-shrink-0 text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded bg-cyan-400 text-xeo-black hover:bg-cyan-300 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              Browse
+            </button>
+          </div>
+
           <div class="space-y-1.5">
             <div
               class="text-[10px] font-mono uppercase tracking-wider text-white/50"
             >
-              Where each node reaches it — paths do not need to match
+              Per node — only change where a node reaches it elsewhere
             </div>
             <div class="text-[10px] font-mono text-white/35">
-              Browse lists drives and network volumes on the node serving this
-              page; each node confirms its own path below once saved.
+              Picking above fills every node. Browse lists drives and network
+              volumes on the node serving this page; each node confirms its own
+              path below once saved.
             </div>
             {#each clusterNodeIds as nodeId (nodeId)}
               <div class="flex items-center gap-2">
