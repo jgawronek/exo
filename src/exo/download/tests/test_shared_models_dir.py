@@ -13,6 +13,7 @@ from exo.download.download_utils import (
     select_download_dir,
 )
 from exo.download.shared_models_dir import (
+    browse_shared_models_directories,
     get_shared_models_dir,
     set_shared_models_dir,
     validate_shared_models_directory,
@@ -124,3 +125,26 @@ class TestSharedDirPreference:
         set_shared_models_dir(shared)
         with patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)):
             assert select_download_dir(required_bytes=1) == shared
+
+
+class TestBrowseSharedModelsDirectories:
+    def test_lists_child_directories(self, tmp_path: Path) -> None:
+        (tmp_path / "caches").mkdir()
+        (tmp_path / "readme.txt").write_text("not a directory")
+        (tmp_path / ".hidden").mkdir()
+        result = browse_shared_models_directories(str(tmp_path))
+        assert result.error is None
+        assert result.path == str(tmp_path.resolve())
+        assert [entry.name for entry in result.entries] == ["caches"]
+        assert result.entries[0].path == str((tmp_path / "caches").resolve())
+
+    def test_missing_path_returns_error(self, tmp_path: Path) -> None:
+        result = browse_shared_models_directories(str(tmp_path / "missing"))
+        assert result.entries == ()
+        assert result.error == "Path does not exist"
+
+    def test_empty_path_returns_roots_without_error(self) -> None:
+        result = browse_shared_models_directories(None)
+        assert result.path == ""
+        assert result.error is None
+        assert isinstance(result.entries, tuple)

@@ -43,6 +43,8 @@ from .api import Logprobs as Logprobs
 from .api import LogprobsContentItem as LogprobsContentItem
 from .api import ModelList as ModelList
 from .api import ModelListModel as ModelListModel
+from .api import ModelsStorageBrowseEntry as ModelsStorageBrowseEntry
+from .api import ModelsStorageBrowseResponse as ModelsStorageBrowseResponse
 from .api import ModelsStorageNodeStatus as ModelsStorageNodeStatus
 from .api import ModelsStorageResponse as ModelsStorageResponse
 from .api import NodePowerStats as NodePowerStats

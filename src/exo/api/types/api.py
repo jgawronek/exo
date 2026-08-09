@@ -504,6 +504,18 @@ class SetModelsStorageResponse(FrozenModel):
     path: str | None
 
 
+class ModelsStorageBrowseEntry(FrozenModel):
+    name: str
+    path: str
+
+
+class ModelsStorageBrowseResponse(FrozenModel):
+    path: str
+    parent_path: str | None
+    entries: list[ModelsStorageBrowseEntry]
+    error: str | None = None
+
+
 class HuggingFaceTokenResponse(FrozenModel):
     """Status of this node's Hugging Face token. Never carries the token itself."""
 

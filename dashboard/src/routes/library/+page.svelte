@@ -362,11 +362,66 @@
   let sharedDirInput = $state("");
   let sharedDirSaving = $state(false);
   let sharedDirError = $state<string | null>(null);
+  let browsingSharedDir = $state(false);
+  let browseLoading = $state(false);
+  let browseError = $state<string | null>(null);
+  let browsePath = $state("");
+  let browseParentPath = $state<string | null>(null);
+  let browseEntries = $state<Array<{ name: string; path: string }>>([]);
 
   function beginEditSharedDir() {
     sharedDirInput = sharedDir ?? "";
     sharedDirError = null;
+    browsingSharedDir = false;
     editingSharedDir = true;
+  }
+
+  function cancelEditSharedDir() {
+    editingSharedDir = false;
+    browsingSharedDir = false;
+    browseError = null;
+  }
+
+  async function loadBrowseEntries(path: string | null) {
+    browseLoading = true;
+    browseError = null;
+    try {
+      const query =
+        path && path.length > 0 ? `?path=${encodeURIComponent(path)}` : "";
+      const response = await fetch(`/models/storage/browse${query}`);
+      if (!response.ok) {
+        throw new Error(`Browse failed (HTTP ${response.status})`);
+      }
+      const data = (await response.json()) as {
+        path: string;
+        parent_path: string | null;
+        entries: Array<{ name: string; path: string }>;
+        error?: string | null;
+      };
+      browsePath = data.path;
+      browseParentPath = data.parent_path;
+      browseEntries = data.entries ?? [];
+      if (data.error) {
+        browseError = data.error;
+      }
+    } catch (err) {
+      browseEntries = [];
+      browseError =
+        err instanceof Error ? err.message : "Failed to browse folders";
+    } finally {
+      browseLoading = false;
+    }
+  }
+
+  async function openSharedDirBrowser() {
+    browsingSharedDir = true;
+    await loadBrowseEntries(sharedDirInput.trim() || null);
+  }
+
+  function selectBrowseFolder(path: string) {
+    sharedDirInput = path;
+    browsingSharedDir = false;
+    browseError = null;
   }
 
   async function saveSharedDir(path: string | null) {
@@ -382,6 +437,7 @@
         throw new Error(`Request failed (HTTP ${response.status})`);
       }
       editingSharedDir = false;
+      browsingSharedDir = false;
       await refreshState();
     } catch (err) {
       sharedDirError =
@@ -523,6 +579,14 @@
             class="flex-1 min-w-[260px] bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-3 py-1.5 text-xs font-mono text-white placeholder:text-white/30 focus:outline-none focus:border-xeo-green/60"
           />
           <button
+            type="button"
+            disabled={sharedDirSaving || browseLoading}
+            onclick={openSharedDirBrowser}
+            class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded border border-xeo-green/40 text-xeo-green hover:bg-xeo-green/10 transition-colors disabled:opacity-50 cursor-pointer"
+          >
+            Browse
+          </button>
+          <button
             type="submit"
             disabled={sharedDirSaving}
             class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded bg-xeo-green text-xeo-black hover:bg-xeo-green-darker transition-colors disabled:opacity-50 cursor-pointer"
@@ -532,12 +596,96 @@
           <button
             type="button"
             disabled={sharedDirSaving}
-            onclick={() => (editingSharedDir = false)}
+            onclick={cancelEditSharedDir}
             class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded border border-xeo-medium-gray/50 text-xeo-light-gray hover:text-white transition-colors cursor-pointer"
           >
             Cancel
           </button>
         </form>
+
+        {#if browsingSharedDir}
+          <div
+            class="rounded border border-xeo-medium-gray/40 bg-xeo-black/50 overflow-hidden"
+          >
+            <div
+              class="flex items-center justify-between gap-2 px-3 py-2 border-b border-xeo-medium-gray/30"
+            >
+              <div class="min-w-0">
+                <div
+                  class="text-[10px] font-mono uppercase tracking-wider text-xeo-light-gray/70"
+                >
+                  Select folder on this API node
+                </div>
+                <div
+                  class="text-xs font-mono text-white/80 truncate"
+                  title={browsePath || "Mount points & home"}
+                >
+                  {browsePath || "Mount points & home"}
+                </div>
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                {#if browsePath !== ""}
+                  <button
+                    type="button"
+                    disabled={browseLoading}
+                    onclick={() => loadBrowseEntries(browseParentPath)}
+                    class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-xeo-medium-gray/40 text-xeo-light-gray hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    Up
+                  </button>
+                {/if}
+                {#if browsePath}
+                  <button
+                    type="button"
+                    disabled={browseLoading || !!browseError}
+                    onclick={() => selectBrowseFolder(browsePath)}
+                    class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded bg-xeo-green text-xeo-black hover:bg-xeo-green-darker transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    Use this folder
+                  </button>
+                {/if}
+              </div>
+            </div>
+            <div class="max-h-56 overflow-y-auto">
+              {#if browseLoading}
+                <div class="px-3 py-4 text-xs font-mono text-white/50">
+                  Loading folders&hellip;
+                </div>
+              {:else if browseError && browseEntries.length === 0}
+                <div class="px-3 py-4 text-xs font-mono text-red-400">
+                  {browseError}
+                </div>
+              {:else if browseEntries.length === 0}
+                <div class="px-3 py-4 text-xs font-mono text-white/40">
+                  No subfolders here
+                </div>
+              {:else}
+                {#each browseEntries as entry (entry.path)}
+                  <button
+                    type="button"
+                    onclick={() => loadBrowseEntries(entry.path)}
+                    class="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-mono text-white/80 hover:bg-xeo-green/10 hover:text-xeo-green transition-colors border-b border-xeo-medium-gray/20 last:border-b-0 cursor-pointer"
+                  >
+                    <span class="text-xeo-green/70">▸</span>
+                    <span class="truncate">{entry.name}</span>
+                  </button>
+                {/each}
+              {/if}
+            </div>
+            {#if browseError && browseEntries.length > 0}
+              <div
+                class="px-3 py-2 text-[11px] font-mono text-yellow-400 border-t border-xeo-medium-gray/30"
+              >
+                {browseError}
+              </div>
+            {/if}
+            <div
+              class="px-3 py-2 text-[10px] font-mono text-white/40 border-t border-xeo-medium-gray/30"
+            >
+              Path must be mounted at the same location on every cluster node.
+            </div>
+          </div>
+        {/if}
       {:else}
         <div class="flex items-center gap-3 flex-wrap">
           {#if sharedDir}
@@ -617,8 +765,8 @@
         {/if}
         <div class="text-[10px] font-mono text-white/40">
           Models load from and download to this location when it is valid on a
-          node; otherwise that node falls back to its local directory. The
-          path must be the same mount point on every node.
+          node; otherwise that node falls back to its local directory. The path
+          must be the same mount point on every node.
         </div>
       {/if}
     </div>

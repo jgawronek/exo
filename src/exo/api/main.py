@@ -88,6 +88,8 @@ from exo.api.types import (
     InstanceLinkResponse,
     ModelList,
     ModelListModel,
+    ModelsStorageBrowseEntry,
+    ModelsStorageBrowseResponse,
     ModelsStorageNodeStatus,
     ModelsStorageResponse,
     PlaceInstanceParams,
@@ -141,6 +143,7 @@ from exo.download.huggingface_utils import (
     mask_hf_token,
     set_hf_token,
 )
+from exo.download.shared_models_dir import browse_shared_models_directories
 from exo.master.image_store import ImageStore
 from exo.master.placement import place_instance as get_instance_placements
 from exo.master.placement_utils import (
@@ -468,6 +471,7 @@ class API:
         self.app.delete("/models/custom/{model_id:path}")(self.delete_custom_model)
         self.app.get("/models/search")(self.search_models)
         self.app.get("/models/storage")(self.get_models_storage)
+        self.app.get("/models/storage/browse")(self.browse_models_storage)
         self.app.put("/models/storage")(self.set_models_storage)
         self.app.get("/v1/hf-token")(self.get_hugging_face_token)
         self.app.put("/v1/hf-token")(self.set_hugging_face_token)
@@ -2489,6 +2493,26 @@ class API:
         command = SetSharedModelsDirectory(path=path_text)
         await self._send(command)
         return SetModelsStorageResponse(command_id=command.command_id, path=path_text)
+
+    async def browse_models_storage(
+        self,
+        path: Annotated[str | None, Query()] = None,
+    ) -> ModelsStorageBrowseResponse:
+        """List directories for the Shared Model Storage folder picker.
+
+        Browses the API node's local filesystem (including mounted network
+        volumes). The chosen path must exist at the same location on every node.
+        """
+        result = browse_shared_models_directories(path)
+        return ModelsStorageBrowseResponse(
+            path=result.path,
+            parent_path=result.parent_path,
+            entries=[
+                ModelsStorageBrowseEntry(name=entry.name, path=entry.path)
+                for entry in result.entries
+            ],
+            error=result.error,
+        )
 
     async def get_hugging_face_token(self) -> HuggingFaceTokenResponse:
         """Report token status for THIS node only.
