@@ -438,21 +438,23 @@
     shareSaving = true;
     shareError = null;
     try {
+      const source =
+        shareSourceInput.trim() || deriveShareSource(shareRootInput) || "";
+      // With a source, each node reaches the share itself, and the picked
+      // folder is only where THIS node sees it — never a path to push onto
+      // other nodes. Without a source the folder is the contract: every node
+      // uses it unless overridden.
+      const defaultMount = source ? "" : shareRootInput.trim();
       const body = clear
         ? { shareId: null, mounts: {} }
         : {
             shareId: shareIdInput.trim() || deriveShareId(shareRootInput),
-            source:
-              shareSourceInput.trim() || deriveShareSource(shareRootInput),
-            // A blank override means "same as the shared folder" — or, when a
-            // network share was picked instead of a folder, "attach it
-            // yourself": nodes auto-mount the source and need no path here.
+            source: source || null,
             mounts: Object.fromEntries(
               clusterNodeIds
                 .map((nodeId) => [
                   nodeId,
-                  (shareMountInputs[nodeId] || "").trim() ||
-                    shareRootInput.trim(),
+                  (shareMountInputs[nodeId] || "").trim() || defaultMount,
                 ])
                 .filter(([, path]) => path),
             ),
