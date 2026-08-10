@@ -16,6 +16,7 @@ from exo.download.share_mounts import (
     parse_avahi_smb_output,
     parse_nfs_uri,
     parse_showmount_output,
+    parse_smb_mount_table,
     parse_smb_uri,
     parse_smbutil_view_output,
 )
@@ -96,6 +97,33 @@ class TestParseNfsUri:
     def test_rejects_what_it_cannot_resolve(self, uri: str) -> None:
         with pytest.raises(ShareMountError):
             parse_nfs_uri(uri)
+
+
+LINUX_MOUNT_OUTPUT = """\
+sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)
+//10.0.10.44/aimodels on /mnt/aimodels type cifs (ro,relatime,vers=3.1.1)
+10.0.10.44:/mnt/lexar4tb/exo-models on /mnt/exo-models type nfs4 (ro,relatime)
+"""
+
+DARWIN_MOUNT_OUTPUT = """\
+/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)
+//guest:@10.0.10.44/AIModels on /Users/jayg/.exo/mounts/aimodels (smbfs, nodev)
+"""
+
+
+class TestParseSmbMountTable:
+    def test_finds_a_linux_cifs_mount(self) -> None:
+        found = parse_smb_mount_table(LINUX_MOUNT_OUTPUT, "10.0.10.44", "aimodels")
+        assert found == Path("/mnt/aimodels")
+
+    def test_finds_a_darwin_smbfs_mount_despite_user_and_case(self) -> None:
+        found = parse_smb_mount_table(DARWIN_MOUNT_OUTPUT, "10.0.10.44", "aimodels")
+        assert found == Path("/Users/jayg/.exo/mounts/aimodels")
+
+    def test_other_shares_do_not_match(self) -> None:
+        assert (
+            parse_smb_mount_table(LINUX_MOUNT_OUTPUT, "10.0.10.44", "models") is None
+        )
 
 
 class TestGvfsMountPoint:

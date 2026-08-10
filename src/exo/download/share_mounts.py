@@ -148,6 +148,29 @@ def _mount_darwin(host: str, share: str) -> Path:
     raise ShareMountError(f"Mounted //{host}/{share} but {mount_point} is empty")
 
 
+def parse_smb_mount_table(output: str, host: str, share: str) -> Path | None:
+    """Find a kernel mount of ``//host/share`` in ``mount`` output.
+
+    Matches Linux cifs (``//host/share on /mnt type cifs``) and macOS smbfs
+    (``//guest:@host/share on /path (smbfs``); gvfs mounts do not appear here.
+    The share name compares case-insensitively, as SMB servers treat it.
+    """
+    pattern = re.compile(
+        rf"^//(?:[^@/]*@)?{re.escape(host)}/{re.escape(share)} on (.+?)(?: type | \()",
+        re.IGNORECASE,
+    )
+    for line in output.splitlines():
+        match = pattern.match(line)
+        if match is not None:
+            return Path(match.group(1))
+    return None
+
+
+def _find_existing_smb_mount(host: str, share: str) -> Path | None:
+    """A kernel mount of the share, preferred over anything gvfs offers."""
+    return parse_smb_mount_table(_run(["mount"]), host, share)
+
+
 def _find_existing_nfs_mount(host: str, export: str) -> Path | None:
     """Locate a kernel NFS mount of ``host:/export`` in the mount table."""
     output = _run(["mount"])
@@ -192,6 +215,12 @@ def ensure_share_mounted(uri: str) -> Path:
             f" and it is picked up automatically."
         )
     host, share = parse_smb_uri(uri)
+    # A kernel mount of the same share (fstab cifs on Linux, Finder or manual
+    # smbfs on macOS) beats anything we would create — on Linux by roughly 5x,
+    # since the fallback there is userspace gvfs.
+    existing = _find_existing_smb_mount(host, share)
+    if existing is not None and _is_listable(existing):
+        return existing
     if sys.platform == "darwin":
         return _mount_darwin(host, share)
     return _mount_linux(host, share)
