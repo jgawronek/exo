@@ -13,6 +13,7 @@ from exo.api.types import ImageEditsTaskParams
 from exo.download.download_utils import is_read_only_model_dir, resolve_existing_model
 from exo.download.share_mounts import ShareMountError, ensure_share_mounted
 from exo.download.shared_models_dir import (
+    get_shared_models_dir,
     load_persisted_shared_models_dir,
     persist_shared_models_dir,
     persist_shared_storage,
@@ -27,9 +28,10 @@ from exo.routing.event_router import (
 )
 from exo.shared.apply import apply
 from exo.shared.constants import EXO_MAX_INSTANCE_RETRIES
-from exo.shared.models.model_cards import ModelId, card_cache
+from exo.shared.models.model_cards import ModelCard, ModelId, card_cache
 from exo.shared.types.chunks import InputImageChunk
 from exo.shared.types.commands import (
+    AddCustomModelCard,
     DeleteInstance,
     ForwarderCommand,
     ForwarderDownloadCommand,
@@ -102,6 +104,18 @@ RUNNER_CANCEL_TIMEOUT_SECONDS = 10
 # otherwise deadlock the whole instance permanently. Restating makes that
 # state self-correcting instead.
 RUNNER_STATUS_REPUBLISH_SECONDS = 5
+
+
+def _list_model_directory_names(directory: Path) -> list[str]:
+    """Subdirectory names of a models directory; empty when unreachable."""
+    try:
+        return [
+            entry.name
+            for entry in directory.iterdir()
+            if entry.is_dir() and not entry.name.startswith(".")
+        ]
+    except OSError:
+        return []
 
 
 def diverged_runner_statuses(
@@ -194,6 +208,7 @@ class Worker:
                 tg.start_soon(self._event_applier)
                 tg.start_soon(self._poll_connection_updates)
                 tg.start_soon(self._reconcile_custom_cards)
+                tg.start_soon(self._discover_shared_models)
                 tg.start_soon(self._reconcile_shared_models_dir)
                 tg.start_soon(self._republish_runner_statuses)
         except* (EventRouterBrokenResourceError, EventRouterClosedResourceError):
@@ -434,6 +449,55 @@ class Worker:
                 reported = None
                 last_status = None
                 logger.info("Shared models directory cleared")
+
+    async def _discover_shared_models(self) -> None:
+        """Announce complete models copied into shared storage by hand.
+
+        The download scan only reports models it already has a card for, so a
+        directory dropped into the share under an unknown id never appeared
+        anywhere. Derive the id from the directory name, fetch a card for it,
+        and share the card with the cluster; the next scan pass then lists the
+        model like any other download.
+        """
+        retry_at: dict[str, float] = {}
+        while True:
+            await anyio.sleep(60)
+            shared_dir = get_shared_models_dir()
+            if shared_dir is None:
+                continue
+            names = await to_thread.run_sync(
+                _list_model_directory_names, shared_dir, abandon_on_cancel=True
+            )
+            for name in names:
+                if "--" not in name:
+                    continue
+                now = time.monotonic()
+                if now < retry_at.get(name, 0.0):
+                    continue
+                retry_at[name] = now + 600
+                model_id = ModelId(name.replace("--", "/", 1))
+                if card_cache.get(model_id) is not None:
+                    continue
+                try:
+                    card = await ModelCard.load(model_id)
+                except Exception as load_error:
+                    logger.warning(
+                        f"Shared storage has '{name}' but no model card "
+                        f"could be fetched for it: {load_error}"
+                    )
+                    continue
+                found = await to_thread.run_sync(
+                    resolve_existing_model, model_id, card, abandon_on_cancel=True
+                )
+                if found is None:
+                    continue  # still copying; retried after the cooldown
+                logger.info(f"Discovered shared model {model_id}, announcing its card")
+                await self.command_sender.send(
+                    ForwarderCommand(
+                        origin=self._system_id,
+                        command=AddCustomModelCard(model_card=card),
+                    )
+                )
 
     async def _reconcile_custom_cards(self) -> None:
         while True:
