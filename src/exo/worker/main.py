@@ -1,4 +1,5 @@
 import hashlib
+import time
 from collections import defaultdict
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from loguru import logger
 
 from exo.api.types import ImageEditsTaskParams
 from exo.download.download_utils import is_read_only_model_dir, resolve_existing_model
+from exo.download.share_mounts import ShareMountError, ensure_share_mounted
 from exo.download.shared_models_dir import (
     load_persisted_shared_models_dir,
     persist_shared_models_dir,
@@ -49,6 +51,7 @@ from exo.shared.types.events import (
 )
 from exo.shared.types.multiaddr import Multiaddr
 from exo.shared.types.state import State
+from exo.shared.types.storage import SharedDirectoryStatus
 from exo.shared.types.tasks import (
     CancelTask,
     ConnectToGroup,
@@ -275,11 +278,16 @@ class Worker:
                 validate_shared_models_directory, persisted
             )
             if preload_status.valid:
-                set_shared_models_dir(Path(persisted).expanduser())
+                set_shared_models_dir(
+                    Path(persisted).expanduser(), preload_status.writable
+                )
 
         applied: str | None = persisted
         reported: str | None = None
         persisted_storage = self.state.shared_storage
+        automount_uri: str | None = None
+        automount_path: str | None = None
+        automount_retry_at = 0.0
         while True:
             await anyio.sleep(1)
             # Every node keeps its own copy of the share definition. Node ids
@@ -294,12 +302,48 @@ class Worker:
                 self.state.shared_models_dir,
                 self.node_id,
             )
+            # No path recorded for this node but the share names its source:
+            # attach it ourselves. Guest SMB mounts unprivileged on both
+            # platforms, so selecting a share is all the configuration there is.
+            storage = self.state.shared_storage
+            source = storage.source if storage is not None else None
+            if target is None and source is not None and source.startswith("smb://"):
+                now = time.monotonic()
+                if source != automount_uri or (
+                    automount_path is None and now >= automount_retry_at
+                ):
+                    automount_uri = source
+                    automount_retry_at = now + 90
+                    try:
+                        mounted = await to_thread.run_sync(ensure_share_mounted, source)
+                        automount_path = str(mounted)
+                        logger.info(f"Attached share {source} at {mounted}")
+                    except ShareMountError as mount_error:
+                        automount_path = None
+                        logger.warning(
+                            f"Could not attach share {source}: {mount_error}"
+                        )
+                        await self.event_sender.send(
+                            NodeSharedDirectoryStatusUpdated(
+                                node_id=self.node_id,
+                                status=SharedDirectoryStatus(
+                                    valid=False,
+                                    error=f"Could not attach share: {mount_error}",
+                                ),
+                            )
+                        )
+                target = automount_path
+            elif source != automount_uri:
+                # Share changed or cleared; forget the old attachment state.
+                automount_uri = None
+                automount_path = None
             if target is not None and target != reported:
                 status = await to_thread.run_sync(
                     validate_shared_models_directory, target
                 )
                 set_shared_models_dir(
-                    Path(target).expanduser() if status.valid else None
+                    Path(target).expanduser() if status.valid else None,
+                    status.writable,
                 )
                 await to_thread.run_sync(persist_shared_models_dir, target)
                 applied = target

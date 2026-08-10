@@ -368,6 +368,7 @@
     freeBytes?: number | null;
     path?: string | null;
     mountPath?: string | null;
+    writable?: boolean | null;
   };
   type StorageShare = {
     shareId: string;
@@ -424,6 +425,7 @@
     shareMountInputs = mounts;
     shareError = null;
     editingShare = true;
+    loadNetworkServers();
   }
 
   async function saveShare(clear: boolean) {
@@ -436,8 +438,9 @@
             shareId: shareIdInput.trim() || deriveShareId(shareRootInput),
             source:
               shareSourceInput.trim() || deriveShareSource(shareRootInput),
-            // Every node gets the shared folder; a blank override means
-            // "same as above", not "this node has no path".
+            // A blank override means "same as the shared folder" — or, when a
+            // network share was picked instead of a folder, "attach it
+            // yourself": nodes auto-mount the source and need no path here.
             mounts: Object.fromEntries(
               clusterNodeIds
                 .map((nodeId) => [
@@ -563,6 +566,62 @@
 
   let shareRootInput = $state("");
   let showShareAdvanced = $state(false);
+  let netServers = $state<Array<{ host: string; name: string }>>([]);
+  let netShares = $state<Array<{ name: string; uri: string }>>([]);
+  let netSelectedServer = $state<string | null>(null);
+  let netServerInput = $state("");
+  let netLoading = $state(false);
+  let netError = $state<string | null>(null);
+
+  async function loadNetworkServers() {
+    netLoading = true;
+    netError = null;
+    try {
+      const response = await fetch("/models/storage/network");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = (await response.json()) as {
+        servers?: Array<{ host: string; name: string }>;
+      };
+      netServers = data.servers ?? [];
+    } catch (err) {
+      netError = err instanceof Error ? err.message : "Discovery failed";
+    } finally {
+      netLoading = false;
+    }
+  }
+
+  async function loadNetworkShares(host: string) {
+    netLoading = true;
+    netError = null;
+    netSelectedServer = host;
+    netShares = [];
+    try {
+      const response = await fetch(
+        `/models/storage/network?server=${encodeURIComponent(host)}`,
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = (await response.json()) as {
+        shares?: Array<{ name: string; uri: string }>;
+        error?: string | null;
+      };
+      netShares = data.shares ?? [];
+      if (data.error) netError = data.error;
+    } catch (err) {
+      netError = err instanceof Error ? err.message : "Could not list shares";
+    } finally {
+      netLoading = false;
+    }
+  }
+
+  function pickNetworkShare(share: { name: string; uri: string }) {
+    // The nodes attach the share themselves; no paths to fill in.
+    shareIdInput = share.name;
+    shareSourceInput = share.uri;
+    shareRootInput = "";
+    shareMountInputs = Object.fromEntries(
+      clusterNodeIds.map((nodeId) => [nodeId, ""]),
+    );
+  }
 
   async function openShareRootBrowser() {
     browseTarget = { kind: "shareRoot" };
@@ -588,8 +647,7 @@
 
   function applyShareRoot(path: string) {
     shareRootInput = path;
-    const derived = deriveShareSource(path);
-    if (derived) shareSourceInput = derived;
+    shareSourceInput = deriveShareSource(path) ?? "";
   }
 
   async function openSharedDirBrowser() {
@@ -800,10 +858,80 @@
         <div
           class="rounded border border-cyan-400/25 bg-cyan-400/5 p-3 space-y-3"
         >
+          <div class="space-y-1.5">
+            <div
+              class="text-[10px] font-mono uppercase tracking-wider text-cyan-300/70"
+            >
+              On the network
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+              {#each netServers as server (server.host)}
+                <button
+                  type="button"
+                  disabled={netLoading}
+                  onclick={() => loadNetworkShares(server.host)}
+                  class="text-xs font-mono px-2.5 py-1 rounded border transition-colors disabled:opacity-50 cursor-pointer {netSelectedServer ===
+                  server.host
+                    ? 'border-cyan-400/60 text-cyan-300 bg-cyan-400/10'
+                    : 'border-xeo-medium-gray/50 text-white/70 hover:text-white'}"
+                >
+                  {server.name}
+                  <span class="text-white/35">{server.host}</span>
+                </button>
+              {/each}
+              <input
+                type="text"
+                bind:value={netServerInput}
+                placeholder="or a server address"
+                class="w-44 bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1 text-xs font-mono text-white placeholder:text-white/25 focus:outline-none focus:border-cyan-400/60"
+              />
+              <button
+                type="button"
+                disabled={netLoading || !netServerInput.trim()}
+                onclick={() => loadNetworkShares(netServerInput.trim())}
+                class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                Connect
+              </button>
+            </div>
+            {#if netLoading}
+              <div class="text-[11px] font-mono text-white/40">
+                Looking around&hellip;
+              </div>
+            {:else if netSelectedServer && netShares.length > 0}
+              <div class="flex items-center gap-2 flex-wrap">
+                {#each netShares as share (share.uri)}
+                  <button
+                    type="button"
+                    onclick={() => pickNetworkShare(share)}
+                    class="text-xs font-mono px-2.5 py-1 rounded border transition-colors cursor-pointer {shareSourceInput ===
+                    share.uri
+                      ? 'border-cyan-400 text-xeo-black bg-cyan-400'
+                      : 'border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10'}"
+                  >
+                    {share.name}
+                  </button>
+                {/each}
+              </div>
+            {:else if netSelectedServer}
+              <div class="text-[11px] font-mono text-white/40">
+                No guest shares on {netSelectedServer}
+              </div>
+            {/if}
+            {#if netError}
+              <div class="text-[11px] font-mono text-red-400">{netError}</div>
+            {/if}
+            {#if shareSourceInput.startsWith("smb://")}
+              <div class="text-[11px] font-mono text-cyan-300/80">
+                {shareSourceInput} — every node attaches this automatically.
+              </div>
+            {/if}
+          </div>
+
           <div class="flex items-center gap-2 flex-wrap">
             <label
               class="text-[10px] font-mono uppercase tracking-wider text-white/50"
-              for="share-root-input">Shared folder</label
+              for="share-root-input">Or a folder</label
             >
             <input
               id="share-root-input"
@@ -831,7 +959,8 @@
           <div class="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              disabled={shareSaving || !shareRootInput.trim()}
+              disabled={shareSaving ||
+                (!shareRootInput.trim() && !shareSourceInput.trim())}
               onclick={() => saveShare(false)}
               class="text-xs font-mono uppercase tracking-wider px-3 py-1.5 rounded bg-cyan-400 text-xeo-black hover:bg-cyan-300 transition-colors disabled:opacity-50 cursor-pointer"
             >
@@ -933,6 +1062,12 @@
                 <span class="flex-1 min-w-0 truncate text-white/50"
                   >{node.path ?? node.mountPath ?? "—"}</span
                 >
+                {#if node.valid && node.writable === false}
+                  <span
+                    class="flex-shrink-0 rounded-sm border border-cyan-400/30 bg-cyan-400/10 px-1 py-0.5 text-[9px] tracking-wider text-cyan-300"
+                    >READ-ONLY</span
+                  >
+                {/if}
                 <span
                   class="flex-shrink-0 {node.valid
                     ? 'text-green-400'
@@ -1373,7 +1508,7 @@
           Browse Folder
         </h3>
         <p class="mt-1 text-[11px] font-mono text-white/45">
-          Select a folder on this API node. Same path must exist on every node.
+          Folders and network volumes on the node serving this page.
         </p>
       </div>
       <button
@@ -1444,67 +1579,60 @@
     </div>
 
     <div class="flex-1 overflow-y-auto">
-      {#if browsePath === "" && !browseLoading}
+      {#if !browseLoading && browseNetworkVolumes.length > 0}
         <div class="border-b border-xeo-medium-gray/30 bg-xeo-black/30">
           <div
             class="px-4 pt-3 pb-1 text-[10px] font-mono uppercase tracking-wider text-cyan-300/70"
           >
             Network volumes on this node
           </div>
-          {#if browseNetworkVolumes.length === 0}
-            <div class="px-4 pb-3 text-[11px] font-mono text-white/35">
-              None mounted. A share has to be mounted here before it can be
-              picked — there is no path to point the cluster at otherwise.
-            </div>
-          {:else}
-            {#each browseNetworkVolumes as volume (volume.path)}
-              <button
-                type="button"
-                disabled={!volume.reachable}
-                onclick={() => loadBrowseEntries(volume.path)}
-                class="w-full flex items-start gap-3 px-4 py-2 text-left transition-colors border-t border-xeo-medium-gray/15 {volume.reachable
-                  ? 'hover:bg-cyan-400/10 cursor-pointer'
-                  : 'opacity-60 cursor-not-allowed'}"
+          {#each browseNetworkVolumes as volume (volume.path)}
+            <button
+              type="button"
+              disabled={!volume.reachable}
+              onclick={() => loadBrowseEntries(volume.path)}
+              class="w-full flex items-start gap-3 px-4 py-2 text-left transition-colors border-t border-xeo-medium-gray/15 {volume.reachable
+                ? 'hover:bg-cyan-400/10 cursor-pointer'
+                : 'opacity-60 cursor-not-allowed'}"
+            >
+              <svg
+                class="w-4 h-4 mt-0.5 flex-shrink-0 {volume.reachable
+                  ? 'text-cyan-300/80'
+                  : 'text-red-400/70'}"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.75"
               >
-                <svg
-                  class="w-4 h-4 mt-0.5 flex-shrink-0 {volume.reachable
-                    ? 'text-cyan-300/80'
-                    : 'text-red-400/70'}"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.75"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M4 5h16v6H4zM4 15h16v4H4zM8 8h.01M8 17h.01"
-                  />
-                </svg>
-                <span class="min-w-0 flex-1">
-                  <span class="flex items-center gap-2">
-                    <span class="text-sm font-mono text-white/85 truncate"
-                      >{volume.path}</span
-                    >
-                    <span
-                      class="flex-shrink-0 rounded-sm border border-cyan-400/30 bg-cyan-400/10 px-1 py-0.5 text-[9px] font-mono tracking-wider text-cyan-300"
-                      >{volume.filesystem.toUpperCase()}</span
-                    >
-                    {#if !volume.reachable}
-                      <span
-                        class="flex-shrink-0 rounded-sm border border-red-400/30 bg-red-400/10 px-1 py-0.5 text-[9px] font-mono tracking-wider text-red-300"
-                        >UNREACHABLE</span
-                      >
-                    {/if}
-                  </span>
-                  <span
-                    class="block text-[10px] font-mono text-white/40 truncate"
-                    title={volume.source}>← {volume.source}</span
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M4 5h16v6H4zM4 15h16v4H4zM8 8h.01M8 17h.01"
+                />
+              </svg>
+              <span class="min-w-0 flex-1">
+                <span class="flex items-center gap-2">
+                  <span class="text-sm font-mono text-white/85 truncate"
+                    >{volume.path}</span
                   >
+                  <span
+                    class="flex-shrink-0 rounded-sm border border-cyan-400/30 bg-cyan-400/10 px-1 py-0.5 text-[9px] font-mono tracking-wider text-cyan-300"
+                    >{volume.filesystem.toUpperCase()}</span
+                  >
+                  {#if !volume.reachable}
+                    <span
+                      class="flex-shrink-0 rounded-sm border border-red-400/30 bg-red-400/10 px-1 py-0.5 text-[9px] font-mono tracking-wider text-red-300"
+                      >UNREACHABLE</span
+                    >
+                  {/if}
                 </span>
-              </button>
-            {/each}
-          {/if}
+                <span
+                  class="block text-[10px] font-mono text-white/40 truncate"
+                  title={volume.source}>← {volume.source}</span
+                >
+              </span>
+            </button>
+          {/each}
         </div>
       {/if}
       {#if browseLoading}
@@ -1574,7 +1702,8 @@
       class="flex items-center justify-between gap-3 p-4 border-t border-xeo-green/10 bg-xeo-medium-gray/20"
     >
       <p class="text-[10px] font-mono text-white/40 max-w-[55%]">
-        Network drives must be mounted at the same path on every node.
+        A network folder has to be mounted on a node before that node can read
+        it.
       </p>
       <div class="flex items-center gap-2 flex-shrink-0">
         <button

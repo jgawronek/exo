@@ -19,6 +19,10 @@ class SharedDirectoryStatus(FrozenModel):
     error: str | None = None
     free_bytes: int | None = None
     path: str | None = None
+    # Readable-but-not-writable is a normal state for a network share of
+    # models: fine to load from, never a download target. Defaults True so
+    # events from older nodes keep their old meaning.
+    writable: bool = True
 
 
 @final

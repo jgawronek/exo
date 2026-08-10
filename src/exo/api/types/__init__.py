@@ -45,6 +45,9 @@ from .api import ModelList as ModelList
 from .api import ModelListModel as ModelListModel
 from .api import ModelsStorageBrowseEntry as ModelsStorageBrowseEntry
 from .api import ModelsStorageBrowseResponse as ModelsStorageBrowseResponse
+from .api import ModelsStorageNetworkResponse as ModelsStorageNetworkResponse
+from .api import ModelsStorageNetworkServer as ModelsStorageNetworkServer
+from .api import ModelsStorageNetworkShare as ModelsStorageNetworkShare
 from .api import ModelsStorageNetworkVolume as ModelsStorageNetworkVolume
 from .api import ModelsStorageNodeStatus as ModelsStorageNodeStatus
 from .api import ModelsStorageResponse as ModelsStorageResponse

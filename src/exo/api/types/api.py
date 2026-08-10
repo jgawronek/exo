@@ -488,6 +488,7 @@ class ModelsStorageNodeStatus(FrozenModel):
     valid: bool
     error: str | None = None
     free_bytes: int | None = None
+    writable: bool = True
     # The path this node resolved. Under a share it differs per node, so the
     # dashboard cannot infer it from the cluster-wide setting.
     path: str | None = None
@@ -531,6 +532,25 @@ class SetModelsStorageShareParams(FrozenModel):
 class SetModelsStorageShareResponse(FrozenModel):
     command_id: CommandId
     share: ModelsStorageShare | None
+
+
+class ModelsStorageNetworkServer(FrozenModel):
+    host: str
+    name: str
+
+
+class ModelsStorageNetworkShare(FrozenModel):
+    name: str
+    uri: str
+
+
+class ModelsStorageNetworkResponse(FrozenModel):
+    """LAN file servers, or one server's shares when ``server`` was asked for."""
+
+    servers: list[ModelsStorageNetworkServer] = []
+    shares: list[ModelsStorageNetworkShare] = []
+    server: str | None = None
+    error: str | None = None
 
 
 class ModelsStorageBrowseEntry(FrozenModel):

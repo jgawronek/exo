@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal, NamedTuple, cast
 from uuid import uuid4
 
 import anyio
-from anyio import BrokenResourceError, ClosedResourceError
+from anyio import BrokenResourceError, ClosedResourceError, to_thread
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -90,6 +90,9 @@ from exo.api.types import (
     ModelListModel,
     ModelsStorageBrowseEntry,
     ModelsStorageBrowseResponse,
+    ModelsStorageNetworkResponse,
+    ModelsStorageNetworkServer,
+    ModelsStorageNetworkShare,
     ModelsStorageNetworkVolume,
     ModelsStorageNodeStatus,
     ModelsStorageResponse,
@@ -146,6 +149,11 @@ from exo.download.huggingface_utils import (
     get_hf_token_source,
     mask_hf_token,
     set_hf_token,
+)
+from exo.download.share_mounts import (
+    ShareMountError,
+    discover_smb_servers,
+    list_smb_shares,
 )
 from exo.download.shared_models_dir import (
     browse_shared_models_directories,
@@ -483,6 +491,7 @@ class API:
         self.app.get("/models/storage/browse")(self.browse_models_storage)
         self.app.put("/models/storage")(self.set_models_storage)
         self.app.put("/models/storage/share")(self.set_models_storage_share)
+        self.app.get("/models/storage/network")(self.get_models_storage_network)
         self.app.get("/v1/hf-token")(self.get_hugging_face_token)
         self.app.put("/v1/hf-token")(self.set_hugging_face_token)
         self.app.delete("/v1/hf-token")(self.delete_hugging_face_token)
@@ -2513,6 +2522,7 @@ class API:
                     free_bytes=status.free_bytes,
                     path=status.path,
                     mount_path=mount_path,
+                    writable=status.writable,
                 )
             )
         return ModelsStorageResponse(
@@ -2533,6 +2543,37 @@ class API:
                 if share is not None
                 else ("path" if self.state.shared_models_dir else "none")
             ),
+        )
+
+    async def get_models_storage_network(
+        self,
+        server: Annotated[str | None, Query()] = None,
+    ) -> ModelsStorageNetworkResponse:
+        """Discover LAN file servers, or list one server's guest shares.
+
+        Runs on the node serving the dashboard. Discovery is best-effort;
+        a host that does not announce itself can still be queried directly.
+        """
+        if server is not None:
+            try:
+                shares = await to_thread.run_sync(list_smb_shares, server)
+            except ShareMountError as list_error:
+                return ModelsStorageNetworkResponse(
+                    server=server, error=str(list_error)
+                )
+            return ModelsStorageNetworkResponse(
+                server=server,
+                shares=[
+                    ModelsStorageNetworkShare(name=share.name, uri=share.uri)
+                    for share in shares
+                ],
+            )
+        servers = await to_thread.run_sync(discover_smb_servers)
+        return ModelsStorageNetworkResponse(
+            servers=[
+                ModelsStorageNetworkServer(host=found.host, name=found.name)
+                for found in servers
+            ]
         )
 
     async def set_models_storage_share(

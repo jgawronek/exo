@@ -33,7 +33,10 @@ from exo.download.huggingface_utils import (
     get_hf_endpoint,
     get_hf_token,
 )
-from exo.download.shared_models_dir import get_shared_models_dir
+from exo.download.shared_models_dir import (
+    get_shared_models_dir,
+    get_writable_shared_models_dir,
+)
 from exo.shared.constants import (
     EXO_DEFAULT_MODELS_DIR,
     EXO_MODELS_DIRS,
@@ -186,10 +189,11 @@ def model_search_dirs() -> tuple[Path, ...]:
 def writable_model_dirs() -> tuple[Path, ...]:
     """Writable model directories in download-preference order.
 
-    The runtime-configured shared directory (when valid on this node) is
-    preferred over the local per-node directories.
+    The runtime-configured shared directory is preferred over the local
+    per-node directories — but only when it accepts writes; a read-only share
+    is for loading, and downloads must land locally.
     """
-    shared_dir = get_shared_models_dir()
+    shared_dir = get_writable_shared_models_dir()
     if shared_dir is None:
         return EXO_MODELS_DIRS
     return (shared_dir, *(d for d in EXO_MODELS_DIRS if d != shared_dir))
@@ -221,7 +225,7 @@ def build_model_path(model_id: ModelId) -> Path:
     found = resolve_existing_model(model_id)
     if found is not None:
         return found
-    shared_dir = get_shared_models_dir()
+    shared_dir = get_writable_shared_models_dir()
     if shared_dir is not None:
         return shared_dir / model_id.normalize()
     return EXO_DEFAULT_MODELS_DIR / model_id.normalize()

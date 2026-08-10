@@ -30,6 +30,7 @@ from exo.shared.types.storage import SharedDirectoryStatus, SharedStorage
 from exo.utils.pydantic_ext import FrozenModel
 
 _SHARED_MODELS_DIR_ENVIRONMENT_NAME = "XEO_SHARED_MODELS_DIR"
+_SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME = "XEO_SHARED_MODELS_DIR_READ_ONLY"
 _BROWSE_ENTRY_LIMIT = 200
 _BROWSE_ROOT_CANDIDATES = (
     Path("/Volumes"),
@@ -99,18 +100,31 @@ class _SharedModelsDirectoryHolder:
         self._path: Path | None = (
             Path(environment_value).expanduser() if environment_value else None
         )
+        self._writable: bool = (
+            os.environ.get(_SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME) != "1"
+        )
 
     @property
     def path(self) -> Path | None:
         return self._path
 
-    def set(self, path: Path | None) -> None:
+    @property
+    def writable_path(self) -> Path | None:
+        return self._path if self._writable else None
+
+    def set(self, path: Path | None, writable: bool = True) -> None:
         self._path = path
+        self._writable = writable
         # Export for runner subprocesses spawned after this point.
         if path is None:
             os.environ.pop(_SHARED_MODELS_DIR_ENVIRONMENT_NAME, None)
+            os.environ.pop(_SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME, None)
         else:
             os.environ[_SHARED_MODELS_DIR_ENVIRONMENT_NAME] = str(path)
+            if writable:
+                os.environ.pop(_SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME, None)
+            else:
+                os.environ[_SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME] = "1"
 
 
 _holder = _SharedModelsDirectoryHolder()
@@ -121,13 +135,18 @@ def get_shared_models_dir() -> Path | None:
     return _holder.path
 
 
-def set_shared_models_dir(path: Path | None) -> None:
+def set_shared_models_dir(path: Path | None, writable: bool = True) -> None:
     """Install (or clear) the validated shared models directory.
 
     Only call this with a path that passed
     :func:`validate_shared_models_directory` on this node.
     """
-    _holder.set(path)
+    _holder.set(path, writable)
+
+
+def get_writable_shared_models_dir() -> Path | None:
+    """The shared directory, only when downloads may be written to it."""
+    return _holder.writable_path
 
 
 def validate_shared_models_directory(path_text: str) -> SharedDirectoryStatus:
@@ -159,21 +178,22 @@ def validate_shared_models_directory(path_text: str) -> SharedDirectoryStatus:
         )
 
     probe = path / f".exo-write-probe-{uuid.uuid4().hex}"
+    writable = True
     try:
         probe.write_bytes(b"")
         probe.unlink()
-    except OSError as write_error:
-        return SharedDirectoryStatus(
-            valid=False,
-            error=f"Not writable: {write_error.strerror or write_error}",
-            path=reported,
-        )
+    except OSError:
+        # Read-only is a normal state for a share of models: valid to load
+        # from, excluded from download targets.
+        writable = False
 
     try:
         free_bytes = shutil.disk_usage(path).free
     except OSError:
         free_bytes = None
-    return SharedDirectoryStatus(valid=True, free_bytes=free_bytes, path=reported)
+    return SharedDirectoryStatus(
+        valid=True, free_bytes=free_bytes, path=reported, writable=writable
+    )
 
 
 def persist_shared_models_dir(path_text: str | None) -> None:
