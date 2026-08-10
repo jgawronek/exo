@@ -52,6 +52,8 @@ from .api import ModelsStorageNetworkVolume as ModelsStorageNetworkVolume
 from .api import ModelsStorageNodeStatus as ModelsStorageNodeStatus
 from .api import ModelsStorageResponse as ModelsStorageResponse
 from .api import ModelsStorageShare as ModelsStorageShare
+from .api import MountShareParams as MountShareParams
+from .api import MountShareResponse as MountShareResponse
 from .api import NodePowerStats as NodePowerStats
 from .api import PlaceInstanceParams as PlaceInstanceParams
 from .api import PlacementPreview as PlacementPreview

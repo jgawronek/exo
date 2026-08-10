@@ -14,6 +14,7 @@ from exo.download.share_mounts import (
     ShareMountError,
     _gvfs_mount_point,  # pyright: ignore[reportPrivateUsage]
     parse_avahi_smb_output,
+    parse_showmount_output,
     parse_smb_uri,
     parse_smbutil_view_output,
 )
@@ -90,6 +91,28 @@ class TestParseAvahi:
 
     def test_garbage_yields_nothing(self) -> None:
         assert parse_avahi_smb_output("not avahi output\n\n") == ()
+
+
+SHOWMOUNT_OUTPUT = """\
+Exports list on 10.0.10.44:
+/mnt/lexar4tb/exo-models            10.0.10.0/24
+/mnt/lexar4tb/huggingface/models    10.0.10.0/24
+/mnt/lexar4tb/huggingface/incoming  10.0.10.0/24
+"""
+
+
+class TestParseShowmount:
+    def test_extracts_exports_with_friendly_names(self) -> None:
+        exports = parse_showmount_output(SHOWMOUNT_OUTPUT, "10.0.10.44")
+        assert [(e.name, e.protocol) for e in exports] == [
+            ("exo-models", "nfs"),
+            ("incoming", "nfs"),
+            ("models", "nfs"),
+        ]
+        assert exports[0].uri == "nfs://10.0.10.44/mnt/lexar4tb/exo-models"
+
+    def test_headers_and_noise_are_ignored(self) -> None:
+        assert parse_showmount_output("no exports here\n\n", "h") == ()
 
 
 class TestParseSmbutilView:

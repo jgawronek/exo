@@ -49,6 +49,7 @@ class TestBrowseResponseWireFormat:
             "error",
             "truncated",
             "networkVolumes",
+            "availableShares",
         }
 
     def test_parent_path_survives_serialisation(self) -> None:
@@ -56,7 +57,13 @@ class TestBrowseResponseWireFormat:
 
     def test_network_volume_fields_are_camel_case(self) -> None:
         volume = _first_item(_payload(), "networkVolumes")
-        assert set(volume) == {"path", "source", "filesystem", "reachable"}
+        assert set(volume) == {
+            "path",
+            "source",
+            "filesystem",
+            "reachable",
+            "label",
+        }
         assert volume["source"] == "10.0.10.44:/export/models"
 
     def test_entry_fields_are_stable(self) -> None:

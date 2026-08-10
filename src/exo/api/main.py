@@ -97,6 +97,8 @@ from exo.api.types import (
     ModelsStorageNodeStatus,
     ModelsStorageResponse,
     ModelsStorageShare,
+    MountShareParams,
+    MountShareResponse,
     PlaceInstanceParams,
     PlacementPreview,
     PlacementPreviewResponse,
@@ -153,6 +155,8 @@ from exo.download.huggingface_utils import (
 from exo.download.share_mounts import (
     ShareMountError,
     discover_smb_servers,
+    ensure_share_mounted,
+    list_lan_shares,
     list_smb_shares,
 )
 from exo.download.shared_models_dir import (
@@ -493,6 +497,7 @@ class API:
         self.app.put("/models/storage")(self.set_models_storage)
         self.app.put("/models/storage/share")(self.set_models_storage_share)
         self.app.get("/models/storage/network")(self.get_models_storage_network)
+        self.app.post("/models/storage/mount")(self.mount_models_storage_share)
         self.app.get("/v1/hf-token")(self.get_hugging_face_token)
         self.app.put("/v1/hf-token")(self.set_hugging_face_token)
         self.app.delete("/v1/hf-token")(self.delete_hugging_face_token)
@@ -2662,6 +2667,39 @@ class API:
             if resolved:
                 target = resolved
         result = browse_shared_models_directories(target, include_hidden=include_hidden)
+        available: list[ModelsStorageNetworkShare] = []
+        if path is None or path.strip() == "":
+            # Only at the root view, where the picker lists shares: what do
+            # LAN servers offer that this node has not attached yet?
+            mounted = " ".join(
+                volume.source.lower() for volume in result.network_volumes
+            )
+            try:
+                servers = await to_thread.run_sync(discover_smb_servers)
+            except ShareMountError:
+                servers = ()
+            for found in servers[:6]:
+                try:
+                    offered = await to_thread.run_sync(list_lan_shares, found.host)
+                except ShareMountError:
+                    continue
+                for share in offered:
+                    # A share already mounted (by export path or by name on
+                    # the same host) belongs in the mounted list, not here.
+                    tail = share.uri.split("://", 1)[-1].lower()
+                    export = "/" + tail.split("/", 1)[-1]
+                    if found.host in mounted and (
+                        export in mounted or share.name.lower() in mounted
+                    ):
+                        continue
+                    available.append(
+                        ModelsStorageNetworkShare(
+                            name=share.name,
+                            uri=share.uri,
+                            protocol=share.protocol,
+                            host=found.host,
+                        )
+                    )
         return ModelsStorageBrowseResponse(
             path=result.path,
             parent_path=result.parent_path,
@@ -2683,7 +2721,22 @@ class API:
                 )
                 for volume in result.network_volumes
             ],
+            available_shares=available,
         )
+
+    async def mount_models_storage_share(
+        self, payload: MountShareParams
+    ) -> MountShareResponse:
+        """Attach a guest SMB share to THIS node and return where it landed.
+
+        Turns "available on the LAN" into "browsable here" in one click. NFS
+        is refused with the reason: mounting it needs root, which exo lacks.
+        """
+        try:
+            mounted = await to_thread.run_sync(ensure_share_mounted, payload.uri)
+        except ShareMountError as mount_error:
+            return MountShareResponse(path=None, error=str(mount_error))
+        return MountShareResponse(path=str(mounted))
 
     async def get_hugging_face_token(self) -> HuggingFaceTokenResponse:
         """Report token status for THIS node only.

@@ -493,6 +493,35 @@
       label?: string;
     }>
   >([]);
+  let browseAvailableShares = $state<
+    Array<{ name: string; uri: string; protocol: string; host: string }>
+  >([]);
+  let mountingUri = $state<string | null>(null);
+
+  async function mountAndBrowse(share: { uri: string }) {
+    mountingUri = share.uri;
+    browseError = null;
+    try {
+      const response = await fetch("/models/storage/mount", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uri: share.uri }),
+      });
+      const data = (await response.json()) as {
+        path?: string | null;
+        error?: string | null;
+      };
+      if (data.path) {
+        await loadBrowseEntries(data.path);
+      } else {
+        browseError = data.error ?? "Could not attach the share";
+      }
+    } catch (err) {
+      browseError = err instanceof Error ? err.message : "Mount failed";
+    } finally {
+      mountingUri = null;
+    }
+  }
 
   function beginEditSharedDir() {
     sharedDirInput = sharedDir ?? "";
@@ -542,6 +571,17 @@
       browseEntries = data.entries ?? [];
       browseTruncated = data.truncated ?? false;
       browseNetworkVolumes = data.networkVolumes ?? [];
+      browseAvailableShares =
+        (
+          data as unknown as {
+            availableShares?: Array<{
+              name: string;
+              uri: string;
+              protocol: string;
+              host: string;
+            }>;
+          }
+        ).availableShares ?? [];
       if (data.error) {
         browseError = data.error;
       }
@@ -1634,6 +1674,64 @@
                 >
               </span>
             </button>
+          {/each}
+        </div>
+      {/if}
+      {#if !browseLoading && browsePath === "" && browseAvailableShares.length > 0}
+        <div class="border-b border-xeo-medium-gray/30 bg-xeo-black/20">
+          <div
+            class="px-4 pt-3 pb-1 text-[10px] font-mono uppercase tracking-wider text-cyan-300/60"
+          >
+            Available on the LAN — not mounted here yet
+          </div>
+          {#each browseAvailableShares as share (share.uri)}
+            <div
+              class="w-full flex items-center gap-3 px-4 py-2 border-t border-xeo-medium-gray/15"
+            >
+              <svg
+                class="w-4 h-4 flex-shrink-0 text-white/35"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.75"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M4 5h16v6H4zM4 15h16v4H4zM8 8h.01M8 17h.01"
+                />
+              </svg>
+              <span class="min-w-0 flex-1">
+                <span class="flex items-center gap-2">
+                  <span class="text-sm font-mono text-white/70 truncate"
+                    >{share.name} · {share.host}</span
+                  >
+                  <span
+                    class="flex-shrink-0 rounded-sm border border-xeo-medium-gray/40 bg-white/5 px-1 py-0.5 text-[9px] font-mono tracking-wider text-white/50"
+                    >{share.protocol.toUpperCase()}</span
+                  >
+                </span>
+                <span class="block text-[10px] font-mono text-white/30 truncate"
+                  >{share.uri}</span
+                >
+              </span>
+              {#if share.protocol === "smb"}
+                <button
+                  type="button"
+                  disabled={mountingUri !== null}
+                  onclick={() => mountAndBrowse(share)}
+                  class="flex-shrink-0 text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {mountingUri === share.uri ? "Mounting…" : "Mount & browse"}
+                </button>
+              {:else}
+                <span
+                  class="flex-shrink-0 text-[10px] font-mono uppercase tracking-wider text-white/30"
+                  title="NFS needs a one-time root mount on this node; exo cannot do it unprivileged"
+                  >root mount needed</span
+                >
+              {/if}
+            </div>
           {/each}
         </div>
       {/if}

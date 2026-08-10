@@ -40,6 +40,7 @@ class NetworkServer(FrozenModel):
 class NetworkShare(FrozenModel):
     name: str
     uri: str
+    protocol: str = "smb"
 
 
 def parse_smb_uri(uri: str) -> tuple[str, str]:
@@ -60,13 +61,17 @@ def _is_listable(path: Path) -> bool:
         return False
 
 
-def _run(command: list[str], env: dict[str, str] | None = None) -> str:
+def _run(
+    command: list[str],
+    env: dict[str, str] | None = None,
+    timeout: float = _COMMAND_TIMEOUT_SECONDS,
+) -> str:
     try:
         result = subprocess.run(
             command,
             capture_output=True,
             text=True,
-            timeout=_COMMAND_TIMEOUT_SECONDS,
+            timeout=timeout,
             stdin=subprocess.DEVNULL,
             env=env,
         )
@@ -183,6 +188,48 @@ def discover_smb_servers() -> tuple[NetworkServer, ...]:
     except ShareMountError:
         return ()
     return parse_avahi_smb_output(output)
+
+
+def parse_showmount_output(output: str, host: str) -> tuple[NetworkShare, ...]:
+    """Extract NFS exports from ``showmount -e`` output on either platform."""
+    exports: list[NetworkShare] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("/"):
+            continue  # headers and blank lines
+        export_path = stripped.split()[0]
+        name = export_path.rstrip("/").rsplit("/", 1)[-1] or export_path
+        exports.append(
+            NetworkShare(name=name, uri=f"nfs://{host}{export_path}", protocol="nfs")
+        )
+    return tuple(sorted(exports, key=lambda share: share.name.lower()))
+
+
+def list_nfs_exports(host: str) -> tuple[NetworkShare, ...]:
+    """NFS exports a server offers, whether or not anything mounts them."""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", host):
+        raise ShareMountError(f"Not a hostname or address: {host!r}")
+    showmount = "/usr/bin/showmount" if sys.platform == "darwin" else "showmount"
+    output = _run([showmount, "-e", host], timeout=8)
+    return parse_showmount_output(output, host)
+
+
+def list_lan_shares(host: str) -> tuple[NetworkShare, ...]:
+    """Everything a server offers: SMB shares and NFS exports together.
+
+    Either protocol may be absent (no SMB service, no NFS server); the other
+    still lists, and only both failing is an error worth surfacing.
+    """
+    shares: list[NetworkShare] = []
+    errors: list[str] = []
+    for lister in (list_smb_shares, list_nfs_exports):
+        try:
+            shares.extend(lister(host))
+        except ShareMountError as list_error:
+            errors.append(str(list_error))
+    if not shares and errors:
+        raise ShareMountError("; ".join(errors))
+    return tuple(sorted(shares, key=lambda share: (share.name.lower(), share.protocol)))
 
 
 def list_smb_shares(host: str) -> tuple[NetworkShare, ...]:

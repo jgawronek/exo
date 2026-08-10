@@ -542,6 +542,12 @@ class ModelsStorageNetworkServer(FrozenModel):
 class ModelsStorageNetworkShare(FrozenModel):
     name: str
     uri: str
+    protocol: str = "smb"
+    host: str = ""
+    # Whether this node already reaches it; a mounted share is browsable now,
+    # an unmounted SMB one can be attached on demand, an unmounted NFS one
+    # needs a root mount first.
+    mounted_at: str | None = None
 
 
 class ModelsStorageNetworkResponse(FrozenModel):
@@ -574,6 +580,18 @@ class ModelsStorageBrowseResponse(FrozenModel):
     error: str | None = None
     truncated: bool = False
     network_volumes: list[ModelsStorageNetworkVolume] = []
+    # Shares LAN servers offer that this node has NOT mounted, so the picker
+    # can show what exists rather than only what is already attached.
+    available_shares: list[ModelsStorageNetworkShare] = []
+
+
+class MountShareParams(FrozenModel):
+    uri: str
+
+
+class MountShareResponse(FrozenModel):
+    path: str | None
+    error: str | None = None
 
 
 class HuggingFaceTokenResponse(FrozenModel):
