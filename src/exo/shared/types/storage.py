@@ -46,6 +46,11 @@ class SharedStorage(FrozenModel):
     mounts: Mapping[NodeId, str] = {}
     source: str | None = None
     label: str | None = None
+    # Monotonic edit counter. Nodes persist the share so any of them can
+    # re-announce it after winning an election — but without an ordering, a
+    # node holding last week's file can resurrect it over yesterday's edit.
+    # Higher revision wins, everywhere.
+    revision: int = 0
 
     def path_for(self, node_id: NodeId) -> str | None:
         """This node's local path for the share, if it has one."""

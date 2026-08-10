@@ -696,6 +696,14 @@ def apply_shared_storage_set(event: SharedStorageSet, state: State) -> State:
         # Re-announcement of the current value (e.g. after a master restart);
         # keep the statuses nodes already reported.
         return state
+    if (
+        event.storage is not None
+        and state.shared_storage is not None
+        and event.storage.revision < state.shared_storage.revision
+    ):
+        # A node re-announcing an older copy than the cluster already has —
+        # master churn dredging up a stale file. Newer edits win.
+        return state
     # Old validation results describe the previous share, so drop them and let
     # every node re-validate whatever it now resolves.
     return state.model_copy(

@@ -33,6 +33,7 @@ from exo.shared.types.commands import (
     DeleteInstance,
     ForwarderCommand,
     ForwarderDownloadCommand,
+    SetSharedStorage,
     StartDownload,
 )
 from exo.shared.types.common import CommandId, NodeId, SystemId
@@ -290,15 +291,42 @@ class Worker:
         automount_retry_at = 0.0
         last_status: SharedDirectoryStatus | None = None
         restate_at = 0.0
+        reassert_at = 0.0
         while True:
             await anyio.sleep(1)
             # Every node keeps its own copy of the share definition. Node ids
             # are regenerated on restart, so the master changes often; if only
             # the master that handled the command persisted it, the share would
             # vanish the moment any other node took over.
-            if self.state.shared_storage != persisted_storage:
-                persisted_storage = self.state.shared_storage
+            state_storage = self.state.shared_storage
+            state_revision = state_storage.revision if state_storage else -1
+            mine_revision = persisted_storage.revision if persisted_storage else -1
+            if state_revision > mine_revision or (
+                state_storage != persisted_storage and state_revision == mine_revision
+            ):
+                persisted_storage = state_storage
                 await to_thread.run_sync(persist_shared_storage, persisted_storage)
+            elif (
+                persisted_storage is not None
+                and mine_revision > state_revision
+                and self.state.master_node_id is not None
+                and time.monotonic() >= reassert_at
+            ):
+                # Anti-entropy: the cluster is on an older copy than this node
+                # holds — a stale file resurfaced through an election. Push the
+                # newest edit back; revision ordering makes this converge on
+                # the highest revision any node still has.
+                reassert_at = time.monotonic() + 15
+                logger.info(
+                    f"Re-asserting shared storage revision {mine_revision} "
+                    f"over cluster revision {state_revision}"
+                )
+                await self.command_sender.send(
+                    ForwarderCommand(
+                        origin=self._system_id,
+                        command=SetSharedStorage(storage=persisted_storage),
+                    )
+                )
             target = resolve_shared_models_path(
                 self.state.shared_storage,
                 self.state.shared_models_dir,

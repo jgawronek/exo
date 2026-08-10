@@ -107,6 +107,36 @@ class TestSharedStoragePersistence:
         assert load_persisted_shared_storage() is None
 
 
+class TestRevisionOrdering:
+    def test_api_edits_outrank_persisted_stale_copies(self) -> None:
+        """apply() must reject an older revision resurfacing via election."""
+        from exo.shared.apply import apply_shared_storage_set
+        from exo.shared.types.events import SharedStorageSet
+        from exo.shared.types.state import State
+
+        newer = _share().model_copy(update={"revision": 5})
+        older = _share().model_copy(update={"share_id": "stale", "revision": 2})
+        state = State().model_copy(update={"shared_storage": newer})
+
+        after = apply_shared_storage_set(SharedStorageSet(storage=older), state)
+        assert after.shared_storage == newer
+
+        even_newer = _share().model_copy(update={"share_id": "next", "revision": 6})
+        after = apply_shared_storage_set(SharedStorageSet(storage=even_newer), state)
+        assert after.shared_storage == even_newer
+
+    def test_explicit_clear_still_applies(self) -> None:
+        from exo.shared.apply import apply_shared_storage_set
+        from exo.shared.types.events import SharedStorageSet
+        from exo.shared.types.state import State
+
+        state = State().model_copy(
+            update={"shared_storage": _share().model_copy(update={"revision": 9})}
+        )
+        after = apply_shared_storage_set(SharedStorageSet(storage=None), state)
+        assert after.shared_storage is None
+
+
 class TestStatusCarriesResolvedPath:
     def test_valid_status_reports_the_probed_path(self, tmp_path: Path) -> None:
         status = validate_shared_models_directory(str(tmp_path))

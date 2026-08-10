@@ -2604,11 +2604,15 @@ class API:
             for node_id, path in payload.mounts.items()
             if path.strip()
         }
+        current = self.state.shared_storage
         storage = SharedStorage(
             share_id=share_id,
             mounts=mounts,
             source=payload.source.strip() if payload.source else None,
             label=payload.label.strip() if payload.label else None,
+            # Outrank whatever any node still has on disk, or a stale copy
+            # resurfacing after an election would overwrite this edit.
+            revision=(current.revision + 1) if current is not None else 1,
         )
         command = SetSharedStorage(storage=storage)
         await self._send(command)
