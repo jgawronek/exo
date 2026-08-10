@@ -1628,7 +1628,8 @@
                 </span>
                 <span
                   class="block text-[10px] font-mono text-white/40 truncate"
-                  title={volume.source}>← {volume.source}</span
+                  title={`${volume.source} mounted at ${volume.path}`}
+                  >{volume.source}</span
                 >
               </span>
             </button>

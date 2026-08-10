@@ -2679,6 +2679,7 @@ class API:
                     source=volume.source,
                     filesystem=volume.filesystem,
                     reachable=volume.reachable,
+                    label=volume.label,
                 )
                 for volume in result.network_volumes
             ],

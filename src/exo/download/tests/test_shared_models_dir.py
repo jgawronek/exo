@@ -231,6 +231,10 @@ class TestListNetworkVolumes:
         assert by_path[str(mounted)].filesystem == "nfs"
         assert by_path["/Volumes/media"].filesystem == "smbfs"
         assert by_path[str(mounted)].source == "10.0.10.44:/export/models"
+        assert by_path[str(mounted)].label == "models · 10.0.10.44"
+        assert by_path["/Volumes/media"].label == "media · jay@nas".replace(
+            "jay@", ""
+        )  # //jay@nas/media -> "media · nas"
         assert by_path[str(mounted)].reachable
         # The SMB mount point does not exist in the sandbox, so it reads as down.
         assert not by_path["/Volumes/media"].reachable
@@ -267,6 +271,7 @@ class TestListNetworkVolumes:
 
         assert [volume.source for volume in volumes] == ["//10.0.10.44/aimodels"]
         assert volumes[0].filesystem == "smb (gvfs)"
+        assert volumes[0].label == "aimodels · 10.0.10.44"
         assert volumes[0].reachable is True  # exists and stats fine
         assert volumes[0].path.endswith("share=aimodels")
 

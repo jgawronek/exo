@@ -564,6 +564,7 @@ class ModelsStorageNetworkVolume(FrozenModel):
     source: str
     filesystem: str
     reachable: bool
+    label: str = ""
 
 
 class ModelsStorageBrowseResponse(FrozenModel):

@@ -79,6 +79,24 @@ class NetworkVolume(FrozenModel):
     source: str
     filesystem: str
     reachable: bool
+    # What a person calls it — "aimodels · 10.0.10.44" — as opposed to the
+    # mount path, which on gvfs is unreadable plumbing.
+    label: str = ""
+
+
+def _volume_label(source: str) -> str:
+    """Derive "share · host" from an SMB or NFS source string."""
+    cleaned = source.strip("/")
+    if ":" in cleaned and "//" not in source:
+        # NFS: host:/export/path
+        host, _, export = cleaned.partition(":")
+        name = export.rstrip("/").rsplit("/", 1)[-1] or export
+        return f"{name} · {host}"
+    parts = [part for part in cleaned.split("/") if part]
+    if len(parts) >= 2:
+        # SMB: //host/share
+        return f"{parts[-1]} · {parts[0].split('@')[-1]}"
+    return source
 
 
 class SharedModelsDirectoryBrowseResult(FrozenModel):
@@ -296,6 +314,7 @@ def list_network_volumes() -> tuple[NetworkVolume, ...]:
                 source=partition.device,
                 filesystem=partition.fstype,
                 reachable=_is_listable_directory(mount_path),
+                label=_volume_label(partition.device),
             )
         )
     volumes.extend(_gvfs_network_volumes())
@@ -324,12 +343,14 @@ def _gvfs_network_volumes() -> list[NetworkVolume]:
         match = _GVFS_SMB_DIRECTORY.fullmatch(child.name)
         if match is None:
             continue
+        source = f"//{match.group('server')}/{match.group('share')}"
         volumes.append(
             NetworkVolume(
                 path=str(child),
-                source=f"//{match.group('server')}/{match.group('share')}",
+                source=source,
                 filesystem="smb (gvfs)",
                 reachable=_is_listable_directory(child),
+                label=_volume_label(source),
             )
         )
     return volumes
