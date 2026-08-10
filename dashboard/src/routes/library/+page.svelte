@@ -497,6 +497,10 @@
     Array<{ name: string; uri: string; protocol: string; host: string }>
   >([]);
   let mountingUri = $state<string | null>(null);
+  // True when the current listing came from an empty-path request — the
+  // picker's entry view — which with a share configured is the share itself,
+  // not the local shortcuts. LAN availability belongs to that view.
+  let browseAtEntry = $state(false);
 
   async function mountAndBrowse(share: { uri: string }) {
     mountingUri = share.uri;
@@ -539,6 +543,7 @@
   async function loadBrowseEntries(path: string | null) {
     browseLoading = true;
     browseError = null;
+    browseAtEntry = !path || path.length === 0;
     try {
       const params = new URLSearchParams();
       if (path && path.length > 0) params.set("path", path);
@@ -1677,7 +1682,7 @@
           {/each}
         </div>
       {/if}
-      {#if !browseLoading && browsePath === "" && browseAvailableShares.length > 0}
+      {#if !browseLoading && browseAtEntry && browseAvailableShares.length > 0}
         <div class="border-b border-xeo-medium-gray/30 bg-xeo-black/20">
           <div
             class="px-4 pt-3 pb-1 text-[10px] font-mono uppercase tracking-wider text-cyan-300/60"
