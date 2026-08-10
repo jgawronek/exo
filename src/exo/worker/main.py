@@ -345,7 +345,13 @@ class Worker:
                     Path(target).expanduser() if status.valid else None,
                     status.writable,
                 )
-                await to_thread.run_sync(persist_shared_models_dir, target)
+                # The legacy file exists so any node can re-announce the
+                # *single-path* setting after becoming master. Under a share
+                # the resolved path is node-local (an auto-mount, a per-node
+                # override) — persisting it here made whichever node won the
+                # next election broadcast its own mount path cluster-wide.
+                if self.state.shared_storage is None:
+                    await to_thread.run_sync(persist_shared_models_dir, target)
                 applied = target
                 reported = target
                 logger.info(
