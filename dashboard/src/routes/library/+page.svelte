@@ -433,12 +433,19 @@
       const body = clear
         ? { shareId: null, mounts: {} }
         : {
-            shareId: shareIdInput.trim(),
-            source: shareSourceInput.trim() || null,
+            shareId: shareIdInput.trim() || deriveShareId(shareRootInput),
+            source:
+              shareSourceInput.trim() || deriveShareSource(shareRootInput),
+            // Every node gets the shared folder; a blank override means
+            // "same as above", not "this node has no path".
             mounts: Object.fromEntries(
-              Object.entries(shareMountInputs).filter(([, path]) =>
-                path.trim(),
-              ),
+              clusterNodeIds
+                .map((nodeId) => [
+                  nodeId,
+                  (shareMountInputs[nodeId] || "").trim() ||
+                    shareRootInput.trim(),
+                ])
+                .filter(([, path]) => path),
             ),
           };
       const response = await fetch("/models/storage/share", {
