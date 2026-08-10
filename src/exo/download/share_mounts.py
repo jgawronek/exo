@@ -58,6 +58,21 @@ def parse_smb_uri(uri: str) -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
+def parse_nfs_uri(uri: str) -> tuple[str, str]:
+    """Split ``nfs://host/export/path`` into ``(host, /export/path)``.
+
+    A colon between host and export is tolerated: mount tables report NFS
+    sources as ``host:/export``, so a naive ``nfs://`` prefix yields
+    ``nfs://host:/export``.
+    """
+    match = re.fullmatch(r"nfs:/+([^/@:]+):?(/[^:]*?)/?", uri.strip())
+    if match is None:
+        raise ShareMountError(
+            f"Not a share exo can attach: {uri!r} (expected nfs://host/export)"
+        )
+    return match.group(1), match.group(2)
+
+
 def _is_listable(path: Path) -> bool:
     try:
         next(iter(path.iterdir()), None)
@@ -133,12 +148,49 @@ def _mount_darwin(host: str, share: str) -> Path:
     raise ShareMountError(f"Mounted //{host}/{share} but {mount_point} is empty")
 
 
+def _find_existing_nfs_mount(host: str, export: str) -> Path | None:
+    """Locate a kernel NFS mount of ``host:/export`` in the mount table."""
+    output = _run(["mount"])
+    want = f"{host}:{export.rstrip('/') or '/'}"
+    for line in output.splitlines():
+        source, separator, rest = line.partition(" on ")
+        if not separator or source.strip() != want:
+            continue
+        mount_point = re.split(r" type | \(", rest, maxsplit=1)[0].strip()
+        if mount_point:
+            return Path(mount_point)
+    return None
+
+
+def existing_nfs_mount_point(uri: str) -> Path | None:
+    """Where an ``nfs://`` share is already mounted on this node, if it is."""
+    host, export = parse_nfs_uri(uri)
+    return _find_existing_nfs_mount(host, export)
+
+
 def ensure_share_mounted(uri: str) -> Path:
     """Make the share reachable on this node and return its local path.
 
     Idempotent: an already-attached share returns its existing path without
     touching anything.
+
+    SMB shares are guest-mounted unprivileged. NFS needs root to mount, so an
+    ``nfs://`` source is resolved against an existing kernel mount of the same
+    export (set up once via fstab or ``mount``) rather than mounted here —
+    kernel NFS is far faster than the userspace SMB paths, which is the whole
+    reason to configure it.
     """
+    if uri.strip().startswith("nfs:"):
+        host, export = parse_nfs_uri(uri)
+        mount_point = _find_existing_nfs_mount(host, export)
+        if mount_point is not None and _is_listable(mount_point):
+            return mount_point
+        raise ShareMountError(
+            f"No mount of {host}:{export} found on this node. NFS cannot be "
+            f"mounted without root, so mount it once (Linux: /etc/fstab; "
+            f"macOS: `sudo mount -t nfs -o resvport,ro {host}:{export} <dir>`)"
+            f" and it is picked up automatically."
+        )
     host, share = parse_smb_uri(uri)
     if sys.platform == "darwin":
         return _mount_darwin(host, share)

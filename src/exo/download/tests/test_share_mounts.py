@@ -14,6 +14,7 @@ from exo.download.share_mounts import (
     ShareMountError,
     _gvfs_mount_point,  # pyright: ignore[reportPrivateUsage]
     parse_avahi_smb_output,
+    parse_nfs_uri,
     parse_showmount_output,
     parse_smb_uri,
     parse_smbutil_view_output,
@@ -59,7 +60,7 @@ class TestParseSmbUri:
     @pytest.mark.parametrize(
         "uri",
         [
-            "nfs://10.0.10.44/export",  # exo cannot mount NFS unprivileged
+            "nfs://10.0.10.44/export",  # wrong scheme for the SMB parser
             "smb://10.0.10.44",  # no share named
             "smb://user:pass@host/share",  # credentials are not supported
             "/mnt/models",  # a path is not a share
@@ -68,6 +69,33 @@ class TestParseSmbUri:
     def test_rejects_what_cannot_be_auto_mounted(self, uri: str) -> None:
         with pytest.raises(ShareMountError):
             parse_smb_uri(uri)
+
+
+class TestParseNfsUri:
+    def test_splits_host_and_export(self) -> None:
+        assert parse_nfs_uri("nfs://10.0.10.44/mnt/lexar4tb/exo-models") == (
+            "10.0.10.44",
+            "/mnt/lexar4tb/exo-models",
+        )
+
+    def test_tolerates_the_mount_table_colon_and_trailing_slash(self) -> None:
+        # deriveShareSource prepends nfs:// to the mount table's host:/export.
+        assert parse_nfs_uri("nfs://10.0.10.44:/mnt/lexar4tb/exo-models/") == (
+            "10.0.10.44",
+            "/mnt/lexar4tb/exo-models",
+        )
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "nfs://10.0.10.44",  # no export named
+            "smb://10.0.10.44/share",  # wrong scheme for the NFS parser
+            "/mnt/models",  # a path is not a share
+        ],
+    )
+    def test_rejects_what_it_cannot_resolve(self, uri: str) -> None:
+        with pytest.raises(ShareMountError):
+            parse_nfs_uri(uri)
 
 
 class TestGvfsMountPoint:

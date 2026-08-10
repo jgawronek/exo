@@ -338,7 +338,11 @@ class Worker:
             # platforms, so selecting a share is all the configuration there is.
             storage = self.state.shared_storage
             source = storage.source if storage is not None else None
-            if target is None and source is not None and source.startswith("smb://"):
+            if (
+                target is None
+                and source is not None
+                and source.startswith(("smb://", "nfs://"))
+            ):
                 now = time.monotonic()
                 if source != automount_uri or (
                     automount_path is None and now >= automount_retry_at

@@ -156,8 +156,8 @@ from exo.download.share_mounts import (
     ShareMountError,
     discover_smb_servers,
     ensure_share_mounted,
+    existing_nfs_mount_point,
     list_lan_shares,
-    list_smb_shares,
 )
 from exo.download.shared_models_dir import (
     browse_shared_models_directories,
@@ -2564,18 +2564,28 @@ class API:
         """
         if server is not None:
             try:
-                shares = await to_thread.run_sync(list_smb_shares, server)
+                shares = await to_thread.run_sync(list_lan_shares, server)
             except ShareMountError as list_error:
                 return ModelsStorageNetworkResponse(
                     server=server, error=str(list_error)
                 )
-            return ModelsStorageNetworkResponse(
-                server=server,
-                shares=[
-                    ModelsStorageNetworkShare(name=share.name, uri=share.uri)
-                    for share in shares
-                ],
-            )
+            listed: list[ModelsStorageNetworkShare] = []
+            for share in shares:
+                mounted_at = (
+                    await to_thread.run_sync(existing_nfs_mount_point, share.uri)
+                    if share.protocol == "nfs"
+                    else None
+                )
+                listed.append(
+                    ModelsStorageNetworkShare(
+                        name=share.name,
+                        uri=share.uri,
+                        protocol=share.protocol,
+                        host=server,
+                        mounted_at=str(mounted_at) if mounted_at else None,
+                    )
+                )
+            return ModelsStorageNetworkResponse(server=server, shares=listed)
         servers = await to_thread.run_sync(discover_smb_servers)
         return ModelsStorageNetworkResponse(
             servers=[
