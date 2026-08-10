@@ -408,20 +408,26 @@
     shareIdInput = storageShare?.shareId ?? "models";
     shareSourceInput = storageShare?.source ?? "";
     const existing = Object.values(storageShare?.mounts ?? {});
-    const commonest = existing
-      .slice()
-      .sort(
-        (a, b) =>
-          existing.filter((p) => p === b).length -
-          existing.filter((p) => p === a).length,
-      )[0];
+    // A share with a source is attached by each node at its own local path,
+    // so its recorded mounts are per-node artifacts, not a folder root —
+    // seeding the root from them would pin every node to one node's path on
+    // the next save. Only folder-based shares (no source) seed the root.
+    const commonest = storageShare?.source
+      ? undefined
+      : existing
+          .slice()
+          .sort(
+            (a, b) =>
+              existing.filter((p) => p === b).length -
+              existing.filter((p) => p === a).length,
+          )[0];
     shareRootInput = commonest ?? "";
-    showShareAdvanced = existing.some((path) => path !== commonest);
     const mounts: Record<string, string> = {};
     for (const nodeId of clusterNodeIds) {
       const configured = storageShare?.mounts?.[nodeId] ?? "";
       mounts[nodeId] = configured === shareRootInput ? "" : configured;
     }
+    showShareAdvanced = Object.values(mounts).some((path) => path);
     shareMountInputs = mounts;
     shareError = null;
     editingShare = true;
