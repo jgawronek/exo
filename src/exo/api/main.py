@@ -162,6 +162,7 @@ from exo.download.share_mounts import (
 from exo.download.shared_models_dir import (
     browse_shared_models_directories,
     get_shared_models_dir,
+    list_network_volumes,
     resolve_shared_models_path,
 )
 from exo.master.image_store import ImageStore
@@ -498,6 +499,7 @@ class API:
         self.app.put("/models/storage/share")(self.set_models_storage_share)
         self.app.get("/models/storage/network")(self.get_models_storage_network)
         self.app.post("/models/storage/mount")(self.mount_models_storage_share)
+        self.app.get("/models/storage/lan")(self.get_models_storage_lan)
         self.app.get("/v1/hf-token")(self.get_hugging_face_token)
         self.app.put("/v1/hf-token")(self.set_hugging_face_token)
         self.app.delete("/v1/hf-token")(self.delete_hugging_face_token)
@@ -2671,39 +2673,6 @@ class API:
             if resolved:
                 target = resolved
         result = browse_shared_models_directories(target, include_hidden=include_hidden)
-        available: list[ModelsStorageNetworkShare] = []
-        if path is None or path.strip() == "":
-            # Only at the root view, where the picker lists shares: what do
-            # LAN servers offer that this node has not attached yet?
-            mounted = " ".join(
-                volume.source.lower() for volume in result.network_volumes
-            )
-            try:
-                servers = await to_thread.run_sync(discover_smb_servers)
-            except ShareMountError:
-                servers = ()
-            for found in servers[:6]:
-                try:
-                    offered = await to_thread.run_sync(list_lan_shares, found.host)
-                except ShareMountError:
-                    continue
-                for share in offered:
-                    # A share already mounted (by export path or by name on
-                    # the same host) belongs in the mounted list, not here.
-                    tail = share.uri.split("://", 1)[-1].lower()
-                    export = "/" + tail.split("/", 1)[-1]
-                    if found.host in mounted and (
-                        export in mounted or share.name.lower() in mounted
-                    ):
-                        continue
-                    available.append(
-                        ModelsStorageNetworkShare(
-                            name=share.name,
-                            uri=share.uri,
-                            protocol=share.protocol,
-                            host=found.host,
-                        )
-                    )
         return ModelsStorageBrowseResponse(
             path=result.path,
             parent_path=result.parent_path,
@@ -2725,7 +2694,60 @@ class API:
                 )
                 for volume in result.network_volumes
             ],
-            available_shares=available,
+        )
+
+    async def get_models_storage_lan(self) -> ModelsStorageBrowseResponse:
+        """What LAN servers offer that this node has not mounted.
+
+        Slow by nature — discovery plus per-server listings — so it is its own
+        endpoint the picker loads alongside the instant folder listing, with
+        every server probed concurrently and a hard ceiling on the whole scan.
+        """
+        volumes = await to_thread.run_sync(list_network_volumes)
+        mounted = " ".join(volume.source.lower() for volume in volumes)
+        available: list[ModelsStorageNetworkShare] = []
+        try:
+            servers = await to_thread.run_sync(
+                discover_smb_servers, abandon_on_cancel=True
+            )
+        except ShareMountError:
+            servers = ()
+
+        async def probe(host: str) -> None:
+            try:
+                offered = await to_thread.run_sync(
+                    list_lan_shares, host, abandon_on_cancel=True
+                )
+            except ShareMountError:
+                return
+            for share in offered:
+                tail = share.uri.split("://", 1)[-1].lower()
+                export = "/" + tail.split("/", 1)[-1]
+                if host in mounted and (
+                    export in mounted or share.name.lower() in mounted
+                ):
+                    continue
+                available.append(
+                    ModelsStorageNetworkShare(
+                        name=share.name,
+                        uri=share.uri,
+                        protocol=share.protocol,
+                        host=host,
+                    )
+                )
+
+        with anyio.move_on_after(15):
+            async with anyio.create_task_group() as scan_group:
+                for found in servers[:6]:
+                    scan_group.start_soon(probe, found.host)
+
+        return ModelsStorageBrowseResponse(
+            path="",
+            parent_path=None,
+            entries=[],
+            available_shares=sorted(
+                available, key=lambda share: (share.host, share.name.lower())
+            ),
         )
 
     async def mount_models_storage_share(

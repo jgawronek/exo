@@ -497,6 +497,30 @@
     Array<{ name: string; uri: string; protocol: string; host: string }>
   >([]);
   let mountingUri = $state<string | null>(null);
+  let lanScanning = $state(false);
+
+  // The LAN scan probes servers and can take seconds; it loads beside the
+  // folder listing, never in front of it.
+  async function loadLanShares() {
+    lanScanning = true;
+    try {
+      const response = await fetch("/models/storage/lan");
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        availableShares?: Array<{
+          name: string;
+          uri: string;
+          protocol: string;
+          host: string;
+        }>;
+      };
+      browseAvailableShares = data.availableShares ?? [];
+    } catch {
+      // A failed scan just means the section stays empty.
+    } finally {
+      lanScanning = false;
+    }
+  }
   // True when the current listing came from an empty-path request — the
   // picker's entry view — which with a share configured is the share itself,
   // not the local shortcuts. LAN availability belongs to that view.
@@ -576,17 +600,7 @@
       browseEntries = data.entries ?? [];
       browseTruncated = data.truncated ?? false;
       browseNetworkVolumes = data.networkVolumes ?? [];
-      browseAvailableShares =
-        (
-          data as unknown as {
-            availableShares?: Array<{
-              name: string;
-              uri: string;
-              protocol: string;
-              host: string;
-            }>;
-          }
-        ).availableShares ?? [];
+
       if (data.error) {
         browseError = data.error;
       }
@@ -672,6 +686,8 @@
   async function openShareRootBrowser() {
     browseTarget = { kind: "shareRoot" };
     browsingSharedDir = true;
+    browseAvailableShares = [];
+    loadLanShares();
     await loadBrowseEntries(shareRootInput.trim() || null);
   }
 
@@ -699,12 +715,16 @@
   async function openSharedDirBrowser() {
     browseTarget = { kind: "legacy" };
     browsingSharedDir = true;
+    browseAvailableShares = [];
+    loadLanShares();
     await loadBrowseEntries(sharedDirInput.trim() || null);
   }
 
   async function openShareMountBrowser(nodeId: string) {
     browseTarget = { kind: "share", nodeId };
     browsingSharedDir = true;
+    browseAvailableShares = [];
+    loadLanShares();
     await loadBrowseEntries(shareMountInputs[nodeId]?.trim() || null);
   }
 
@@ -1682,7 +1702,14 @@
           {/each}
         </div>
       {/if}
-      {#if !browseLoading && browseAtEntry && browseAvailableShares.length > 0}
+      {#if browseAtEntry && lanScanning && browseAvailableShares.length === 0}
+        <div
+          class="px-4 py-2 text-[10px] font-mono uppercase tracking-wider text-cyan-300/40 border-b border-xeo-medium-gray/30"
+        >
+          Scanning the LAN for shares&hellip;
+        </div>
+      {/if}
+      {#if browseAtEntry && browseAvailableShares.length > 0}
         <div class="border-b border-xeo-medium-gray/30 bg-xeo-black/20">
           <div
             class="px-4 pt-3 pb-1 text-[10px] font-mono uppercase tracking-wider text-cyan-300/60"

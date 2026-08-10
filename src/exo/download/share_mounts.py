@@ -210,7 +210,7 @@ def list_nfs_exports(host: str) -> tuple[NetworkShare, ...]:
     if not re.fullmatch(r"[A-Za-z0-9._-]+", host):
         raise ShareMountError(f"Not a hostname or address: {host!r}")
     showmount = "/usr/bin/showmount" if sys.platform == "darwin" else "showmount"
-    output = _run([showmount, "-e", host], timeout=8)
+    output = _run([showmount, "-e", host], timeout=5)
     return parse_showmount_output(output, host)
 
 
@@ -237,13 +237,19 @@ def list_smb_shares(host: str) -> tuple[NetworkShare, ...]:
     if not re.fullmatch(r"[A-Za-z0-9._-]+", host):
         raise ShareMountError(f"Not a hostname or address: {host!r}")
     if sys.platform == "darwin":
-        output = _run(["/usr/bin/smbutil", "view", "-g", f"//{host}"])
+        output = _run(["/usr/bin/smbutil", "view", "-g", f"//{host}"], timeout=10)
         return parse_smbutil_view_output(output, host)
     environment = _gvfs_environment()
-    # Often already mounted; the listing below is the real test.
+    # Often already mounted; the listing below is the real test. A server
+    # demanding credentials can stall the mount attempt, so keep it short —
+    # the picker is waiting.
     with contextlib.suppress(ShareMountError):
-        _run(["gio", "mount", "--anonymous", f"smb://{host}/"], env=environment)
-    output = _run(["gio", "list", f"smb://{host}/"], env=environment)
+        _run(
+            ["gio", "mount", "--anonymous", f"smb://{host}/"],
+            env=environment,
+            timeout=10,
+        )
+    output = _run(["gio", "list", f"smb://{host}/"], env=environment, timeout=10)
     shares = [
         NetworkShare(name=name, uri=f"smb://{host}/{name}")
         for name in (line.strip() for line in output.splitlines())
