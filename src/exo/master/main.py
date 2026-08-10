@@ -990,6 +990,12 @@ class Master:
 
     # These plan loops are the cracks showing in our event sourcing architecture - more things could be commands
     async def _plan(self) -> None:
+        # Topology vertices that have never reported info. A topology edge
+        # event arriving after NodeTimedOut resurrects the dead node as a bare
+        # vertex, and with no last_seen entry the inactivity sweep below can
+        # never remove it. Track them across sweeps so a genuinely joining
+        # node gets one full cycle to report before being evicted.
+        never_reported: set[NodeId] = set()
         while True:
             # kill broken instances
             connected_node_ids = set(self.state.topology.list_nodes())
@@ -1007,6 +1013,20 @@ class Master:
                 if now - time > timedelta(seconds=30):
                     logger.info(f"Manually removing node {node_id} due to inactivity")
                     await self.event_sender.send(NodeTimedOut(node_id=node_id))
+
+            # evict ghost vertices that have never reported
+            orphaned = {
+                node_id
+                for node_id in connected_node_ids
+                if node_id not in self.state.last_seen and node_id != self.node_id
+            }
+            for node_id in orphaned & never_reported:
+                logger.info(
+                    f"Manually removing node {node_id}: "
+                    "in topology but never reported"
+                )
+                await self.event_sender.send(NodeTimedOut(node_id=node_id))
+            never_reported = orphaned
 
             await self._fail_stalled_tasks()
             await self._prune_stale_tasks()
