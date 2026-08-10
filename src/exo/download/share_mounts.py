@@ -136,8 +136,11 @@ def ensure_share_mounted(uri: str) -> Path:
 
 
 def _decode_avahi_escapes(value: str) -> str:
-    # ``avahi-browse -p`` escapes bytes as decimal ``\032`` sequences.
-    return re.sub(r"\\(\d{3})", lambda match: chr(int(match.group(1))), value)
+    # ``avahi-browse -p`` escapes each *byte* as a decimal ``\032`` sequence,
+    # so multi-byte UTF-8 characters arrive as several escapes that must be
+    # reassembled into bytes before decoding.
+    with_bytes = re.sub(r"\\(\d{3})", lambda match: chr(int(match.group(1))), value)
+    return with_bytes.encode("latin-1", "ignore").decode("utf-8", "replace")
 
 
 def parse_avahi_smb_output(output: str) -> tuple[NetworkServer, ...]:

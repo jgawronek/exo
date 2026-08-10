@@ -77,6 +77,12 @@ class TestParseAvahi:
             ("truenas", "10.0.10.191"),
         ]
 
+    def test_reassembles_multibyte_utf8_names(self) -> None:
+        # A curly apostrophe arrives as three byte escapes.
+        line = "=;en0;IPv4;jay\\226\\128\\153s Mac;Microsoft Windows Network;local;m.local;10.0.10.195;445;"
+        servers = parse_avahi_smb_output(line)
+        assert servers[0].name == "jay\u2019s Mac"
+
     def test_decodes_escaped_names(self) -> None:
         line = "=;eth0;IPv4;Time\\032Capsule;Microsoft Windows Network;local;tc.local;10.0.0.9;445;"
         servers = parse_avahi_smb_output(line)

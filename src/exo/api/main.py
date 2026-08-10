@@ -157,6 +157,7 @@ from exo.download.share_mounts import (
 )
 from exo.download.shared_models_dir import (
     browse_shared_models_directories,
+    get_shared_models_dir,
     resolve_shared_models_path,
 )
 from exo.master.image_store import ImageStore
@@ -2645,10 +2646,18 @@ class API:
         # resolve the share, so the picker still works during setup.
         target = path
         if target is None or target.strip() == "":
-            resolved = resolve_shared_models_path(
-                self.state.shared_storage,
-                self.state.shared_models_dir,
-                self.node_id,
+            # The holder knows the path this node actually validated —
+            # including one the worker auto-mounted, which the share's mount
+            # map never contains.
+            installed = get_shared_models_dir()
+            resolved = (
+                str(installed)
+                if installed is not None
+                else resolve_shared_models_path(
+                    self.state.shared_storage,
+                    self.state.shared_models_dir,
+                    self.node_id,
+                )
             )
             if resolved:
                 target = resolved
