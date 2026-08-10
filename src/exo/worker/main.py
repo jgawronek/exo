@@ -13,6 +13,7 @@ from exo.download.download_utils import is_read_only_model_dir, resolve_existing
 from exo.download.shared_models_dir import (
     load_persisted_shared_models_dir,
     persist_shared_models_dir,
+    persist_shared_storage,
     resolve_shared_models_path,
     set_shared_models_dir,
     validate_shared_models_directory,
@@ -278,8 +279,16 @@ class Worker:
 
         applied: str | None = persisted
         reported: str | None = None
+        persisted_storage = self.state.shared_storage
         while True:
             await anyio.sleep(1)
+            # Every node keeps its own copy of the share definition. Node ids
+            # are regenerated on restart, so the master changes often; if only
+            # the master that handled the command persisted it, the share would
+            # vanish the moment any other node took over.
+            if self.state.shared_storage != persisted_storage:
+                persisted_storage = self.state.shared_storage
+                await to_thread.run_sync(persist_shared_storage, persisted_storage)
             target = resolve_shared_models_path(
                 self.state.shared_storage,
                 self.state.shared_models_dir,
