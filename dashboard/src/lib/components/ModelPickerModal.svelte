@@ -203,7 +203,8 @@
     return ids;
   });
 
-  const hasShared = $derived(sharedModelIds.size > 0);
+  /** Show the Shared sidebar tab whenever shared storage is configured. */
+  const hasShared = $derived(!!sharedDir);
 
   // Aggregate download availability per group (available if ANY variant is available)
   function getGroupDownloadAvailability(
@@ -1029,23 +1030,52 @@
           <div
             class="flex flex-col items-center justify-center h-full text-white/40 p-8"
           >
-            <svg class="w-12 h-12 mb-3" viewBox="0 0 24 24" fill="currentColor">
-              <path
-                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"
-              />
-            </svg>
-            <p class="font-mono text-sm">No models found</p>
-            {#if hasActiveFilters || searchQuery}
-              <button
-                type="button"
-                class="mt-2 text-xs text-xeo-green hover:underline"
-                onclick={() => {
-                  searchQuery = "";
-                  clearFilters();
-                }}
+            {#if selectedFamily === "shared"}
+              <svg
+                class="w-12 h-12 mb-3 text-cyan-300/50"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
               >
-                Clear filters
-              </button>
+                <path d="M4 5h16v6H4zM4 15h16v4H4z" />
+                <path d="M8 8h.01M8 17h.01" />
+              </svg>
+              <p class="font-mono text-sm text-white/60">
+                {searchQuery
+                  ? "No matching shared models"
+                  : "No models in shared storage yet"}
+              </p>
+              {#if sharedDir}
+                <p
+                  class="mt-2 max-w-sm text-center text-[11px] font-mono text-white/35 break-all"
+                >
+                  {sharedDir}
+                </p>
+              {/if}
+            {:else}
+              <svg
+                class="w-12 h-12 mb-3"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <path
+                  d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"
+                />
+              </svg>
+              <p class="font-mono text-sm">No models found</p>
+              {#if hasActiveFilters || searchQuery}
+                <button
+                  type="button"
+                  class="mt-2 text-xs text-xeo-green hover:underline"
+                  onclick={() => {
+                    searchQuery = "";
+                    clearFilters();
+                  }}
+                >
+                  Clear filters
+                </button>
+              {/if}
             {/if}
           </div>
         {:else}

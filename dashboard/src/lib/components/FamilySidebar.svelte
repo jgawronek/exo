@@ -99,7 +99,7 @@
     >
   </button>
 
-  <!-- Shared folder (only once a shared folder holds models) -->
+  <!-- Shared folder (when Shared Model Storage is configured) -->
   {#if hasShared}
     <button
       type="button"
@@ -109,8 +109,8 @@
         ? 'bg-cyan-400/20 border-l-2 border-cyan-400'
         : 'hover:bg-white/5 border-l-2 border-transparent'}"
       title={sharedDirectory
-        ? `Models in shared storage — ${sharedDirectory}`
-        : "Models in shared storage"}
+        ? `Shared model storage — ${sharedDirectory}`
+        : "Shared model storage"}
     >
       <svg
         class="w-5 h-5 {selectedFamily === 'shared'
