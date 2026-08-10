@@ -288,6 +288,8 @@ class Worker:
         automount_uri: str | None = None
         automount_path: str | None = None
         automount_retry_at = 0.0
+        last_status: SharedDirectoryStatus | None = None
+        restate_at = 0.0
         while True:
             await anyio.sleep(1)
             # Every node keeps its own copy of the share definition. Node ids
@@ -338,7 +340,7 @@ class Worker:
                 automount_uri = None
                 automount_path = None
             if target is not None and target != reported:
-                status = await to_thread.run_sync(
+                last_status = status = await to_thread.run_sync(
                     validate_shared_models_directory, target, abandon_on_cancel=True
                 )
                 set_shared_models_dir(
@@ -364,6 +366,26 @@ class Worker:
                     )
                 )
             elif (
+                target is not None
+                and last_status is not None
+                and self.state.shared_models_dir_statuses.get(self.node_id)
+                != last_status
+                and time.monotonic() >= restate_at
+            ):
+                # Master churn rebuilds cluster state without our report in
+                # it; a node id is minted per process start, so churn here is
+                # routine. Deduping on "already reported this path" alone left
+                # every node silent — and the dashboard blank — after each
+                # election. Re-send whenever the cluster's view of us differs
+                # from what we know, throttled so a lossy interval cannot turn
+                # this into a flood.
+                restate_at = time.monotonic() + 10
+                await self.event_sender.send(
+                    NodeSharedDirectoryStatusUpdated(
+                        node_id=self.node_id, status=last_status
+                    )
+                )
+            elif (
                 target is None
                 and applied is not None
                 # Only treat None as an explicit clear once a master has
@@ -376,6 +398,7 @@ class Worker:
                 await to_thread.run_sync(persist_shared_models_dir, None)
                 applied = None
                 reported = None
+                last_status = None
                 logger.info("Shared models directory cleared")
 
     async def _reconcile_custom_cards(self) -> None:
