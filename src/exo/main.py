@@ -440,12 +440,29 @@ class Node:
                 await self.state_replica.wait_ready()
                 if self.event_router is not event_router:
                     return
+                # A component that overruns its shutdown deadline gets leaked
+                # and replaced, never allowed to kill the node: letting the
+                # TimeoutError escape tears down the whole task group, leaving
+                # a half-dead process that answers gossip but not HTTP. Seen
+                # in practice when a worker thread sat in a slow SMB operation.
                 if self.download_coordinator:
-                    with anyio.fail_after(10):
-                        await self.download_coordinator.shutdown()
+                    try:
+                        with anyio.fail_after(10):
+                            await self.download_coordinator.shutdown()
+                    except TimeoutError:
+                        logger.warning(
+                            "Download coordinator ignored its shutdown "
+                            "deadline; abandoning it and starting a fresh one"
+                        )
                 if self.worker:
-                    with anyio.fail_after(10):
-                        await self.worker.shutdown()
+                    try:
+                        with anyio.fail_after(10):
+                            await self.worker.shutdown()
+                    except TimeoutError:
+                        logger.warning(
+                            "Worker ignored its shutdown deadline; "
+                            "abandoning it and starting a fresh one"
+                        )
                 if self.download_coordinator:
                     self.download_coordinator = DownloadCoordinator(
                         self.node_id,
