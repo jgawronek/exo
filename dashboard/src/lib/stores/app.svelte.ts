@@ -290,12 +290,24 @@ interface RawStateResponse {
   // Cluster-wide shared models directory + per-node validation results
   sharedModelsDir?: string | null;
   sharedModelsDirStatuses?: Record<string, RawSharedDirectoryStatus>;
+  // Share-based storage (the newer mode): a named share every node attaches
+  sharedStorage?: RawSharedStorage | null;
+}
+
+export interface RawSharedStorage {
+  shareId: string;
+  mounts: Record<string, string>;
+  source?: string | null;
+  label?: string | null;
 }
 
 export interface RawSharedDirectoryStatus {
   valid: boolean;
   error?: string | null;
   freeBytes?: number | null;
+  // The node-local path the share resolves to (mounts differ per node)
+  path?: string | null;
+  writable?: boolean;
 }
 
 export interface MessageAttachment {
@@ -640,6 +652,7 @@ class AppStore {
   sharedModelsDirStatuses = $state<Record<string, RawSharedDirectoryStatus>>(
     {},
   );
+  sharedStorage = $state<RawSharedStorage | null>(null);
   thunderboltBridgeCycles = $state<string[][]>([]);
   nodeThunderbolt = $state<
     Record<
@@ -1518,6 +1531,7 @@ class AppStore {
       this.masterNodeId = data.masterNodeId ?? null;
       this.sharedModelsDir = data.sharedModelsDir ?? null;
       this.sharedModelsDirStatuses = data.sharedModelsDirStatuses ?? {};
+      this.sharedStorage = data.sharedStorage ?? null;
       // Thunderbolt identifiers per node
       this.nodeThunderbolt = data.nodeThunderbolt ?? {};
       // RDMA ctl status per node
@@ -3879,6 +3893,7 @@ export const nodeNetwork = () => appStore.nodeNetwork;
 
 // Shared models directory (configured from the Library screen)
 export const sharedModelsDir = () => appStore.sharedModelsDir;
+export const sharedStorage = () => appStore.sharedStorage;
 export const sharedModelsDirStatuses = () => appStore.sharedModelsDirStatuses;
 
 // Thunderbolt & RDMA status

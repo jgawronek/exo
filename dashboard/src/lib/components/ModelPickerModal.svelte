@@ -12,7 +12,11 @@
   } from "$lib/utils/downloads";
   import { getRecentEntries } from "$lib/stores/recents.svelte";
   import { addToast } from "$lib/stores/toast.svelte";
-  import { sharedModelsDir } from "$lib/stores/app.svelte";
+  import {
+    sharedModelsDir,
+    sharedModelsDirStatuses,
+    sharedStorage,
+  } from "$lib/stores/app.svelte";
 
   interface ModelInfo {
     id: string;
@@ -179,32 +183,58 @@
     return result;
   });
 
-  // Models sitting in the configured shared folder. The folder is a per-node
-  // setting, so a model counts as shared when any node reports it under that
-  // path — that is exactly the copy every node can read.
+  // Shared storage comes in two modes: a share every node attaches (each at
+  // its own local mount path) or the legacy single cluster-wide path.
   const sharedDir = $derived(sharedModelsDir());
+  const storageShare = $derived(sharedStorage());
 
+  // Where each node's shared storage lives locally, per node id.
+  const sharedRootsByNode = $derived.by(() => {
+    const roots = new Map<string, string>();
+    for (const [nodeId, status] of Object.entries(
+      sharedModelsDirStatuses() ?? {},
+    )) {
+      if (status.valid && status.path)
+        roots.set(nodeId, status.path.replace(/\/+$/, ""));
+    }
+    return roots;
+  });
+
+  // Human-readable location of shared storage, for tooltips and empty states.
+  const sharedLocation = $derived(
+    storageShare
+      ? (storageShare.label ??
+        storageShare.source?.replace(/^smb:\/+/, "smb://") ??
+        storageShare.shareId)
+      : sharedDir,
+  );
+
+  // A model counts as shared when a node reports a copy under its own shared
+  // storage root — that is exactly the copy every node can read.
   const sharedModelIds = $derived.by(() => {
     const ids = new Set<string>();
-    const root = sharedDir?.replace(/\/+$/, "");
-    if (!root || !downloadsData) return ids;
-    const prefix = `${root}/`;
+    if (!downloadsData) return ids;
+    const legacyRoot = sharedDir?.replace(/\/+$/, "") || null;
+    const underRoot = (directory: string, root: string) =>
+      directory === root || directory.startsWith(`${root}/`);
     for (const model of models) {
       const inShared = getDownloadedModelLocations(
         downloadsData,
         model.id,
-      ).some(
-        (location) =>
-          location.modelDirectory === root ||
-          location.modelDirectory?.startsWith(prefix),
-      );
+      ).some((location) => {
+        if (!location.modelDirectory) return false;
+        const nodeRoot = sharedRootsByNode.get(location.nodeId);
+        if (nodeRoot && underRoot(location.modelDirectory, nodeRoot))
+          return true;
+        return legacyRoot != null && underRoot(location.modelDirectory, legacyRoot);
+      });
       if (inShared) ids.add(model.id);
     }
     return ids;
   });
 
   /** Show the Shared sidebar tab whenever shared storage is configured. */
-  const hasShared = $derived(!!sharedDir);
+  const hasShared = $derived(!!sharedDir || !!storageShare);
 
   // Aggregate download availability per group (available if ANY variant is available)
   function getGroupDownloadAvailability(
@@ -876,7 +906,7 @@
         {hasFavorites}
         hasRecents={hasRecentsTab}
         {hasShared}
-        sharedDirectory={sharedDir}
+        sharedDirectory={sharedLocation}
         onSelect={(family) => (selectedFamily = family)}
       />
 
@@ -1046,11 +1076,11 @@
                   ? "No matching shared models"
                   : "No models in shared storage yet"}
               </p>
-              {#if sharedDir}
+              {#if sharedLocation}
                 <p
                   class="mt-2 max-w-sm text-center text-[11px] font-mono text-white/35 break-all"
                 >
-                  {sharedDir}
+                  {sharedLocation}
                 </p>
               {/if}
             {:else}
