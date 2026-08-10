@@ -271,6 +271,7 @@ class Worker:
         it so it survives restarts (any node can become master and re-announce
         it). Nodes are never required to resolve to the same path.
         """
+        logger.info("Reconciling shared models storage")
         # Preload the locally persisted value so models on the share resolve
         # before the master re-announces the setting after a restart.
         persisted = load_persisted_shared_models_dir()
@@ -344,6 +345,7 @@ class Worker:
                 ):
                     automount_uri = source
                     automount_retry_at = now + 90
+                    logger.info(f"Attaching share {source}")
                     try:
                         mounted = await to_thread.run_sync(ensure_share_mounted, source)
                         automount_path = str(mounted)
