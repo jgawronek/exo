@@ -44,8 +44,13 @@ class NetworkShare(FrozenModel):
 
 
 def parse_smb_uri(uri: str) -> tuple[str, str]:
-    """Split ``smb://host/share`` into ``(host, share)``."""
-    match = re.fullmatch(r"smb://([^/@]+)/([^/]+)/?", uri.strip())
+    """Split ``smb://host/share`` into ``(host, share)``.
+
+    Extra slashes after the scheme are tolerated: mount tables report SMB
+    sources as ``//host/share``, so a naive ``smb://`` prefix yields
+    ``smb:////host/share``.
+    """
+    match = re.fullmatch(r"smb:/+([^/@]+)/([^/]+)/?", uri.strip())
     if match is None:
         raise ShareMountError(
             f"Not a share exo can attach: {uri!r} (expected smb://host/share)"

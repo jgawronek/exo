@@ -48,6 +48,14 @@ class TestParseSmbUri:
     def test_tolerates_a_trailing_slash(self) -> None:
         assert parse_smb_uri("smb://home.local/models/") == ("home.local", "models")
 
+    def test_tolerates_extra_slashes_from_a_prefixed_mount_source(self) -> None:
+        # A mount table reports the source as //host/share; a naive smb://
+        # prefix produced this exact value in saved configs.
+        assert parse_smb_uri("smb:////10.0.10.44/aimodels") == (
+            "10.0.10.44",
+            "aimodels",
+        )
+
     @pytest.mark.parametrize(
         "uri",
         [

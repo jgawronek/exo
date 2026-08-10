@@ -699,7 +699,10 @@
       .sort((a, b) => b.path.length - a.path.length)[0];
     if (!volume) return null;
     const scheme = /smb|cifs/i.test(volume.filesystem) ? "smb" : "nfs";
-    return `${scheme}://${volume.source}`;
+    // Mount tables report SMB sources as //host/share (sometimes with
+    // user@); strip both so prepending the scheme yields smb://host/share.
+    const source = volume.source.replace(/^\/+/, "").replace(/^[^/@]+@/, "");
+    return `${scheme}://${source}`;
   }
 
   function deriveShareId(path: string): string {
