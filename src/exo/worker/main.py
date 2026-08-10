@@ -339,7 +339,7 @@ class Worker:
                 automount_path = None
             if target is not None and target != reported:
                 status = await to_thread.run_sync(
-                    validate_shared_models_directory, target
+                    validate_shared_models_directory, target, abandon_on_cancel=True
                 )
                 set_shared_models_dir(
                     Path(target).expanduser() if status.valid else None,
