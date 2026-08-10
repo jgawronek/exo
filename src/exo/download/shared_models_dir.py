@@ -12,6 +12,7 @@ which newly spawned runners read at import time.
 """
 
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -297,7 +298,41 @@ def list_network_volumes() -> tuple[NetworkVolume, ...]:
                 reachable=_is_listable_directory(mount_path),
             )
         )
+    volumes.extend(_gvfs_network_volumes())
     return tuple(sorted(volumes, key=lambda volume: volume.path.lower()))
+
+
+_GVFS_SMB_DIRECTORY = re.compile(
+    r"smb-share:server=(?P<server>[^,]+),share=(?P<share>.+)"
+)
+
+
+def _gvfs_network_volumes() -> list[NetworkVolume]:
+    """SMB shares attached through gvfs, which hide from the mount table.
+
+    gvfs exposes one ``fuse.gvfsd-fuse`` mount per user and hangs every
+    attached share underneath it as a directory, so a filesystem-type filter
+    alone reports a node's own auto-mounted shares as not existing.
+    """
+    gvfs_root = Path(f"/run/user/{os.getuid()}/gvfs")
+    try:
+        children = list(gvfs_root.iterdir())
+    except OSError:
+        return []
+    volumes: list[NetworkVolume] = []
+    for child in children:
+        match = _GVFS_SMB_DIRECTORY.fullmatch(child.name)
+        if match is None:
+            continue
+        volumes.append(
+            NetworkVolume(
+                path=str(child),
+                source=f"//{match.group('server')}/{match.group('share')}",
+                filesystem="smb (gvfs)",
+                reachable=_is_listable_directory(child),
+            )
+        )
+    return volumes
 
 
 def _browse_shortcut_entries() -> tuple[SharedModelsDirectoryBrowseEntry, ...]:

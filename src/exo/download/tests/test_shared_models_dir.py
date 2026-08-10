@@ -196,6 +196,18 @@ class TestBrowseSharedModelsDirectories:
         assert len(result.entries) == 3
 
 
+class _PathRootedAt:
+    """Stands in for Path so /run/user/<uid>/gvfs lands under the tmp dir."""
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    def __call__(self, raw: str) -> Path:
+        if raw.startswith("/run/user/"):
+            return self._root / "gvfs"
+        return Path(raw)
+
+
 class TestListNetworkVolumes:
     def test_keeps_network_filesystems_and_drops_local_ones(
         self, tmp_path: Path
@@ -229,6 +241,34 @@ class TestListNetworkVolumes:
             side_effect=OSError("nope"),
         ):
             assert list_network_volumes() == ()
+
+    def test_gvfs_smb_shares_are_listed_as_network_volumes(
+        self, tmp_path: Path
+    ) -> None:
+        """gvfs hides shares inside one FUSE mount, invisible to fstype filters."""
+        gvfs_root = tmp_path / "gvfs"
+        gvfs_root.mkdir()
+        share_dir = gvfs_root / "smb-share:server=10.0.10.44,share=aimodels"
+        share_dir.mkdir()
+        (gvfs_root / "not-a-share").mkdir()
+
+        with (
+            patch(
+                "exo.download.shared_models_dir.psutil.disk_partitions",
+                return_value=[],
+            ),
+            patch("exo.download.shared_models_dir.os.getuid", return_value=0),
+            patch(
+                "exo.download.shared_models_dir.Path",
+                new=_PathRootedAt(tmp_path),
+            ),
+        ):
+            volumes = list_network_volumes()
+
+        assert [volume.source for volume in volumes] == ["//10.0.10.44/aimodels"]
+        assert volumes[0].filesystem == "smb (gvfs)"
+        assert volumes[0].reachable is True  # exists and stats fine
+        assert volumes[0].path.endswith("share=aimodels")
 
     def test_browse_result_carries_volumes_even_on_error(self, tmp_path: Path) -> None:
         partitions = [_Partition("10.0.10.44:/export", "/mnt/models", "nfs4")]
