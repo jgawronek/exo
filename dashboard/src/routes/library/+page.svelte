@@ -490,6 +490,7 @@
       source: string;
       filesystem: string;
       reachable: boolean;
+      label?: string;
     }>
   >([]);
 
@@ -1584,7 +1585,7 @@
           <div
             class="px-4 pt-3 pb-1 text-[10px] font-mono uppercase tracking-wider text-cyan-300/70"
           >
-            Network volumes on this node
+            LAN shares this node has mounted
           </div>
           {#each browseNetworkVolumes as volume (volume.path)}
             <button
@@ -1613,7 +1614,7 @@
               <span class="min-w-0 flex-1">
                 <span class="flex items-center gap-2">
                   <span class="text-sm font-mono text-white/85 truncate"
-                    >{volume.path}</span
+                    >{volume.label || volume.path}</span
                   >
                   <span
                     class="flex-shrink-0 rounded-sm border border-cyan-400/30 bg-cyan-400/10 px-1 py-0.5 text-[9px] font-mono tracking-wider text-cyan-300"
@@ -1634,6 +1635,13 @@
               </span>
             </button>
           {/each}
+        </div>
+      {/if}
+      {#if !browseLoading && browsePath === "" && browseNetworkVolumes.length > 0}
+        <div
+          class="px-4 pt-3 pb-1 text-[10px] font-mono uppercase tracking-wider text-white/40"
+        >
+          Local folders on this node
         </div>
       {/if}
       {#if browseLoading}
