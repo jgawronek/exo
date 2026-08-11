@@ -32,6 +32,8 @@ from exo.utils.pydantic_ext import FrozenModel
 
 _SHARED_MODELS_DIR_ENVIRONMENT_NAME = "XEO_SHARED_MODELS_DIR"
 _SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME = "XEO_SHARED_MODELS_DIR_READ_ONLY"
+_SHARED_MODELS_DIR_COPY_LOCAL_ENVIRONMENT_NAME = "XEO_SHARED_MODELS_DIR_COPY_LOCAL"
+_SHARED_MODELS_DIR_PREFER_LOCAL_ENVIRONMENT_NAME = "XEO_SHARED_MODELS_DIR_PREFER_LOCAL"
 _BROWSE_ENTRY_LIMIT = 200
 _BROWSE_ROOT_CANDIDATES = (
     Path("/Volumes"),
@@ -122,6 +124,12 @@ class _SharedModelsDirectoryHolder:
         self._writable: bool = (
             os.environ.get(_SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME) != "1"
         )
+        self._copy_to_local: bool = (
+            os.environ.get(_SHARED_MODELS_DIR_COPY_LOCAL_ENVIRONMENT_NAME) == "1"
+        )
+        self._prefer_local: bool = (
+            os.environ.get(_SHARED_MODELS_DIR_PREFER_LOCAL_ENVIRONMENT_NAME) == "1"
+        )
 
     @property
     def path(self) -> Path | None:
@@ -129,21 +137,53 @@ class _SharedModelsDirectoryHolder:
 
     @property
     def writable_path(self) -> Path | None:
+        # In copy-to-local mode the share is a source of models, never a
+        # download target: freshly downloaded models belong on local disk.
+        if self._copy_to_local:
+            return None
         return self._path if self._writable else None
 
-    def set(self, path: Path | None, writable: bool = True) -> None:
+    @property
+    def copy_source_root(self) -> Path | None:
+        """The share root when models must be copied off it before loading."""
+        return self._path if self._copy_to_local else None
+
+    @property
+    def prefer_local(self) -> bool:
+        """Whether local complete copies outrank the share in search order."""
+        return self._prefer_local or self._copy_to_local
+
+    def set(
+        self,
+        path: Path | None,
+        writable: bool = True,
+        copy_to_local: bool = False,
+        prefer_local: bool = False,
+    ) -> None:
         self._path = path
         self._writable = writable
+        self._copy_to_local = copy_to_local
+        self._prefer_local = prefer_local
         # Export for runner subprocesses spawned after this point.
         if path is None:
             os.environ.pop(_SHARED_MODELS_DIR_ENVIRONMENT_NAME, None)
             os.environ.pop(_SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME, None)
+            os.environ.pop(_SHARED_MODELS_DIR_COPY_LOCAL_ENVIRONMENT_NAME, None)
+            os.environ.pop(_SHARED_MODELS_DIR_PREFER_LOCAL_ENVIRONMENT_NAME, None)
         else:
             os.environ[_SHARED_MODELS_DIR_ENVIRONMENT_NAME] = str(path)
             if writable:
                 os.environ.pop(_SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME, None)
             else:
                 os.environ[_SHARED_MODELS_DIR_READ_ONLY_ENVIRONMENT_NAME] = "1"
+            if copy_to_local:
+                os.environ[_SHARED_MODELS_DIR_COPY_LOCAL_ENVIRONMENT_NAME] = "1"
+            else:
+                os.environ.pop(_SHARED_MODELS_DIR_COPY_LOCAL_ENVIRONMENT_NAME, None)
+            if prefer_local:
+                os.environ[_SHARED_MODELS_DIR_PREFER_LOCAL_ENVIRONMENT_NAME] = "1"
+            else:
+                os.environ.pop(_SHARED_MODELS_DIR_PREFER_LOCAL_ENVIRONMENT_NAME, None)
 
 
 _holder = _SharedModelsDirectoryHolder()
@@ -154,18 +194,52 @@ def get_shared_models_dir() -> Path | None:
     return _holder.path
 
 
-def set_shared_models_dir(path: Path | None, writable: bool = True) -> None:
+def set_shared_models_dir(
+    path: Path | None,
+    writable: bool = True,
+    copy_to_local: bool = False,
+    prefer_local: bool = False,
+) -> None:
     """Install (or clear) the validated shared models directory.
 
     Only call this with a path that passed
     :func:`validate_shared_models_directory` on this node.
     """
-    _holder.set(path, writable)
+    _holder.set(path, writable, copy_to_local, prefer_local)
 
 
 def get_writable_shared_models_dir() -> Path | None:
     """The shared directory, only when downloads may be written to it."""
     return _holder.writable_path
+
+
+def get_shared_copy_source_root() -> Path | None:
+    """The share root when its models must be copied locally before loading.
+
+    ``None`` either when no share is configured or when the share is in the
+    default load-directly mode.
+    """
+    return _holder.copy_source_root
+
+
+def prefers_local_over_shared() -> bool:
+    """Whether local complete copies outrank the share during model search.
+
+    True when prefer-local is set, or when copy-to-local is set (a copied
+    model must win over the share it came from).
+    """
+    return _holder.prefer_local
+
+
+def is_shared_copy_source(model_dir: Path | str) -> bool:
+    """Whether a model directory sits on a share that is in copy-to-local mode.
+
+    Such a directory is a *source* to copy from, not a place to load weights
+    from — a model found there still needs a local copy before it counts as
+    downloaded on this node.
+    """
+    root = _holder.copy_source_root
+    return root is not None and Path(model_dir).is_relative_to(root)
 
 
 def validate_shared_models_directory(path_text: str) -> SharedDirectoryStatus:

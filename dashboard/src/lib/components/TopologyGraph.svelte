@@ -62,6 +62,14 @@
     resolvePipelineRingNodeIds(instancesData, previewsData, selectedModelId),
   );
   const ringRouteHops = $derived(getRingRouteHops(ringNodeIds));
+  /** 1-based pipeline ring order per node (deviceRank 0 → 1). */
+  const ringOrderByNodeId = $derived.by(() => {
+    const order: Record<string, number> = {};
+    for (let index = 0; index < ringNodeIds.length; index++) {
+      order[ringNodeIds[index]] = index + 1;
+    }
+    return order;
+  });
 
   function unwrapTagged(wrapped: unknown): unknown {
     if (!wrapped || typeof wrapped !== "object") return null;
@@ -1298,13 +1306,17 @@
           }
         });
 
+      const ringOrder = ringOrderByNodeId[nodeInfo.id];
+
       // Add tooltip
       nodeG
         .append("title")
         .text(
           isDisabled
             ? `${friendlyName}\nIn use by a running instance`
-            : `${friendlyName}\nID: ${nodeInfo.id.slice(-8)}\nMemory: ${formatBytes(ramUsed)}/${formatBytes(ramTotal)}`,
+            : ringOrder != null
+              ? `${friendlyName}\nRing order ${ringOrder}\nID: ${nodeInfo.id.slice(-8)}\nMemory: ${formatBytes(ramUsed)}/${formatBytes(ramTotal)}`
+              : `${friendlyName}\nID: ${nodeInfo.id.slice(-8)}\nMemory: ${formatBytes(ramUsed)}/${formatBytes(ramTotal)}`,
         );
 
       if (isDgxSpark) {
@@ -1684,6 +1696,34 @@
             .attr("stroke", wireColor)
             .attr("stroke-width", strokeWidth);
         }
+      }
+
+      // Pipeline ring order badge (1-based deviceRank), when a ring is active.
+      if (ringOrder != null) {
+        const badgeRadius = Math.max(7, Math.min(11, nodeRadius * 0.18));
+        const badgeX = nodeInfo.x - iconBaseWidth / 2 + badgeRadius * 0.35;
+        const badgeY = nodeInfo.y - iconBaseHeight / 2 + badgeRadius * 0.35;
+        const badgeGroup = nodeG.append("g").attr("class", "ring-order-badge");
+        badgeGroup
+          .append("circle")
+          .attr("cx", badgeX)
+          .attr("cy", badgeY)
+          .attr("r", badgeRadius)
+          .attr("fill", "rgba(12, 12, 14, 0.92)")
+          .attr("stroke", "oklch(0.78 0.17 145 / 0.95)")
+          .attr("stroke-width", 1.25);
+        badgeGroup
+          .append("text")
+          .attr("x", badgeX)
+          .attr("y", badgeY)
+          .attr("text-anchor", "middle")
+          .attr("dominant-baseline", "central")
+          .attr("fill", "oklch(0.78 0.17 145)")
+          .attr("font-size", badgeRadius * 1.15)
+          .attr("font-weight", 600)
+          .attr("font-family", "SF Mono, Monaco, monospace")
+          .text(String(ringOrder));
+        badgeGroup.append("title").text(`Ring order ${ringOrder}`);
       }
 
       // --- Telemetry rail (right of icon): load meter + metric stack ---
@@ -2204,9 +2244,11 @@
     void _generationActive;
     const _ringRouteHops = ringRouteHops;
     const _ringNodeIds = ringNodeIds;
+    const _ringOrderByNodeId = ringOrderByNodeId;
     if (_data) {
       void _ringRouteHops;
       void _ringNodeIds;
+      void _ringOrderByNodeId;
       void _nodeTokPerSec;
       void _nodeStageTiming;
       renderGraph();

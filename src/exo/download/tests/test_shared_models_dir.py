@@ -10,18 +10,25 @@ import pytest
 
 from exo.download.download_utils import (
     build_model_path,
+    copy_shared_model_to_local,
+    model_search_dirs,
     resolve_existing_model,
     select_download_dir,
 )
 from exo.download.shared_models_dir import (
     _BROWSE_ENTRY_LIMIT,  # pyright: ignore[reportPrivateUsage]
     browse_shared_models_directories,
+    get_shared_copy_source_root,
     get_shared_models_dir,
+    get_writable_shared_models_dir,
+    is_shared_copy_source,
     list_network_volumes,
+    prefers_local_over_shared,
     set_shared_models_dir,
     validate_shared_models_directory,
 )
 from exo.shared.types.common import ModelId
+from exo.shared.types.memory import Memory
 
 MODEL_ID = ModelId("test-org/test-model")
 NORMALIZED = MODEL_ID.normalize()
@@ -136,6 +143,170 @@ class TestSharedDirPreference:
         set_shared_models_dir(shared)
         with patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)):
             assert select_download_dir(required_bytes=1) == shared
+
+
+class TestPreferLocalMode:
+    def test_search_order_puts_the_share_last(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        writable = tmp_path / "writable"
+        writable.mkdir()
+        set_shared_models_dir(shared, prefer_local=True)
+        with (
+            patch("exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", ()),
+            patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)),
+        ):
+            assert prefers_local_over_shared()
+            assert model_search_dirs() == (writable, shared)
+
+    def test_local_copy_wins_over_the_share(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        _create_complete_model(shared / NORMALIZED)
+        writable = tmp_path / "writable"
+        _create_complete_model(writable / NORMALIZED)
+        set_shared_models_dir(shared, prefer_local=True)
+        with (
+            patch("exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", ()),
+            patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)),
+        ):
+            assert resolve_existing_model(MODEL_ID) == writable / NORMALIZED
+
+    def test_share_is_fallback_when_local_missing(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        _create_complete_model(shared / NORMALIZED)
+        writable = tmp_path / "writable"
+        writable.mkdir()
+        set_shared_models_dir(shared, prefer_local=True)
+        with (
+            patch("exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", ()),
+            patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)),
+        ):
+            assert resolve_existing_model(MODEL_ID) == shared / NORMALIZED
+
+    def test_unchecked_always_prefers_the_share(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        _create_complete_model(shared / NORMALIZED)
+        writable = tmp_path / "writable"
+        _create_complete_model(writable / NORMALIZED)
+        set_shared_models_dir(shared, prefer_local=False)
+        with (
+            patch("exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", ()),
+            patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)),
+        ):
+            assert not prefers_local_over_shared()
+            assert resolve_existing_model(MODEL_ID) == shared / NORMALIZED
+
+    def test_share_remains_a_download_target(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        writable = tmp_path / "writable"
+        writable.mkdir()
+        set_shared_models_dir(shared, prefer_local=True)
+        assert get_writable_shared_models_dir() == shared
+        assert get_shared_copy_source_root() is None
+
+
+class TestCopyToLocalMode:
+    def test_search_order_puts_the_share_last(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        writable = tmp_path / "writable"
+        writable.mkdir()
+        set_shared_models_dir(shared, copy_to_local=True)
+        with (
+            patch("exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", ()),
+            patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)),
+        ):
+            assert model_search_dirs() == (writable, shared)
+
+    def test_local_copy_wins_over_the_share(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        _create_complete_model(shared / NORMALIZED)
+        writable = tmp_path / "writable"
+        _create_complete_model(writable / NORMALIZED)
+        set_shared_models_dir(shared, copy_to_local=True)
+        with (
+            patch("exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", ()),
+            patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)),
+        ):
+            assert resolve_existing_model(MODEL_ID) == writable / NORMALIZED
+
+    def test_share_stays_the_fallback_for_uncopied_models(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        _create_complete_model(shared / NORMALIZED)
+        writable = tmp_path / "writable"
+        writable.mkdir()
+        set_shared_models_dir(shared, copy_to_local=True)
+        with (
+            patch("exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", ()),
+            patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)),
+        ):
+            assert resolve_existing_model(MODEL_ID) == shared / NORMALIZED
+
+    def test_share_is_not_a_download_target(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        writable = tmp_path / "writable"
+        writable.mkdir()
+        set_shared_models_dir(shared, copy_to_local=True)
+        assert get_writable_shared_models_dir() is None
+        with patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)):
+            assert select_download_dir(required_bytes=1) == writable
+
+    def test_copy_source_root_tracks_the_mode(self, tmp_path: Path) -> None:
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        set_shared_models_dir(shared)
+        assert get_shared_copy_source_root() is None
+        assert not is_shared_copy_source(shared / NORMALIZED)
+        set_shared_models_dir(shared, copy_to_local=True)
+        assert get_shared_copy_source_root() == shared
+        assert is_shared_copy_source(shared / NORMALIZED)
+        assert not is_shared_copy_source(tmp_path / "elsewhere" / NORMALIZED)
+
+    async def test_copy_copies_every_file_and_reports_progress(
+        self, tmp_path: Path
+    ) -> None:
+        source = tmp_path / "shared" / NORMALIZED
+        _create_complete_model(source)
+        (source / "model.safetensors.partial-other-node").write_bytes(b"junk")
+        target = tmp_path / "writable" / NORMALIZED
+
+        reports: list[tuple[int, int, int, int]] = []
+
+        async def record(
+            copied: Memory, total: Memory, completed_files: int, total_files: int
+        ) -> None:
+            reports.append(
+                (copied.in_bytes, total.in_bytes, completed_files, total_files)
+            )
+
+        await copy_shared_model_to_local(source, target, record)
+
+        copied_names = sorted(path.name for path in target.iterdir())
+        assert copied_names == [
+            "config.json",
+            "model.safetensors",
+            "model.safetensors.index.json",
+        ]
+        assert (target / "model.safetensors").read_bytes() == b"weights"
+        final_copied, final_total, final_files, total_files = reports[-1]
+        assert final_copied == final_total > 0
+        assert final_files == total_files == 3
+
+    async def test_copy_resumes_and_keeps_finished_files(self, tmp_path: Path) -> None:
+        source = tmp_path / "shared" / NORMALIZED
+        _create_complete_model(source)
+        target = tmp_path / "writable" / NORMALIZED
+        target.mkdir(parents=True)
+        (target / "model.safetensors").write_bytes(b"weights")
+        finished_mtime = (target / "model.safetensors").stat().st_mtime_ns
+
+        await copy_shared_model_to_local(source, target)
+
+        assert (target / "model.safetensors").stat().st_mtime_ns == finished_mtime
+        assert (target / "config.json").read_text() == '{"model_type": "test"}'
+        assert not list(target.glob("*.partial"))
 
 
 class TestBrowseSharedModelsDirectories:

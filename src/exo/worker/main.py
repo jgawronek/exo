@@ -13,7 +13,9 @@ from exo.api.types import ImageEditsTaskParams
 from exo.download.download_utils import is_read_only_model_dir, resolve_existing_model
 from exo.download.share_mounts import ShareMountError, ensure_share_mounted
 from exo.download.shared_models_dir import (
+    get_shared_copy_source_root,
     get_shared_models_dir,
+    is_shared_copy_source,
     load_persisted_shared_models_dir,
     persist_shared_models_dir,
     persist_shared_storage,
@@ -301,6 +303,8 @@ class Worker:
 
         applied: str | None = persisted
         reported: str | None = None
+        applied_copy_to_local: bool | None = None
+        applied_prefer_local: bool | None = None
         persisted_storage = self.state.shared_storage
         automount_uri: str | None = None
         automount_path: str | None = None
@@ -388,14 +392,24 @@ class Worker:
                 # Share changed or cleared; forget the old attachment state.
                 automount_uri = None
                 automount_path = None
-            if target is not None and target != reported:
+            copy_to_local = storage.copy_to_local if storage is not None else False
+            prefer_local = storage.prefer_local if storage is not None else False
+            if target is not None and (
+                target != reported
+                or copy_to_local != applied_copy_to_local
+                or prefer_local != applied_prefer_local
+            ):
                 last_status = status = await to_thread.run_sync(
                     validate_shared_models_directory, target, abandon_on_cancel=True
                 )
                 set_shared_models_dir(
                     Path(target).expanduser() if status.valid else None,
                     status.writable,
+                    copy_to_local,
+                    prefer_local,
                 )
+                applied_copy_to_local = copy_to_local
+                applied_prefer_local = prefer_local
                 # The legacy file exists so any node can re-announce the
                 # *single-path* setting after becoming master. Under a share
                 # the resolved path is node-local (an auto-mount, a per-node
@@ -447,6 +461,8 @@ class Worker:
                 await to_thread.run_sync(persist_shared_models_dir, None)
                 applied = None
                 reported = None
+                applied_copy_to_local = None
+                applied_prefer_local = None
                 last_status = None
                 logger.info("Shared models directory cleared")
 
@@ -515,6 +531,7 @@ class Worker:
     async def plan_step(self):
         while True:
             await anyio.sleep(0.1)
+            copy_source_root = get_shared_copy_source_root()
             task: Task | None = plan(
                 self.node_id,
                 self.runners,
@@ -528,6 +545,9 @@ class Worker:
                 self._download_backoff,
                 self._download_retry_backoff,
                 self._terminating_instance_ids(),
+                shared_copy_source_root=(
+                    str(copy_source_root) if copy_source_root is not None else None
+                ),
             )
             if task is None:
                 continue
@@ -569,7 +589,10 @@ class Worker:
                     found_path = await to_thread.run_sync(
                         resolve_existing_model, model_id, shard.model_card
                     )
-                    if found_path is not None:
+                    # A model found on a copy-to-local share is a source to
+                    # copy from, not a finished download; the coordinator
+                    # runs the copy like any other download.
+                    if found_path is not None and not is_shared_copy_source(found_path):
                         logger.info(f"Model {model_id} found at {found_path}")
                         await self.event_sender.send(
                             NodeDownloadProgress(

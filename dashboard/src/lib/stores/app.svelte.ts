@@ -299,6 +299,8 @@ export interface RawSharedStorage {
   mounts: Record<string, string>;
   source?: string | null;
   label?: string | null;
+  preferLocal?: boolean;
+  copyToLocal?: boolean;
 }
 
 export interface RawSharedDirectoryStatus {

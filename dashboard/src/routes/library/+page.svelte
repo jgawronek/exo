@@ -375,6 +375,8 @@
     mounts: Record<string, string>;
     source?: string | null;
     label?: string | null;
+    preferLocal?: boolean;
+    copyToLocal?: boolean;
   };
 
   let storageShare = $state<StorageShare | null>(null);
@@ -384,6 +386,8 @@
   let shareIdInput = $state("models");
   let shareSourceInput = $state("");
   let shareMountInputs = $state<Record<string, string>>({});
+  let sharePreferLocalInput = $state(false);
+  let shareCopyLocalInput = $state(false);
   let shareSaving = $state(false);
   let shareError = $state<string | null>(null);
 
@@ -407,6 +411,8 @@
   function beginEditShare() {
     shareIdInput = storageShare?.shareId ?? "models";
     shareSourceInput = storageShare?.source ?? "";
+    sharePreferLocalInput = storageShare?.preferLocal ?? false;
+    shareCopyLocalInput = storageShare?.copyToLocal ?? false;
     const existing = Object.values(storageShare?.mounts ?? {});
     // A share with a source is attached by each node at its own local path,
     // so its recorded mounts are per-node artifacts, not a folder root —
@@ -450,6 +456,8 @@
         : {
             shareId: shareIdInput.trim() || deriveShareId(shareRootInput),
             source: source || null,
+            preferLocal: sharePreferLocalInput,
+            copyToLocal: shareCopyLocalInput,
             mounts: Object.fromEntries(
               clusterNodeIds
                 .map((nodeId) => [
@@ -475,6 +483,44 @@
     } finally {
       shareSaving = false;
     }
+  }
+
+  /** Flip a boolean on the saved share without opening the editor. */
+  async function patchShareFlags(flags: {
+    preferLocal?: boolean;
+    copyToLocal?: boolean;
+  }) {
+    if (!storageShare) return;
+    shareSaving = true;
+    shareError = null;
+    try {
+      const response = await fetch("/models/storage/share", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shareId: storageShare.shareId,
+          source: storageShare.source ?? null,
+          label: storageShare.label ?? null,
+          mounts: storageShare.mounts ?? {},
+          preferLocal: flags.preferLocal ?? storageShare.preferLocal ?? false,
+          copyToLocal: flags.copyToLocal ?? storageShare.copyToLocal ?? false,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`Request failed (HTTP ${response.status})`);
+      }
+      await loadStorageConfig();
+      await refreshState();
+    } catch (err) {
+      shareError =
+        err instanceof Error ? err.message : "Failed to update share";
+    } finally {
+      shareSaving = false;
+    }
+  }
+
+  function nodeLocalFreeBytes(nodeId: string): number | undefined {
+    return nodeDiskData?.[nodeId]?.available?.inBytes;
   }
 
   let editingSharedDir = $state(false);
@@ -1033,6 +1079,29 @@
             <div class="text-[11px] font-mono text-red-400">{shareError}</div>
           {/if}
 
+          <label
+            class="flex w-fit items-center gap-2 text-[11px] font-mono text-white/70 cursor-pointer"
+            title="When checked, a complete local copy wins over the share. When unchecked, every node always loads from the share."
+          >
+            <input
+              type="checkbox"
+              class="accent-cyan-400 cursor-pointer"
+              bind:checked={sharePreferLocalInput}
+            />
+            Prefer local copy when available
+          </label>
+          <label
+            class="flex w-fit items-center gap-2 text-[11px] font-mono text-white/70 cursor-pointer"
+            title="Copying uses local disk space, but loads run from local storage instead of over the network"
+          >
+            <input
+              type="checkbox"
+              class="accent-cyan-400 cursor-pointer"
+              bind:checked={shareCopyLocalInput}
+            />
+            Copy to each node's local disk before loading
+          </label>
+
           <div class="flex items-center gap-2 flex-wrap">
             <button
               type="button"
@@ -1122,11 +1191,53 @@
           </div>
           <div class="text-[10px] font-mono text-white/40">
             Models here are available on top of each node's own downloads.
-            Choose one and every node loads it from the share instead of
-            downloading its own copy.
+            {#if storageShare.copyToLocal}
+              Choose one and every node first copies it from the share to its
+              own disk, then loads the local copy.
+            {:else if storageShare.preferLocal}
+              Choose one and each node loads its local copy when present,
+              otherwise the share.
+            {:else}
+              Choose one and every node always loads it from the share.
+            {/if}
           </div>
+          <label
+            class="flex w-fit items-center gap-2 text-[11px] font-mono text-white/70 cursor-pointer"
+            title="When checked, a complete local copy wins over the share. When unchecked, every node always loads from the share."
+          >
+            <input
+              type="checkbox"
+              class="accent-cyan-400 cursor-pointer"
+              checked={storageShare.preferLocal ?? false}
+              disabled={shareSaving}
+              onchange={(event) =>
+                patchShareFlags({
+                  preferLocal: (event.currentTarget as HTMLInputElement)
+                    .checked,
+                })}
+            />
+            Prefer local copy when available
+          </label>
+          <label
+            class="flex w-fit items-center gap-2 text-[11px] font-mono text-white/70 cursor-pointer"
+            title="Copying uses local disk space, but loads run from local storage instead of over the network"
+          >
+            <input
+              type="checkbox"
+              class="accent-cyan-400 cursor-pointer"
+              checked={storageShare.copyToLocal ?? false}
+              disabled={shareSaving}
+              onchange={(event) =>
+                patchShareFlags({
+                  copyToLocal: (event.currentTarget as HTMLInputElement)
+                    .checked,
+                })}
+            />
+            Copy to each node's local disk before loading
+          </label>
           <div class="space-y-1">
             {#each storageNodes as node (node.nodeId)}
+              {@const localFree = nodeLocalFreeBytes(node.nodeId)}
               <div class="flex items-center gap-2 text-[11px] font-mono">
                 <span
                   class="w-1.5 h-1.5 rounded-full flex-shrink-0 {node.valid
@@ -1149,10 +1260,13 @@
                   class="flex-shrink-0 {node.valid
                     ? 'text-green-400'
                     : 'text-red-400'}"
+                  title={node.valid
+                    ? "Free space on this node's local disk"
+                    : undefined}
                 >
                   {node.valid
-                    ? node.freeBytes != null
-                      ? `${formatBytes(node.freeBytes)} free`
+                    ? localFree != null
+                      ? `${formatBytes(localFree)} free`
                       : "ready"
                     : (node.error ?? "unavailable")}
                 </span>

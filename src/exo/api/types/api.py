@@ -501,6 +501,11 @@ class ModelsStorageShare(FrozenModel):
     mounts: dict[NodeId, str] = {}
     source: str | None = None
     label: str | None = None
+    # Prefer a node's own complete copy when present; otherwise use the share.
+    prefer_local: bool = False
+    # Nodes copy a model onto their own disk before loading it, instead of
+    # reading weights from the share on every load.
+    copy_to_local: bool = False
 
 
 class ModelsStorageResponse(FrozenModel):
@@ -527,6 +532,8 @@ class SetModelsStorageShareParams(FrozenModel):
     mounts: dict[NodeId, str] = {}
     source: str | None = None
     label: str | None = None
+    prefer_local: bool = False
+    copy_to_local: bool = False
 
 
 class SetModelsStorageShareResponse(FrozenModel):

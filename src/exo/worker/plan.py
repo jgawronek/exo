@@ -1,6 +1,7 @@
 # pyright: reportUnusedImport = false
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 from exo.shared.types.chunks import InputImageChunk
 from exo.shared.types.common import CommandId, ModelId, NodeId
@@ -59,6 +60,9 @@ def plan(
     download_backoff: KeyedBackoff[ModelId],
     download_retry_backoff: KeyedBackoff[ModelId],
     terminating_instance_ids: frozenset[InstanceId] = frozenset(),
+    # This node's share root when the share is in copy-to-local mode: a model
+    # "complete" under it still needs copying onto local disk before loading.
+    shared_copy_source_root: str | None = None,
 ) -> Task | None:
     # Python short circuiting OR logic should evaluate these sequentially.
     return (
@@ -78,9 +82,16 @@ def plan(
             global_download_status,
             download_backoff,
             download_retry_backoff,
+            shared_copy_source_root,
         )
         or _init_distributed_backend(runners, all_runners)
-        or _load_model(runners, all_runners, global_download_status)
+        or _load_model(
+            node_id,
+            runners,
+            all_runners,
+            global_download_status,
+            shared_copy_source_root,
+        )
         or _ready_to_warmup(runners, all_runners)
         or _pending_tasks(runners, tasks, all_runners, input_chunk_buffer, image_cache)
     )
@@ -163,6 +174,7 @@ def _model_needs_download(
     global_download_status: Mapping[NodeId, Sequence[DownloadProgress]],
     download_backoff: KeyedBackoff[ModelId],
     download_retry_backoff: KeyedBackoff[ModelId],
+    shared_copy_source_root: str | None = None,
 ) -> DownloadModel | None:
     local_downloads = global_download_status.get(node_id, [])
     download_status = {
@@ -178,7 +190,14 @@ def _model_needs_download(
 
         # Already in flight or already here: nothing to issue.
         # We don't invalidate download_status randomly in case a file gets deleted on disk
-        if isinstance(status, (DownloadOngoing, DownloadCompleted)):
+        if isinstance(status, DownloadOngoing):
+            continue
+        # "Complete" on a copy-to-local share means complete at the copy
+        # source; the copy onto this node's disk is the download to issue.
+        if isinstance(status, DownloadCompleted) and (
+            shared_copy_source_root is None
+            or not Path(status.model_directory).is_relative_to(shared_copy_source_root)
+        ):
             continue
 
         if isinstance(status, DownloadFailed):
@@ -251,10 +270,25 @@ def _init_distributed_backend(
 
 
 def _load_model(
+    node_id: NodeId,
     runners: Mapping[RunnerId, RunnerSupervisor],
     all_runners: Mapping[RunnerId, RunnerStatus],
     global_download_status: Mapping[NodeId, Sequence[DownloadProgress]],
+    shared_copy_source_root: str | None = None,
 ) -> LoadModel | None:
+    def download_satisfies_load(nid: NodeId, dp: DownloadProgress) -> bool:
+        if not isinstance(dp, DownloadCompleted):
+            return False
+        # This node's completion pointing into a copy-to-local share is the
+        # copy source, not a loadable download; loading now would read the
+        # weights over the network — the very thing the mode exists to avoid.
+        # Other nodes gate their own loads against their own share roots.
+        return not (
+            nid == node_id
+            and shared_copy_source_root is not None
+            and Path(dp.model_directory).is_relative_to(shared_copy_source_root)
+        )
+
     for runner in runners.values():
         instance = runner.bound_instance.instance
         shard_assignments = instance.shard_assignments
@@ -262,7 +296,7 @@ def _load_model(
         all_local_downloads_complete = all(
             nid in global_download_status
             and any(
-                isinstance(dp, DownloadCompleted)
+                download_satisfies_load(nid, dp)
                 and dp.shard_metadata.model_card.model_id == shard_assignments.model_id
                 for dp in global_download_status[nid]
             )

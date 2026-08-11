@@ -46,6 +46,15 @@ class SharedStorage(FrozenModel):
     mounts: Mapping[NodeId, str] = {}
     source: str | None = None
     label: str | None = None
+    # When set, each node prefers a complete local copy of a model when one
+    # already exists, and falls back to the share otherwise. When unset, a
+    # model on the share is always chosen over any local copy.
+    prefer_local: bool = False
+    # When set, nodes copy a model from the share onto their own disk before
+    # loading it, instead of reading weights over the network on every load.
+    # The share stays the source of models either way. Implies local-first
+    # search order (same as ``prefer_local``) after the copy completes.
+    copy_to_local: bool = False
     # Monotonic edit counter. Nodes persist the share so any of them can
     # re-announce it after winning an election — but without an ordering, a
     # node holding last week's file can resurrect it over yesterday's edit.

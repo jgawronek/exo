@@ -2544,6 +2544,8 @@ class API:
                     mounts=dict(share.mounts),
                     source=share.source,
                     label=share.label,
+                    prefer_local=share.prefer_local,
+                    copy_to_local=share.copy_to_local,
                 )
             ),
             mode=(
@@ -2622,6 +2624,8 @@ class API:
             mounts=mounts,
             source=payload.source.strip() if payload.source else None,
             label=payload.label.strip() if payload.label else None,
+            prefer_local=payload.prefer_local,
+            copy_to_local=payload.copy_to_local,
             # Outrank whatever any node still has on disk, or a stale copy
             # resurfacing after an election would overwrite this edit.
             revision=(current.revision + 1) if current is not None else 1,
@@ -2635,6 +2639,8 @@ class API:
                 mounts=dict(storage.mounts),
                 source=storage.source,
                 label=storage.label,
+                prefer_local=storage.prefer_local,
+                copy_to_local=storage.copy_to_local,
             ),
         )
 

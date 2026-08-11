@@ -8,13 +8,19 @@ from anyio import BrokenResourceError, ClosedResourceError, current_time, to_thr
 from loguru import logger
 
 from exo.download.download_utils import (
+    InsufficientDiskSpaceError,
     RepoDownloadProgress,
+    copy_shared_model_to_local,
     delete_model,
     is_read_only_model_dir,
     map_repo_download_progress_to_download_progress_data,
+    measure_model_directory,
     resolve_existing_model,
+    select_download_dir,
+    writable_model_dirs,
 )
 from exo.download.shard_downloader import ShardDownloader
+from exo.download.shared_models_dir import is_shared_copy_source
 from exo.routing.event_router import (
     EventRouterBrokenResourceError,
     EventRouterClosedResourceError,
@@ -40,6 +46,7 @@ from exo.shared.types.worker.downloads import (
     DownloadOngoing,
     DownloadPending,
     DownloadProgress,
+    DownloadProgressData,
 )
 from exo.shared.types.worker.shards import PipelineShardMetadata, ShardMetadata
 from exo.utils.channels import Receiver, Sender
@@ -197,10 +204,16 @@ class DownloadCoordinator:
     async def _start_download(self, shard: ShardMetadata) -> None:
         model_id = shard.model_card.model_id
 
-        # Check if already downloading, complete, or recently failed
+        # Check if already downloading, complete, or recently failed. A model
+        # "complete" on a copy-to-local share is the one exception: that
+        # completion advertises the copy *source*, and the download it asks
+        # for is the copy onto local disk.
         if model_id in self.download_status:
             status = self.download_status[model_id]
-            if isinstance(status, (DownloadOngoing, DownloadCompleted, DownloadFailed)):
+            if isinstance(status, (DownloadOngoing, DownloadFailed)) or (
+                isinstance(status, DownloadCompleted)
+                and not is_shared_copy_source(status.model_directory)
+            ):
                 logger.debug(
                     f"Download for {model_id} already in progress, complete, or failed, skipping"
                 )
@@ -211,6 +224,12 @@ class DownloadCoordinator:
             resolve_existing_model, model_id, shard.model_card
         )
         if found_path is not None:
+            if is_shared_copy_source(found_path):
+                logger.info(
+                    f"DownloadCoordinator: Copying {model_id} from shared storage at {found_path}"
+                )
+                await self._start_copy_from_share(shard, found_path)
+                return
             logger.info(f"DownloadCoordinator: Model {model_id} found at {found_path}")
             completed = self._completed_from_path(
                 shard, found_path, shard.model_card.storage_size
@@ -316,6 +335,125 @@ class DownloadCoordinator:
         self._tg.start_soon(download_wrapper, scope)
         self.active_downloads[model_id] = scope
 
+    async def _start_copy_from_share(
+        self, shard: ShardMetadata, source_dir: Path
+    ) -> None:
+        """Copy a model off the copy-to-local share onto this node's disk.
+
+        Runs as a download in every observable way — ongoing progress, a
+        completion carrying the local directory, cancellation through
+        ``active_downloads`` — so placement and the dashboard need no special
+        case for it.
+        """
+        model_id = shard.model_card.model_id
+        normalized = model_id.normalize()
+        total = await measure_model_directory(source_dir)
+
+        def pick_target_root() -> Path | InsufficientDiskSpaceError:
+            # Resume into whichever writable directory already holds a partial
+            # copy; otherwise pick by free space like any other download.
+            for candidate_dir in writable_model_dirs():
+                if (candidate_dir / normalized).is_dir():
+                    return candidate_dir
+            try:
+                return select_download_dir(total.in_bytes)
+            except InsufficientDiskSpaceError as error:
+                return error
+
+        target_root = await to_thread.run_sync(pick_target_root)
+        if isinstance(target_root, InsufficientDiskSpaceError):
+            failed = DownloadFailed(
+                shard_metadata=shard,
+                node_id=self.node_id,
+                error_message=(
+                    f"Not enough local disk space to copy {model_id} from "
+                    f"shared storage: {target_root}. Free up space or turn "
+                    "off 'copy to local disk' on the share."
+                ),
+                model_directory=self._default_model_dir(model_id),
+            )
+            self.download_status[model_id] = failed
+            await self.event_sender.send(NodeDownloadProgress(download_progress=failed))
+            return
+        target_dir = target_root / normalized
+
+        started_at = current_time()
+        resumed_bytes: int | None = None
+
+        async def copy_progress(
+            copied: Memory, copy_total: Memory, completed_files: int, total_files: int
+        ) -> None:
+            nonlocal resumed_bytes
+            # The first report carries whatever an earlier attempt already
+            # copied; speed must count this session's bytes only.
+            if resumed_bytes is None:
+                resumed_bytes = copied.in_bytes
+            now = current_time()
+            if now - self._last_progress_time.get(model_id, 0.0) <= 1.0:
+                return
+            this_session = copied.in_bytes - resumed_bytes
+            speed = this_session / max(now - started_at, 0.001)
+            remaining = copy_total.in_bytes - copied.in_bytes
+            ongoing = DownloadOngoing(
+                node_id=self.node_id,
+                shard_metadata=shard,
+                download_progress=DownloadProgressData(
+                    total=copy_total,
+                    downloaded=copied,
+                    downloaded_this_session=Memory.from_bytes(this_session),
+                    completed_files=completed_files,
+                    total_files=total_files,
+                    speed=speed,
+                    eta_ms=int(remaining / speed * 1000) if speed > 0 else 0,
+                    files={},
+                ),
+                model_directory=str(target_dir),
+            )
+            self.download_status[model_id] = ongoing
+            await self.event_sender.send(
+                NodeDownloadProgress(download_progress=ongoing)
+            )
+            self._last_progress_time[model_id] = now
+
+        async def copy_wrapper(cancel_scope: anyio.CancelScope) -> None:
+            try:
+                with cancel_scope:
+                    await copy_shared_model_to_local(
+                        source_dir, target_dir, copy_progress
+                    )
+                    completed = DownloadCompleted(
+                        shard_metadata=shard,
+                        node_id=self.node_id,
+                        total=total,
+                        model_directory=str(target_dir),
+                    )
+                    self.download_status[model_id] = completed
+                    await self.event_sender.send(
+                        NodeDownloadProgress(download_progress=completed)
+                    )
+            except Exception as copy_error:
+                logger.error(f"Copy from share failed for {model_id}: {copy_error}")
+                failed = DownloadFailed(
+                    shard_metadata=shard,
+                    node_id=self.node_id,
+                    error_message=(f"Copying from shared storage failed: {copy_error}"),
+                    model_directory=self._default_model_dir(model_id),
+                )
+                self.download_status[model_id] = failed
+                await self.event_sender.send(
+                    NodeDownloadProgress(download_progress=failed)
+                )
+            except anyio.get_cancelled_exc_class():
+                # ignore cancellation - let cleanup do its thing
+                pass
+            finally:
+                self.active_downloads.pop(model_id, None)
+                self._last_progress_time.pop(model_id, None)
+
+        scope = anyio.CancelScope()
+        self._tg.start_soon(copy_wrapper, scope)
+        self.active_downloads[model_id] = scope
+
     async def _delete_download(self, model_id: ModelId) -> None:
         # Protect read-only models from deletion
         if model_id in self.download_status:
@@ -374,6 +512,15 @@ class DownloadCoordinator:
                             progress.shard.model_card,
                         )
                         if found is not None:
+                            # A model that is only complete on a copy-to-local
+                            # share is advertised as available from it — but
+                            # never over a failed copy attempt, or the failure
+                            # would flap back to "complete" and re-trigger a
+                            # copy that keeps failing.
+                            if is_shared_copy_source(found) and isinstance(
+                                self.download_status.get(model_id), DownloadFailed
+                            ):
+                                continue
                             status: DownloadProgress = self._completed_from_path(
                                 progress.shard, found, progress.total
                             )

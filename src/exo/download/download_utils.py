@@ -36,6 +36,7 @@ from exo.download.huggingface_utils import (
 from exo.download.shared_models_dir import (
     get_shared_models_dir,
     get_writable_shared_models_dir,
+    prefers_local_over_shared,
 )
 from exo.shared.constants import (
     EXO_DEFAULT_MODELS_DIR,
@@ -176,14 +177,20 @@ def _partial_file_path(target_dir: Path, relative_path: str) -> Path:
 def model_search_dirs() -> tuple[Path, ...]:
     """All model directories to search, in priority order.
 
-    The runtime-configured shared directory (when valid on this node) comes
-    first, then read-only directories, then writable directories.
+    By default the runtime-configured shared directory (when valid on this
+    node) comes first, then read-only directories, then writable directories.
+    When prefer-local or copy-to-local is set, the shared directory instead
+    comes *last*: a complete local copy wins every lookup, with the share
+    left as the fallback when no local copy exists.
     """
     base = (*EXO_MODELS_READ_ONLY_DIRS, *EXO_MODELS_DIRS)
     shared_dir = get_shared_models_dir()
     if shared_dir is None:
         return base
-    return (shared_dir, *(d for d in base if d != shared_dir))
+    without_shared = tuple(d for d in base if d != shared_dir)
+    if prefers_local_over_shared():
+        return (*without_shared, shared_dir)
+    return (shared_dir, *without_shared)
 
 
 def writable_model_dirs() -> tuple[Path, ...]:
@@ -310,6 +317,81 @@ async def delete_model(model_id: ModelId) -> bool:
         await asyncio.to_thread(shutil.rmtree, cache_dir, ignore_errors=False)
 
     return deleted
+
+
+_SHARE_COPY_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+def _list_model_files(model_dir: Path) -> list[tuple[str, int]]:
+    """Relative path and size of every file in a model directory.
+
+    In-progress temp files from concurrent writers are not part of the model
+    and are skipped.
+    """
+    files: list[tuple[str, int]] = []
+    for path in sorted(model_dir.rglob("*")):
+        if not path.is_file() or ".partial" in path.name:
+            continue
+        files.append((str(path.relative_to(model_dir)), path.stat().st_size))
+    return files
+
+
+async def measure_model_directory(model_dir: Path) -> Memory:
+    """Total size of a model's files, for sizing a copy off the share."""
+    files = await asyncio.to_thread(_list_model_files, model_dir)
+    return Memory.from_bytes(sum(size for _, size in files))
+
+
+async def copy_shared_model_to_local(
+    source_dir: Path,
+    target_dir: Path,
+    progress_callback: Callable[[Memory, Memory, int, int], Awaitable[None]]
+    | None = None,
+) -> None:
+    """Copy a complete model from the share onto local disk.
+
+    Resumable: a target file that already matches its source's size is kept as
+    is, so an interrupted copy continues where it stopped. Each file is
+    written to a ``.partial`` name and renamed into place only when whole, so
+    a torn copy never masquerades as a finished file. ``progress_callback``
+    receives ``(copied, total, completed_files, total_files)``.
+    """
+    files = await asyncio.to_thread(_list_model_files, source_dir)
+    total = Memory.from_bytes(sum(size for _, size in files))
+    copied = 0
+    completed_files = 0
+
+    async def report() -> None:
+        if progress_callback is not None:
+            await progress_callback(
+                Memory.from_bytes(copied), total, completed_files, len(files)
+            )
+
+    await report()
+    for relative_path, size in files:
+        source_file = source_dir / relative_path
+        target_file = target_dir / relative_path
+        if (
+            await aios.path.exists(target_file)
+            and (await aios.stat(target_file)).st_size == size
+        ):
+            copied += size
+            completed_files += 1
+            await report()
+            continue
+        await aios.makedirs(target_file.parent, exist_ok=True)
+        partial_file = target_file.with_name(f"{target_file.name}.partial")
+        async with (
+            aiofiles.open(source_file, "rb") as source,
+            aiofiles.open(partial_file, "wb") as target,
+        ):
+            while chunk := await source.read(_SHARE_COPY_CHUNK_BYTES):
+                await target.write(chunk)
+                copied += len(chunk)
+                await report()
+        await aios.replace(str(partial_file), str(target_file))
+        completed_files += 1
+        await report()
 
 
 async def seed_models(seed_dir: str | Path):
