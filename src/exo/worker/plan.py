@@ -183,7 +183,13 @@ def _model_needs_download(
 
     for runner in runners.values():
         model_id = runner.bound_instance.bound_shard.model_card.model_id
-        if not isinstance(runner.status, RunnerIdle):
+        # Any pre-load state may still need its weights. Idle-only would
+        # deadlock a node whose serialized share-copy turn arrives after the
+        # pipeline has already connected: it can no longer issue the copy but
+        # cannot load without it either.
+        if not isinstance(
+            runner.status, (RunnerIdle, RunnerConnecting, RunnerConnected)
+        ):
             continue
 
         status = download_status.get(model_id)
