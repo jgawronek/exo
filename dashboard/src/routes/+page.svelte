@@ -25,6 +25,7 @@
   import {
     hasStartedChat,
     isTopologyMinimized,
+    sharedStorage,
     topologyData,
     lastUpdate,
     clearChat,
@@ -2118,6 +2119,7 @@
     copyingFromShare?: boolean;
     loadingSource?: "share" | "local" | "mixed";
     queuedForCopy?: number;
+    waitingForCopy?: boolean;
   } {
     // Unwrap the instance to get shard assignments
     const [instanceTag, instance] = getTagged(instanceWrapped);
@@ -2179,6 +2181,17 @@
 
     if (!result.isDownloading) {
       const statusInfo = deriveInstanceStatus(instanceWrapped);
+      // Copy-to-local is on and some assigned node's weights still live only
+      // on the share: its serialized copy turn hasn't started yet. Without
+      // this the card reads INITIALIZING/WAITING and looks hung.
+      const copyPending =
+        sharedStorage()?.copyToLocal === true &&
+        ["PREPARING", "INITIALIZING", "WAITING", "LOADING"].includes(
+          statusInfo.statusText,
+        ) &&
+        result.perNode.some(
+          (node) => node.status === "completed" && node.onShare,
+        );
       return {
         isDownloading: false,
         isFailed: statusInfo.statusText === "FAILED",
@@ -2187,6 +2200,7 @@
         statusText: statusInfo.statusText,
         perNode: result.perNode,
         loadingSource: statusInfo.loadingSource,
+        waitingForCopy: copyPending,
       };
     }
 
@@ -2218,11 +2232,15 @@
     copyingFromShare?: boolean;
     loadingSource?: "share" | "local" | "mixed";
     queuedForCopy?: number;
+    waitingForCopy?: boolean;
   }): string {
     if (info.statusText === "DOWNLOADING" && info.copyingFromShare) {
       return info.queuedForCopy
         ? `COPYING TO LOCAL (${info.queuedForCopy} QUEUED)`
         : "COPYING TO LOCAL";
+    }
+    if (info.waitingForCopy && info.statusText !== "DOWNLOADING") {
+      return `${info.statusText} · WAITING FOR COPY`;
     }
     if (info.statusText === "LOADING" && info.loadingSource) {
       if (info.loadingSource === "mixed") return "LOADING (SHARE+LOCAL)";
