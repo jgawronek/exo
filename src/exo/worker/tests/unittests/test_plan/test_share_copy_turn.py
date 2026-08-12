@@ -8,7 +8,7 @@ from exo.shared.types.worker.downloads import (
     DownloadProgressData,
 )
 from exo.shared.types.worker.instances import BoundInstance
-from exo.shared.types.worker.runners import RunnerConnected
+from exo.shared.types.worker.runners import RunnerConnected, RunnerLoading
 from exo.shared.types.worker.shards import ShardMetadata
 from exo.utils.keyed_backoff import KeyedBackoff
 from exo.worker.plan import _share_copy_turn  # pyright: ignore[reportPrivateUsage]
@@ -29,6 +29,7 @@ from exo.worker.tests.unittests.conftest import (
 SHARD_A = get_pipeline_shard_metadata(MODEL_A_ID, device_rank=0, world_size=2)
 SHARD_B = get_pipeline_shard_metadata(MODEL_A_ID, device_rank=1, world_size=2)
 NODE_TO_RUNNER = {NODE_A: RUNNER_1_ID, NODE_B: RUNNER_2_ID}
+PRELOAD_RUNNERS = {RUNNER_1_ID: RunnerConnected(), RUNNER_2_ID: RunnerConnected()}
 
 
 def _share_completed(node_id: NodeId, shard: ShardMetadata) -> DownloadCompleted:
@@ -65,8 +66,10 @@ def test_lowest_waiting_node_goes_first() -> None:
         NODE_A: [_share_completed(NODE_A, SHARD_A)],
         NODE_B: [_share_completed(NODE_B, SHARD_B)],
     }
-    assert _share_copy_turn(NODE_A, NODE_TO_RUNNER, MODEL_A_ID, status)
-    assert not _share_copy_turn(NODE_B, NODE_TO_RUNNER, MODEL_A_ID, status)
+    assert _share_copy_turn(NODE_A, NODE_TO_RUNNER, MODEL_A_ID, status, PRELOAD_RUNNERS)
+    assert not _share_copy_turn(
+        NODE_B, NODE_TO_RUNNER, MODEL_A_ID, status, PRELOAD_RUNNERS
+    )
 
 
 def test_in_flight_copy_blocks_everyone_else() -> None:
@@ -74,7 +77,9 @@ def test_in_flight_copy_blocks_everyone_else() -> None:
         NODE_A: [_share_copy_ongoing(NODE_A, SHARD_A)],
         NODE_B: [_share_completed(NODE_B, SHARD_B)],
     }
-    assert not _share_copy_turn(NODE_B, NODE_TO_RUNNER, MODEL_A_ID, status)
+    assert not _share_copy_turn(
+        NODE_B, NODE_TO_RUNNER, MODEL_A_ID, status, PRELOAD_RUNNERS
+    )
 
 
 def test_next_node_proceeds_after_copy_completes_locally() -> None:
@@ -90,7 +95,7 @@ def test_next_node_proceeds_after_copy_completes_locally() -> None:
         ],
         NODE_B: [_share_completed(NODE_B, SHARD_B)],
     }
-    assert _share_copy_turn(NODE_B, NODE_TO_RUNNER, MODEL_A_ID, status)
+    assert _share_copy_turn(NODE_B, NODE_TO_RUNNER, MODEL_A_ID, status, PRELOAD_RUNNERS)
 
 
 def test_unflagged_own_status_does_not_deadlock() -> None:
@@ -103,7 +108,7 @@ def test_unflagged_own_status_does_not_deadlock() -> None:
         model_directory="/mnt/share/model",
     )
     assert _share_copy_turn(
-        NODE_A, NODE_TO_RUNNER, MODEL_A_ID, {NODE_A: [unflagged]}
+        NODE_A, NODE_TO_RUNNER, MODEL_A_ID, {NODE_A: [unflagged]}, PRELOAD_RUNNERS
     )
     assert not _share_copy_turn(
         NODE_B,
@@ -113,6 +118,7 @@ def test_unflagged_own_status_does_not_deadlock() -> None:
             NODE_A: [_share_completed(NODE_A, SHARD_A)],
             NODE_B: [unflagged.model_copy(update={"node_id": NODE_B})],
         },
+        PRELOAD_RUNNERS,
     )
 
 
@@ -166,3 +172,20 @@ def test_connected_runner_still_issues_queued_share_copy() -> None:
 
     assert isinstance(result, DownloadModel)
     assert result.shard_metadata.model_card.model_id == MODEL_A_ID
+
+
+def test_node_already_loading_does_not_block_the_queue() -> None:
+    """Regression: a node that proceeded to load without copying (e.g. its
+    share never resolved a copy root) must not be treated as ahead in the
+    queue — that livelocked every node behind it."""
+    status = {
+        NODE_A: [_share_completed(NODE_A, SHARD_A)],
+        NODE_B: [_share_completed(NODE_B, SHARD_B)],
+    }
+    runners = {
+        RUNNER_1_ID: RunnerLoading(layers_loaded=0, total_layers=1, source="share"),
+        RUNNER_2_ID: RunnerConnected(),
+    }
+    # NODE_A is the lower id but is already loading from the share; NODE_B
+    # must get the copy turn instead of waiting on it forever.
+    assert _share_copy_turn(NODE_B, NODE_TO_RUNNER, MODEL_A_ID, status, runners)

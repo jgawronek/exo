@@ -79,6 +79,7 @@ def plan(
         or _model_needs_download(
             node_id,
             runners,
+            all_runners,
             global_download_status,
             download_backoff,
             download_retry_backoff,
@@ -171,6 +172,7 @@ def _create_runner(
 def _model_needs_download(
     node_id: NodeId,
     runners: Mapping[RunnerId, RunnerSupervisor],
+    all_runners: Mapping[RunnerId, RunnerStatus],
     global_download_status: Mapping[NodeId, Sequence[DownloadProgress]],
     download_backoff: KeyedBackoff[ModelId],
     download_retry_backoff: KeyedBackoff[ModelId],
@@ -211,6 +213,7 @@ def _model_needs_download(
             runner.bound_instance.instance.shard_assignments.node_to_runner,
             model_id,
             global_download_status,
+            all_runners,
         ):
             continue
 
@@ -238,6 +241,7 @@ def _share_copy_turn(
     node_to_runner: Mapping[NodeId, "RunnerId"],
     model_id: ModelId,
     global_download_status: Mapping[NodeId, Sequence[DownloadProgress]],
+    all_runners: Mapping[RunnerId, RunnerStatus],
 ) -> bool:
     """Serialize share-to-local copies: one node copies at a time, cluster-wide.
 
@@ -247,6 +251,12 @@ def _share_copy_turn(
     completed status still points at the share, the lowest node id goes
     first. Every node computes the same answer from the replicated download
     state, so no extra coordination is needed.
+
+    Only nodes still in a pre-load runner state count as waiting: a node
+    whose runner is already loading decided (rightly or wrongly — e.g. its
+    share never resolved a copy root) to proceed without a local copy, and
+    treating it as ahead in the queue would make everyone behind it wait
+    forever.
     """
     for other_node_id, statuses in global_download_status.items():
         if other_node_id == node_id:
@@ -254,10 +264,18 @@ def _share_copy_turn(
         for progress in statuses:
             if isinstance(progress, DownloadOngoing) and progress.from_share:
                 return False
+
+    def still_waiting(nid: NodeId) -> bool:
+        status = all_runners.get(node_to_runner[nid])
+        return status is None or isinstance(
+            status, (RunnerIdle, RunnerConnecting, RunnerConnected)
+        )
+
     waiting = [
         nid
         for nid in node_to_runner
-        if any(
+        if still_waiting(nid)
+        and any(
             isinstance(progress, DownloadCompleted)
             and progress.on_share
             and progress.shard_metadata.model_card.model_id == model_id
