@@ -1907,9 +1907,11 @@
   type NodeDownloadStatus = {
     nodeId: string;
     nodeName: string;
-    status: "completed" | "partial" | "pending" | "downloading";
+    status: "completed" | "partial" | "pending" | "downloading" | "queued";
     percentage: number;
     progress: DownloadProgress | null;
+    /** Completed entry whose files live on the shared drive. */
+    onShare?: boolean;
   };
 
   // Shared helper: collect per-node download status for a model across a set of nodes.
@@ -1991,6 +1993,7 @@
             status: "completed",
             percentage: 100,
             progress: null,
+            onShare: downloadPayload.onShare === true,
           });
           continue;
         }
@@ -2114,6 +2117,7 @@
     perNode: NodeDownloadStatus[];
     copyingFromShare?: boolean;
     loadingSource?: "share" | "local" | "mixed";
+    queuedForCopy?: number;
   } {
     // Unwrap the instance to get shard assignments
     const [instanceTag, instance] = getTagged(instanceWrapped);
@@ -2186,14 +2190,24 @@
       };
     }
 
+    // While a share copy is in flight, sibling nodes whose "completed"
+    // status still points at the share are queued for their own copy turn.
+    const perNode = result.copyingFromShare
+      ? result.perNode.map((node) =>
+          node.status === "completed" && node.onShare
+            ? { ...node, status: "queued" as const, percentage: 0 }
+            : node,
+        )
+      : result.perNode;
     return {
       isDownloading: true,
       isFailed: false,
       errorMessage: null,
       progress: result.progress,
       statusText: "DOWNLOADING",
-      perNode: result.perNode,
+      perNode,
       copyingFromShare: result.copyingFromShare,
+      queuedForCopy: perNode.filter((node) => node.status === "queued").length,
     };
   }
 
@@ -2203,9 +2217,12 @@
     statusText: string;
     copyingFromShare?: boolean;
     loadingSource?: "share" | "local" | "mixed";
+    queuedForCopy?: number;
   }): string {
     if (info.statusText === "DOWNLOADING" && info.copyingFromShare) {
-      return "COPYING TO LOCAL";
+      return info.queuedForCopy
+        ? `COPYING TO LOCAL (${info.queuedForCopy} QUEUED)`
+        : "COPYING TO LOCAL";
     }
     if (info.statusText === "LOADING" && info.loadingSource) {
       if (info.loadingSource === "mixed") return "LOADING (SHARE+LOCAL)";
@@ -6539,6 +6556,19 @@
                             <div
                               class="mt-2 space-y-2 max-h-48 overflow-y-auto pr-1"
                             >
+                              {#each downloadInfo.perNode.filter((n) => n.status === "queued") as queuedNode}
+                                <div
+                                  class="rounded border border-xeo-medium-gray/30 bg-xeo-black/20 p-2 flex items-center justify-between text-[11px] font-mono"
+                                >
+                                  <span class="text-white/60 truncate pr-2"
+                                    >{queuedNode.nodeName}</span
+                                  >
+                                  <span
+                                    class="text-white/40 tracking-wider uppercase"
+                                    >Queued for copy</span
+                                  >
+                                </div>
+                              {/each}
                               {#each downloadInfo.perNode.filter((n) => n.status === "downloading" && n.progress) as nodeProg}
                                 {@const nodePercent = Math.min(
                                   100,
@@ -8236,7 +8266,20 @@
                               <div
                                 class="mt-2 space-y-2 max-h-48 overflow-y-auto pr-1"
                               >
-                                {#each downloadInfo.perNode.filter((n) => n.status === "downloading" && n.progress) as nodeProg}
+                                {#each downloadInfo.perNode.filter((n) => n.status === "queued") as queuedNode}
+                                <div
+                                  class="rounded border border-xeo-medium-gray/30 bg-xeo-black/20 p-2 flex items-center justify-between text-[11px] font-mono"
+                                >
+                                  <span class="text-white/60 truncate pr-2"
+                                    >{queuedNode.nodeName}</span
+                                  >
+                                  <span
+                                    class="text-white/40 tracking-wider uppercase"
+                                    >Queued for copy</span
+                                  >
+                                </div>
+                              {/each}
+                              {#each downloadInfo.perNode.filter((n) => n.status === "downloading" && n.progress) as nodeProg}
                                   {@const nodePercent = Math.min(
                                     100,
                                     Math.max(0, nodeProg.percentage),

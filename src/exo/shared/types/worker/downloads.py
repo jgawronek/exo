@@ -37,6 +37,9 @@ class DownloadPending(BaseDownloadProgress):
 class DownloadCompleted(BaseDownloadProgress):
     total: Memory
     read_only: bool = False
+    # True when model_directory lives on the shared models drive (env
+    # read-only dirs or the runtime-configured share mount).
+    on_share: bool = False
 
 
 class DownloadFailed(BaseDownloadProgress):

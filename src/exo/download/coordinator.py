@@ -13,6 +13,7 @@ from exo.download.download_utils import (
     copy_shared_model_to_local,
     delete_model,
     is_read_only_model_dir,
+    is_shared_model_path,
     map_repo_download_progress_to_download_progress_data,
     measure_model_directory,
     resolve_existing_model,
@@ -90,6 +91,7 @@ class DownloadCoordinator:
             total=total,
             model_directory=str(found),
             read_only=is_read_only_model_dir(found),
+            on_share=is_shared_model_path(found),
         )
 
     async def _download_progress_callback(

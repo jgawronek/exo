@@ -194,9 +194,17 @@ def _model_needs_download(
             continue
         # "Complete" on a copy-to-local share means complete at the copy
         # source; the copy onto this node's disk is the download to issue.
-        if isinstance(status, DownloadCompleted) and (
-            shared_copy_source_root is None
-            or not Path(status.model_directory).is_relative_to(shared_copy_source_root)
+        needs_share_copy = isinstance(status, DownloadCompleted) and (
+            shared_copy_source_root is not None
+            and Path(status.model_directory).is_relative_to(shared_copy_source_root)
+        )
+        if isinstance(status, DownloadCompleted) and not needs_share_copy:
+            continue
+        if needs_share_copy and not _share_copy_turn(
+            node_id,
+            runner.bound_instance.instance.shard_assignments.node_to_runner,
+            model_id,
+            global_download_status,
         ):
             continue
 
@@ -217,6 +225,44 @@ def _model_needs_download(
             instance_id=runner.bound_instance.instance.instance_id,
             shard_metadata=runner.bound_instance.bound_shard,
         )
+
+
+def _share_copy_turn(
+    node_id: NodeId,
+    node_to_runner: Mapping[NodeId, "RunnerId"],
+    model_id: ModelId,
+    global_download_status: Mapping[NodeId, Sequence[DownloadProgress]],
+) -> bool:
+    """Serialize share-to-local copies: one node copies at a time, cluster-wide.
+
+    The share's disk collapses under concurrent sequential readers, so
+    parallel copies are slower in total than taking turns. Any in-flight
+    share copy anywhere blocks new ones; among this instance's nodes whose
+    completed status still points at the share, the lowest node id goes
+    first. Every node computes the same answer from the replicated download
+    state, so no extra coordination is needed.
+    """
+    for other_node_id, statuses in global_download_status.items():
+        if other_node_id == node_id:
+            continue
+        for progress in statuses:
+            if isinstance(progress, DownloadOngoing) and progress.from_share:
+                return False
+    waiting = [
+        nid
+        for nid in node_to_runner
+        if any(
+            isinstance(progress, DownloadCompleted)
+            and progress.on_share
+            and progress.shard_metadata.model_card.model_id == model_id
+            for progress in global_download_status.get(nid, [])
+        )
+    ]
+    if node_id not in waiting:
+        # Our own completed event predates the on_share flag; don't deadlock —
+        # only hold back while flagged peers are ahead of us in the queue.
+        return not waiting
+    return min(waiting) == node_id
 
 
 def _init_distributed_backend(
