@@ -3992,8 +3992,17 @@
     return selectedInstanceType !== "MlxJaccl" || device.rdma;
   }
 
+  const rdmaEnabled = $derived(selectedInstanceType === "MlxJaccl");
+
+  /** RDMA on → Jaccl (Mac-only eligible); off → Ring/TCP for the full cluster. */
+  function setRdmaEnabled(enabled: boolean) {
+    selectedInstanceType = enabled ? "MlxJaccl" : "MlxRing";
+    saveLaunchDefaults();
+  }
+
   // Switching to RDMA must drop any already-selected non-RDMA device,
   // otherwise the filter silently asks for a placement that cannot exist.
+  // Empty filter after that means “all eligible” = all RDMA-capable Macs.
   $effect(() => {
     if (selectedInstanceType !== "MlxJaccl") return;
     for (const device of selectableDevices) {
@@ -7083,60 +7092,37 @@
                     </div>
                   </div>
 
-                  <!-- Interconnect -->
+                  <!-- Interconnect: RDMA on/off (Mac-only when enabled) -->
                   <div>
-                    <div class="text-xs text-white/50 font-mono mb-2">
-                      Interconnect:
-                    </div>
-                    <div class="flex gap-2">
+                    <div
+                      class="flex items-center justify-between gap-3 max-w-md"
+                    >
+                      <div class="min-w-0">
+                        <div class="text-xs text-white/50 font-mono">RDMA</div>
+                        <div class="text-[10px] font-mono text-white/35 mt-0.5">
+                          {rdmaEnabled
+                            ? "Thunderbolt RDMA (eligible Macs only)"
+                            : "Off — TCP/IP Ring for selected devices"}
+                        </div>
+                      </div>
                       <button
-                        onclick={() => {
-                          selectedInstanceType = "MlxRing";
-                          saveLaunchDefaults();
-                        }}
-                        class="flex items-center gap-2 py-1.5 px-3 text-xs font-mono border rounded transition-all duration-200 cursor-pointer {selectedInstanceType ===
-                        'MlxRing'
-                          ? 'bg-transparent text-xeo-green border-xeo-green'
-                          : 'bg-transparent text-white/70 border-xeo-medium-gray/50 hover:border-xeo-green/50'}"
+                        type="button"
+                        role="switch"
+                        aria-checked={rdmaEnabled}
+                        aria-label="Use RDMA interconnect"
+                        onclick={() => setRdmaEnabled(!rdmaEnabled)}
+                        class="relative shrink-0 w-11 h-6 rounded-full border transition-colors duration-200 cursor-pointer {rdmaEnabled
+                          ? 'bg-xeo-green/30 border-xeo-green'
+                          : 'bg-xeo-black/60 border-xeo-medium-gray/50'}"
                       >
                         <span
-                          class="w-3 h-3 rounded-full border-2 flex items-center justify-center {selectedInstanceType ===
-                          'MlxRing'
-                            ? 'border-xeo-green'
-                            : 'border-xeo-medium-gray'}"
-                        >
-                          {#if selectedInstanceType === "MlxRing"}
-                            <span class="w-1.5 h-1.5 rounded-full bg-xeo-green"
-                            ></span>
-                          {/if}
-                        </span>
-                        TCP/IP
-                      </button>
-                      <button
-                        onclick={() => {
-                          selectedInstanceType = "MlxJaccl";
-                          saveLaunchDefaults();
-                        }}
-                        class="flex items-center gap-2 py-1.5 px-3 text-xs font-mono border rounded transition-all duration-200 cursor-pointer {selectedInstanceType ===
-                        'MlxJaccl'
-                          ? 'bg-transparent text-xeo-green border-xeo-green'
-                          : 'bg-transparent text-white/70 border-xeo-medium-gray/50 hover:border-xeo-green/50'}"
-                      >
-                        <span
-                          class="w-3 h-3 rounded-full border-2 flex items-center justify-center {selectedInstanceType ===
-                          'MlxJaccl'
-                            ? 'border-xeo-green'
-                            : 'border-xeo-medium-gray'}"
-                        >
-                          {#if selectedInstanceType === "MlxJaccl"}
-                            <span class="w-1.5 h-1.5 rounded-full bg-xeo-green"
-                            ></span>
-                          {/if}
-                        </span>
-                        RDMA (Fast)
+                          class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform duration-200 {rdmaEnabled
+                            ? 'translate-x-5 bg-xeo-green'
+                            : 'translate-x-0 bg-white/50'}"
+                        ></span>
                       </button>
                     </div>
-                    {#if selectedInstanceType === "MlxJaccl"}
+                    {#if rdmaEnabled}
                       {#if rdmaCapableNodeIds.length === 0}
                         <div
                           class="mt-2 text-[11px] font-mono text-amber-400/70 leading-relaxed"
@@ -7148,13 +7134,19 @@
                         <div
                           class="mt-2 text-[11px] font-mono text-white/40 leading-relaxed"
                         >
-                          Runs on the {rdmaCapableNodeIds.length} device{rdmaCapableNodeIds.length ===
+                          Automatically uses the {rdmaCapableNodeIds.length} device{rdmaCapableNodeIds.length ===
                           1
                             ? ""
                             : "s"} that support RDMA ({rdmaCapableNames.join(
                             ", ",
-                          )}). The other {rdmaExcludedCount} are excluded, so Minimum
-                          Devices caps at {rdmaCapableNodeIds.length}.
+                          )}). The other {rdmaExcludedCount} are excluded, so
+                          Minimum Devices caps at {rdmaCapableNodeIds.length}.
+                        </div>
+                      {:else}
+                        <div
+                          class="mt-2 text-[11px] font-mono text-white/40 leading-relaxed"
+                        >
+                          Using RDMA on {rdmaCapableNames.join(", ")}.
                         </div>
                       {/if}
                     {/if}
