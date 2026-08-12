@@ -61,20 +61,21 @@ async def get_friendly_name() -> str:
     return process.stdout.decode("utf-8", errors="replace").strip() or hostname
 
 
-async def _get_interface_types_from_networksetup() -> dict[str, InterfaceType]:
-    """Parse networksetup -listallhardwareports to get interface types."""
-    if sys.platform != "darwin":
-        return {}
+def parse_interface_types_from_networksetup(stdout: str) -> dict[str, InterfaceType]:
+    """Parse ``networksetup -listallhardwareports`` output into device→type.
 
-    try:
-        result = await run_process(["networksetup", "-listallhardwareports"])
-    except CalledProcessError:
-        return {}
+    Thunderbolt Hardware Ports keep ``thunderbolt`` even when the device is
+    ``en2+`` (typical on Mac Studio). Ring host selection uses a 40 Gb/s
+    nominal for that type; previously those ports were overwritten to
+    ``maybe_ethernet`` (10 Gb/s nominal), so TB never beat a 10GbE socket hop.
 
+    Ambiguous ``en*`` adapters outside ``en0``/``en1`` whose port name did not
+    identify Wi‑Fi / Ethernet / Thunderbolt are still tagged ``maybe_ethernet``.
+    """
     types: dict[str, InterfaceType] = {}
     current_type: InterfaceType = "unknown"
 
-    for line in result.stdout.decode().splitlines():
+    for line in stdout.splitlines():
         if line.startswith("Hardware Port:"):
             port_name = line.split(":", 1)[1].strip()
             if "Wi-Fi" in port_name:
@@ -87,12 +88,33 @@ async def _get_interface_types_from_networksetup() -> dict[str, InterfaceType]:
                 current_type = "unknown"
         elif line.startswith("Device:"):
             device = line.split(":", 1)[1].strip()
-            # enX is ethernet adapters or thunderbolt - these must be deprioritised
-            if device.startswith("en") and device not in ["en0", "en1"]:
+            # Only demote unidentified en2+ adapters. Do not strip a real
+            # Thunderbolt (or Wi‑Fi / Ethernet) classification — Studio TB
+            # ports enumerate as en2+ and must keep the thunderbolt nominal.
+            if (
+                current_type == "unknown"
+                and device.startswith("en")
+                and device not in ("en0", "en1")
+            ):
                 current_type = "maybe_ethernet"
             types[device] = current_type
 
     return types
+
+
+async def _get_interface_types_from_networksetup() -> dict[str, InterfaceType]:
+    """Parse networksetup -listallhardwareports to get interface types."""
+    if sys.platform != "darwin":
+        return {}
+
+    try:
+        result = await run_process(["networksetup", "-listallhardwareports"])
+    except CalledProcessError:
+        return {}
+
+    return parse_interface_types_from_networksetup(
+        result.stdout.decode("utf-8", errors="replace")
+    )
 
 
 def _classify_linux_interface(
