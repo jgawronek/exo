@@ -44,6 +44,9 @@ class PlaceInstance(BaseCommand):
     instance_meta: InstanceMeta
     min_nodes: int
     node_layers: dict[NodeId, int] | None = None
+    # Explicit pipeline ring order (device ranks 0..N-1). When set, placement
+    # skips auto link-speed reordering and uses this sequence instead.
+    node_order: list[NodeId] | None = None
     max_context_length: int | None = None
     prefill_step_size: int | None = None
 

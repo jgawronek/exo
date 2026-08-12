@@ -1267,6 +1267,45 @@ def effective_hop_speed_megabits(
     return _effective_link_speed_megabits(None)
 
 
+def apply_manual_cycle_order(
+    selected_cycle: Cycle,
+    node_order: list[NodeId],
+    cycle_digraph: Topology,
+    node_network: Mapping[NodeId, NodeNetworkInfo],
+) -> Cycle:
+    """Apply a user-specified ring order, validating node set and hop connectivity.
+
+    Raises:
+        ValueError: When the order is not a permutation of the cycle nodes, or
+            when any consecutive ring hop (including wrap-around) has no usable
+            bidirectional socket path. Handled by placement / the API as 400.
+    """
+    if len(node_order) != len(set(node_order)):
+        raise ValueError("Manual ring order contains duplicate nodes")
+    if set(node_order) != set(selected_cycle.node_ids):
+        raise ValueError(
+            "Manual ring order must list exactly the selected pipeline nodes"
+        )
+
+    world_size = len(node_order)
+    if world_size >= 2:
+        for rank, node_id in enumerate(node_order):
+            next_node_id = node_order[(rank + 1) % world_size]
+            forward = effective_hop_speed_megabits(
+                node_id, next_node_id, cycle_digraph, node_network
+            )
+            reverse = effective_hop_speed_megabits(
+                next_node_id, node_id, cycle_digraph, node_network
+            )
+            if forward is None or forward <= 0 or reverse is None or reverse <= 0:
+                raise ValueError(
+                    f"Manual ring order has no connected hop between "
+                    f"rank {rank} and rank {(rank + 1) % world_size}"
+                )
+
+    return Cycle(node_ids=list(node_order))
+
+
 def order_cycle_for_fastest_links(
     selected_cycle: Cycle,
     cycle_digraph: Topology,

@@ -276,6 +276,7 @@ class PlaceInstanceParams(BaseModel):
     instance_meta: InstanceMeta = InstanceMeta.MlxRing
     min_nodes: int = 1
     node_layers: dict[NodeId, int] | None = None
+    node_order: list[NodeId] | None = None
     max_context_length: int | None = None
     prefill_step_size: int | None = None
 

@@ -247,6 +247,73 @@ def test_pipeline_placement_uses_manual_per_node_layer_allocation(
     assert shard_b.end_layer - shard_b.start_layer == 8
 
 
+def test_pipeline_placement_respects_manual_node_order(
+    model_card: ModelCard,
+) -> None:
+    topology, node_a, node_b = _create_two_node_ring()
+    node_memory = {
+        node_a: create_node_memory(800),
+        node_b: create_node_memory(800),
+    }
+    node_network = {
+        node_a: create_node_network(),
+        node_b: create_node_network(),
+    }
+    command = place_instance_command(
+        model_card.model_copy(update={"storage_size": Memory.from_bytes(1000)})
+    ).model_copy(
+        update={
+            "min_nodes": 2,
+            "node_layers": {node_a: 4, node_b: 6},
+            "node_order": [node_b, node_a],
+        }
+    )
+
+    placements = place_instance(
+        command,
+        topology,
+        {},
+        node_memory,
+        node_network,
+        _metal_only(node_memory),
+    )
+
+    instance = next(iter(placements.values()))
+    runner_b = instance.shard_assignments.node_to_runner[node_b]
+    runner_a = instance.shard_assignments.node_to_runner[node_a]
+    shard_b = instance.shard_assignments.runner_to_shard[runner_b]
+    shard_a = instance.shard_assignments.runner_to_shard[runner_a]
+    assert shard_b.device_rank == 0
+    assert shard_a.device_rank == 1
+    assert shard_b.end_layer - shard_b.start_layer == 6
+    assert shard_a.end_layer - shard_a.start_layer == 4
+
+
+def test_manual_node_order_requires_node_layers(model_card: ModelCard) -> None:
+    topology, node_a, node_b = _create_two_node_ring()
+    node_memory = {
+        node_a: create_node_memory(500),
+        node_b: create_node_memory(500),
+    }
+    node_network = {
+        node_a: create_node_network(),
+        node_b: create_node_network(),
+    }
+    command = place_instance_command(model_card).model_copy(
+        update={"min_nodes": 2, "node_order": [node_a, node_b]}
+    )
+
+    with pytest.raises(ValueError, match="requires node_layers"):
+        place_instance(
+            command,
+            topology,
+            {},
+            node_memory,
+            node_network,
+            _metal_only(node_memory),
+        )
+
+
 def test_manual_layer_allocation_rejects_non_pipeline_sharding(
     model_card: ModelCard,
 ) -> None:

@@ -612,12 +612,13 @@ class API:
             instance_meta=payload.instance_meta,
             min_nodes=payload.min_nodes,
             node_layers=payload.node_layers,
+            node_order=payload.node_order,
             max_context_length=max_context_length,
             prefill_step_size=prefill_step_size,
         )
         # Validate manual layer allocations (and other placement constraints)
         # before accepting the command so the UI can surface a 400 immediately.
-        if payload.node_layers is not None:
+        if payload.node_layers is not None or payload.node_order is not None:
             try:
                 get_instance_placements(
                     command,

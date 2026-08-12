@@ -4,6 +4,7 @@ from typing import Sequence
 
 from exo.master.placement_utils import (
     Cycle,
+    apply_manual_cycle_order,
     estimate_cycle_decode_seconds_per_token,
     filter_cycles_by_memory,
     get_mlx_jaccl_coordinators,
@@ -159,10 +160,22 @@ def place_instance(
                 "No free nodes available; all nodes are used by running instances"
             )
 
-    if command.node_layers is not None:
+    if command.node_layers is not None or command.node_order is not None:
         if command.sharding != Sharding.Pipeline:
             raise ValueError("Manual layer allocation requires Pipeline sharding")
-        requested_nodes = set(command.node_layers)
+        if command.node_order is not None and command.node_layers is None:
+            raise ValueError("Manual ring order requires node_layers")
+        if (
+            command.node_order is not None
+            and command.node_layers is not None
+            and set(command.node_order) != set(command.node_layers)
+        ):
+            raise ValueError("Manual ring order must match node_layers keys")
+        requested_nodes = set(
+            command.node_layers
+            if command.node_layers is not None
+            else (command.node_order or [])
+        )
         candidate_cycles = [
             cycle
             for cycle in candidate_cycles
@@ -331,7 +344,11 @@ def place_instance(
 
     cycle_digraph: Topology = topology.get_subgraph_from_nodes(selected_cycle.node_ids)
 
-    if command.instance_meta == InstanceMeta.MlxRing:
+    if command.node_order is not None:
+        selected_cycle = apply_manual_cycle_order(
+            selected_cycle, command.node_order, cycle_digraph, node_network
+        )
+    elif command.instance_meta == InstanceMeta.MlxRing:
         # Cycle enumeration returns nodes in arbitrary order; put the fastest
         # links (e.g. a direct 200GbE cable between two nodes) on ring hops.
         selected_cycle = order_cycle_for_fastest_links(

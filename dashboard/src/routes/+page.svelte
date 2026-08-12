@@ -1686,8 +1686,12 @@
       // Use the specific preview if provided, otherwise fall back to filtered preview
       const preview = specificPreview ?? filteredPreview();
       const customizedLayers = launchLayersCustomized
-        ? launchLayerOverrides
+        ? buildOrderedNodeLayers()
         : null;
+      const customizedOrder =
+        launchLayersCustomized && launchLayerOrder
+          ? [...launchLayerOrder]
+          : null;
       const previewNodeIds = preview?.instance
         ? new Set(
             extractPreviewLayerRows(preview.instance)?.map((row) => row.nodeId) ??
@@ -1696,13 +1700,14 @@
         : new Set<string>();
       const customAppliesToPreview =
         customizedLayers != null &&
+        customizedOrder != null &&
         previewNodeIds.size > 0 &&
-        previewNodeIds.size === Object.keys(customizedLayers).length &&
-        Object.keys(customizedLayers).every((id) => previewNodeIds.has(id));
+        previewNodeIds.size === customizedOrder.length &&
+        customizedOrder.every((id) => previewNodeIds.has(id));
 
       let response: Response;
-      if (customAppliesToPreview && customizedLayers) {
-        // User edited pipeline layer counts — re-place with node_layers
+      if (customAppliesToPreview && customizedLayers && customizedOrder) {
+        // User edited pipeline layer counts and/or ring order — re-place
         // (do not post the stale preview instance).
         response = await fetch("/place_instance", {
           method: "POST",
@@ -1713,6 +1718,7 @@
             instance_meta: selectedInstanceType,
             min_nodes: selectedMinNodes,
             node_layers: customizedLayers,
+            node_order: customizedOrder,
             max_context_length: options.maxContextLength,
             prefill_step_size: options.prefillStepSize,
           }),
@@ -4012,6 +4018,10 @@
   let launchLayerOverrides = $state<Record<string, number> | null>(null);
   let launchLayerBaselineSignature = $state("");
   let launchLayerBaseline = $state<Record<string, number> | null>(null);
+  let launchLayerOrder = $state<string[] | null>(null);
+  let launchLayerOrderBaseline = $state<string[] | null>(null);
+  let launchLayerDragNodeId = $state<string | null>(null);
+  let launchLayerDragOverNodeId = $state<string | null>(null);
 
   const previewLayerRows = $derived.by((): PreviewLayerRow[] | null => {
     if (selectedSharding !== "Pipeline") return null;
@@ -4026,12 +4036,31 @@
     return rows.reduce((sum, row) => sum + row.layers, 0);
   });
 
+  const launchLayerRows = $derived.by((): PreviewLayerRow[] | null => {
+    const previewRows = previewLayerRows;
+    if (!previewRows || !launchLayerOrder || !launchLayerOverrides) return null;
+    const byId = new Map(previewRows.map((row) => [row.nodeId, row]));
+    return launchLayerOrder.map((nodeId, index) => {
+      const base = byId.get(nodeId);
+      return {
+        nodeId,
+        nodeName: base?.nodeName ?? getNodeName(nodeId),
+        deviceRank: index,
+        layers: launchLayerOverrides![nodeId] ?? base?.layers ?? 1,
+      };
+    });
+  });
+
   $effect(() => {
     const rows = previewLayerRows;
     if (!rows) {
       launchLayerOverrides = null;
       launchLayerBaseline = null;
+      launchLayerOrder = null;
+      launchLayerOrderBaseline = null;
       launchLayerBaselineSignature = "";
+      launchLayerDragNodeId = null;
+      launchLayerDragOverNodeId = null;
       return;
     }
     const signature = previewLayerSignature(rows);
@@ -4039,17 +4068,35 @@
       const baseline = Object.fromEntries(
         rows.map((row) => [row.nodeId, row.layers]),
       );
+      const order = rows.map((row) => row.nodeId);
       launchLayerBaselineSignature = signature;
       launchLayerBaseline = baseline;
       launchLayerOverrides = { ...baseline };
+      launchLayerOrderBaseline = [...order];
+      launchLayerOrder = [...order];
     }
   });
 
   const launchLayersCustomized = $derived.by((): boolean => {
-    if (!launchLayerOverrides || !launchLayerBaseline) return false;
+    if (
+      !launchLayerOverrides ||
+      !launchLayerBaseline ||
+      !launchLayerOrder ||
+      !launchLayerOrderBaseline
+    ) {
+      return false;
+    }
     const overrideIds = Object.keys(launchLayerOverrides);
     const baselineIds = Object.keys(launchLayerBaseline);
     if (overrideIds.length !== baselineIds.length) return true;
+    if (
+      launchLayerOrder.length !== launchLayerOrderBaseline.length ||
+      launchLayerOrder.some(
+        (id, index) => id !== launchLayerOrderBaseline![index],
+      )
+    ) {
+      return true;
+    }
     return overrideIds.some(
       (id) => launchLayerOverrides![id] !== launchLayerBaseline![id],
     );
@@ -4061,7 +4108,7 @@
   });
 
   const launchLayerValid = $derived.by((): boolean => {
-    const rows = previewLayerRows;
+    const rows = launchLayerRows;
     if (!rows || !launchLayerOverrides) return true;
     const counts = rows.map((row) => launchLayerOverrides![row.nodeId] ?? 0);
     return (
@@ -4075,8 +4122,9 @@
   );
 
   function resetLaunchLayersToPreview() {
-    if (!launchLayerBaseline) return;
+    if (!launchLayerBaseline || !launchLayerOrderBaseline) return;
     launchLayerOverrides = { ...launchLayerBaseline };
+    launchLayerOrder = [...launchLayerOrderBaseline];
   }
 
   function setLaunchLayerCount(nodeId: string, raw: number) {
@@ -4086,6 +4134,35 @@
       ...launchLayerOverrides,
       [nodeId]: Math.max(1, Math.round(raw)),
     };
+  }
+
+  function reorderLaunchLayerNode(fromNodeId: string, toNodeId: string) {
+    if (!launchLayerOrder || fromNodeId === toNodeId) return;
+    const fromIndex = launchLayerOrder.indexOf(fromNodeId);
+    const toIndex = launchLayerOrder.indexOf(toNodeId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const next = [...launchLayerOrder];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    launchLayerOrder = next;
+  }
+
+  function moveLaunchLayerNode(nodeId: string, delta: number) {
+    if (!launchLayerOrder) return;
+    const fromIndex = launchLayerOrder.indexOf(nodeId);
+    if (fromIndex < 0) return;
+    const toIndex = fromIndex + delta;
+    if (toIndex < 0 || toIndex >= launchLayerOrder.length) return;
+    reorderLaunchLayerNode(nodeId, launchLayerOrder[toIndex]);
+  }
+
+  function buildOrderedNodeLayers(): Record<string, number> | null {
+    if (!launchLayerOrder || !launchLayerOverrides) return null;
+    const ordered: Record<string, number> = {};
+    for (const nodeId of launchLayerOrder) {
+      ordered[nodeId] = launchLayerOverrides[nodeId];
+    }
+    return ordered;
   }
 
   // Auto-update selectedMinNodes when node count changes (default to 1 = show all placements)
@@ -7085,7 +7162,7 @@
                   </div>
 
                   <!-- Manual pipeline layer placement (pre-launch) -->
-                  {#if selectedSharding === "Pipeline" && previewLayerRows && launchLayerOverrides}
+                  {#if selectedSharding === "Pipeline" && launchLayerRows && launchLayerOverrides}
                     <div>
                       <div
                         class="flex items-center justify-between gap-2 mb-2"
@@ -7107,15 +7184,65 @@
                         {/if}
                       </div>
                       <div class="space-y-1.5">
-                        {#each previewLayerRows as row (row.nodeId)}
+                        {#each launchLayerRows as row, rowIndex (row.nodeId)}
                           <div
-                            class="flex items-center gap-2 max-w-md"
+                            draggable="true"
+                            ondragstart={(event) => {
+                              launchLayerDragNodeId = row.nodeId;
+                              event.dataTransfer?.setData(
+                                "text/plain",
+                                row.nodeId,
+                              );
+                              if (event.dataTransfer) {
+                                event.dataTransfer.effectAllowed = "move";
+                              }
+                            }}
+                            ondragend={() => {
+                              launchLayerDragNodeId = null;
+                              launchLayerDragOverNodeId = null;
+                            }}
+                            ondragover={(event) => {
+                              event.preventDefault();
+                              if (event.dataTransfer) {
+                                event.dataTransfer.dropEffect = "move";
+                              }
+                              launchLayerDragOverNodeId = row.nodeId;
+                            }}
+                            ondragleave={() => {
+                              if (launchLayerDragOverNodeId === row.nodeId) {
+                                launchLayerDragOverNodeId = null;
+                              }
+                            }}
+                            ondrop={(event) => {
+                              event.preventDefault();
+                              const fromId =
+                                launchLayerDragNodeId ||
+                                event.dataTransfer?.getData("text/plain");
+                              if (fromId) {
+                                reorderLaunchLayerNode(fromId, row.nodeId);
+                              }
+                              launchLayerDragNodeId = null;
+                              launchLayerDragOverNodeId = null;
+                            }}
+                            class="flex items-center gap-2 max-w-md rounded px-1 py-0.5 transition-colors cursor-grab active:cursor-grabbing {launchLayerDragOverNodeId ===
+                            row.nodeId
+                              ? 'bg-xeo-green/10 ring-1 ring-xeo-green/40'
+                              : launchLayerDragNodeId === row.nodeId
+                                ? 'opacity-50'
+                                : ''}"
                           >
                             <span
-                              class="w-5 h-5 shrink-0 rounded-full border border-xeo-green/50 text-[10px] font-mono text-xeo-green flex items-center justify-center"
-                              title="Ring position {row.deviceRank + 1}"
+                              class="text-white/30 text-xs select-none"
+                              title="Drag to reorder ring"
+                              aria-hidden="true"
                             >
-                              {row.deviceRank + 1}
+                              ⋮⋮
+                            </span>
+                            <span
+                              class="w-5 h-5 shrink-0 rounded-full border border-xeo-green/50 text-[10px] font-mono text-xeo-green flex items-center justify-center"
+                              title="Ring position {rowIndex + 1}"
+                            >
+                              {rowIndex + 1}
                             </span>
                             <span
                               class="flex-1 min-w-0 truncate text-xs font-mono text-white/70"
@@ -7123,6 +7250,31 @@
                             >
                               {row.nodeName}
                             </span>
+                            <div class="flex flex-col gap-0.5 shrink-0">
+                              <button
+                                type="button"
+                                disabled={rowIndex === 0}
+                                onclick={() =>
+                                  moveLaunchLayerNode(row.nodeId, -1)}
+                                class="text-[9px] leading-none px-1 text-white/40 hover:text-xeo-green disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer"
+                                title="Move earlier in ring"
+                                aria-label="Move {row.nodeName} earlier in ring"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                disabled={rowIndex ===
+                                  launchLayerRows.length - 1}
+                                onclick={() =>
+                                  moveLaunchLayerNode(row.nodeId, 1)}
+                                class="text-[9px] leading-none px-1 text-white/40 hover:text-xeo-green disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer"
+                                title="Move later in ring"
+                                aria-label="Move {row.nodeName} later in ring"
+                              >
+                                ▼
+                              </button>
+                            </div>
                             <input
                               type="number"
                               min="1"
@@ -7130,6 +7282,7 @@
                               step="1"
                               value={launchLayerOverrides[row.nodeId] ??
                                 row.layers}
+                              onpointerdown={(event) => event.stopPropagation()}
                               oninput={(event) => {
                                 const raw = Number(
                                   (event.currentTarget as HTMLInputElement)
@@ -7150,8 +7303,8 @@
                         </div>
                       {:else}
                         <div class="text-[10px] font-mono text-white/35 mt-1">
-                          Ring order stays from placement; edit how many layers
-                          each device holds.
+                          Drag to set ring order; edit how many layers each
+                          device holds.
                         </div>
                       {/if}
                     </div>
