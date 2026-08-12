@@ -1,9 +1,14 @@
 from exo.shared.instance_launch_limits import (
     MAX_PREFILL_STEP_SIZE,
+    MAX_TEMPERATURE,
     MIN_CONTEXT_LENGTH,
     MIN_PREFILL_STEP_SIZE,
+    MIN_TEMPERATURE,
+    MIN_THINKING_BUDGET,
     clamp_context_length,
     clamp_prefill_step_size,
+    clamp_temperature,
+    clamp_thinking_budget,
 )
 
 
@@ -39,3 +44,28 @@ class TestClampPrefillStepSize:
 
     def test_passes_through_in_range(self) -> None:
         assert clamp_prefill_step_size(512, 4096) == 512
+
+
+class TestClampThinkingBudget:
+    def test_none_stays_unbounded(self) -> None:
+        assert clamp_thinking_budget(None) is None
+
+    def test_clamps_below_minimum(self) -> None:
+        assert clamp_thinking_budget(10) == MIN_THINKING_BUDGET
+
+    def test_passes_through_in_range(self) -> None:
+        assert clamp_thinking_budget(4096) == 4096
+
+
+class TestClampTemperature:
+    def test_none_keeps_engine_default(self) -> None:
+        assert clamp_temperature(None) is None
+
+    def test_clamps_negative(self) -> None:
+        assert clamp_temperature(-0.5) == MIN_TEMPERATURE
+
+    def test_clamps_above_maximum(self) -> None:
+        assert clamp_temperature(9.0) == MAX_TEMPERATURE
+
+    def test_passes_through_in_range(self) -> None:
+        assert clamp_temperature(0.6) == 0.6

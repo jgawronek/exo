@@ -60,6 +60,7 @@ from exo.worker.engines.mlx.generator.remote_prefill import remote_prefill
 from exo.worker.engines.mlx.types import KVCacheType, Model
 from exo.worker.engines.mlx.utils_mlx import (
     apply_chat_template,
+    detect_thinking_prompt_suffix,
     fix_unmatched_think_end_tokens,
     mx_barrier,
     mx_ranks_agree_on_value,
@@ -504,6 +505,76 @@ def eos_ids_from_tokenizer(tokenizer: TokenizerWrapper) -> list[int]:
     return eos
 
 
+def thinking_budget_processor(
+    tokenizer: TokenizerWrapper,
+    budget: int,
+    starts_in_thinking: bool,
+) -> Callable[[mx.array, mx.array], mx.array] | None:
+    """Force-close the thinking phase after ``budget`` thinking tokens.
+
+    Tracks the thinking state by watching the previously sampled token in the
+    history the sampler loop passes to logits processors, so it needs no hook
+    into the engine itself. Once the budget is exhausted the think-end tag is
+    force-fed (all other logits floored), which flips the stream parser out of
+    thinking and makes the model start answering. Returns ``None`` for models
+    without think tags.
+    """
+    think_start_tokens: tuple[int, ...] | None = getattr(
+        tokenizer, "think_start_tokens", None
+    )
+    think_end_tokens: tuple[int, ...] | None = getattr(
+        tokenizer, "think_end_tokens", None
+    )
+    if not think_start_tokens or not think_end_tokens:
+        return None
+    think_start_id = think_start_tokens[-1]
+    think_end_id = think_end_tokens[-1]
+    end_sequence = list(think_end_tokens)
+
+    in_thinking = starts_in_thinking
+    thinking_tokens = 0
+    force_index = -1  # >= 0 while force-feeding end_sequence
+
+    def force_next(logits: mx.array) -> mx.array:
+        nonlocal in_thinking, thinking_tokens, force_index
+        forced = mx.full(logits.shape, -1e9, dtype=logits.dtype)
+        forced[..., end_sequence[force_index]] = 0.0
+        force_index += 1
+        if force_index >= len(end_sequence):
+            force_index = -1
+            in_thinking = False
+            thinking_tokens = 0
+        return forced
+
+    def process(history: mx.array, logits: mx.array) -> mx.array:
+        nonlocal in_thinking, thinking_tokens, force_index
+
+        if force_index >= 0:
+            return force_next(logits)
+
+        if history.size > 0:
+            previous_token = int(history[-1].item())
+            if previous_token == think_start_id:
+                in_thinking = True
+                thinking_tokens = 0
+            elif previous_token == think_end_id:
+                in_thinking = False
+                thinking_tokens = 0
+
+        if not in_thinking:
+            return logits
+
+        thinking_tokens += 1
+        if thinking_tokens < budget:
+            return logits
+
+        logger.info(f"Thinking budget of {budget} tokens exhausted; forcing think-end")
+        force_index = 0
+        return force_next(logits)
+
+    return process
+
+
 def extract_top_logprobs(
     logprobs: mx.array,
     tokenizer: TokenizerWrapper,
@@ -566,6 +637,8 @@ def mlx_generate(
     vision_processor: VisionProcessor | None = None,
     max_context_length: int | None = None,
     prefill_step_size: int | None = None,
+    default_temperature: float | None = None,
+    thinking_budget: int | None = None,
 ) -> Generator[GenerationResponse]:
     # Ensure that generation stats only contains peak memory for this generation
     mx.reset_peak_memory()
@@ -659,8 +732,18 @@ def mlx_generate(
         eos_ids = eos_ids_from_tokenizer(tokenizer)
         logits_processors = [ban_token_ids(eos_ids)] + logits_processors
 
+    if thinking_budget is not None:
+        budget_processor = thinking_budget_processor(
+            tokenizer,
+            thinking_budget,
+            starts_in_thinking=detect_thinking_prompt_suffix(prompt, tokenizer),
+        )
+        if budget_processor is not None:
+            logits_processors = logits_processors + [budget_processor]
+
+    fallback_temperature = default_temperature if default_temperature is not None else 0.7
     sampler = make_sampler(
-        temp=task.temperature if task.temperature is not None else 0.7,
+        temp=task.temperature if task.temperature is not None else fallback_temperature,
         top_p=task.top_p if task.top_p is not None else 1.0,
         min_p=task.min_p if task.min_p is not None else 0.05,
         top_k=task.top_k if task.top_k is not None else 0,

@@ -25,6 +25,13 @@ class BaseInstance(TaggedModel):
     max_context_length: int | None = None
     # Tokens per prefill forward; None uses XEO_PREFILL_STEP_SIZE.
     prefill_step_size: int | None = None
+    # Default sampling temperature for requests that don't set one; None
+    # falls through to the engine default.
+    default_temperature: float | None = None
+    # Max thinking tokens before the runner force-closes the thinking phase
+    # by feeding the think-end tag. None leaves thinking unbounded. Only
+    # meaningful for thinking models; harmless otherwise.
+    thinking_budget: int | None = None
 
     def shard(self, runner_id: RunnerId) -> ShardMetadata | None:
         return self.shard_assignments.runner_to_shard.get(runner_id, None)

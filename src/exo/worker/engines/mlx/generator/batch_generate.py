@@ -44,6 +44,7 @@ from exo.worker.engines.mlx.generator.generate import (
     extract_top_logprobs,
     patch_embed_tokens,
     prefill,
+    thinking_budget_processor,
 )
 from exo.worker.engines.mlx.generator.remote_prefill import remote_prefill
 from exo.worker.engines.mlx.generator.speculative import (
@@ -57,6 +58,7 @@ from exo.worker.engines.mlx.patches.opt_batch_gen import (
 )
 from exo.worker.engines.mlx.types import KVCacheType, Model
 from exo.worker.engines.mlx.utils_mlx import (
+    detect_thinking_prompt_suffix,
     fix_unmatched_think_end_tokens,
     mx_ranks_agree_on_value,
     system_prompt_token_count,
@@ -111,6 +113,8 @@ class ExoBatchGenerator:
     draft_model: Model | None = None
     max_context_length: int | None = None
     prefill_step_size: int | None = None
+    default_temperature: float | None = None
+    thinking_budget: int | None = None
 
     _mlx_gen: MlxBatchGenerator = field(init=False)
     _active_tasks: dict[int, _EngineTask] = field(default_factory=dict, init=False)
@@ -237,10 +241,13 @@ class ExoBatchGenerator:
         seed = task_params.seed if task_params.seed is not None else 42
         mx.random.seed(seed)
 
+        fallback_temperature = (
+            self.default_temperature if self.default_temperature is not None else 0.7
+        )
         sampler = make_sampler(
             temp=task_params.temperature
             if task_params.temperature is not None
-            else 0.7,
+            else fallback_temperature,
             top_p=task_params.top_p if task_params.top_p is not None else 1.0,
             min_p=task_params.min_p if task_params.min_p is not None else 0.05,
             top_k=task_params.top_k if task_params.top_k is not None else 0,
@@ -350,6 +357,17 @@ class ExoBatchGenerator:
             # Only sample length eos tokens
             eos_ids = eos_ids_from_tokenizer(self.tokenizer)
             logits_processors = [ban_token_ids(eos_ids)] + logits_processors
+
+        if self.thinking_budget is not None:
+            budget_processor = thinking_budget_processor(
+                self.tokenizer,
+                self.thinking_budget,
+                starts_in_thinking=detect_thinking_prompt_suffix(
+                    prompt, self.tokenizer
+                ),
+            )
+            if budget_processor is not None:
+                logits_processors = logits_processors + [budget_processor]
 
         max_tokens = task_params.max_output_tokens or MAX_TOKENS
 

@@ -81,11 +81,15 @@ class MlxBuilder(Builder):
     pipeline_shard: PipelineShardMetadata | None = None
     max_context_length: int | None = None
     prefill_step_size: int | None = None
+    default_temperature: float | None = None
+    thinking_budget: int | None = None
 
     def connect(self, bound_instance: BoundInstance) -> None:
         self.group = initialize_mlx(bound_instance)
         self.max_context_length = bound_instance.instance.max_context_length
         self.prefill_step_size = bound_instance.instance.prefill_step_size
+        self.default_temperature = bound_instance.instance.default_temperature
+        self.thinking_budget = bound_instance.instance.thinking_budget
 
     def load(self, bound_instance: BoundInstance) -> Generator[ModelLoadingResponse]:
         (
@@ -96,6 +100,8 @@ class MlxBuilder(Builder):
         self.draft_model = load_speculative_draft_model(self.group)
         self.max_context_length = bound_instance.instance.max_context_length
         self.prefill_step_size = bound_instance.instance.prefill_step_size
+        self.default_temperature = bound_instance.instance.default_temperature
+        self.thinking_budget = bound_instance.instance.thinking_budget
         bound_shard = bound_instance.bound_shard
         if isinstance(bound_shard, PipelineShardMetadata) and self.group is not None:
             self.pipeline_shard = bound_shard
@@ -164,6 +170,8 @@ class MlxBuilder(Builder):
                 vision_processor=vision_processor,
                 max_context_length=self.max_context_length,
                 prefill_step_size=self.prefill_step_size,
+                default_temperature=self.default_temperature,
+                thinking_budget=self.thinking_budget,
             )
         else:
             logger.info("using BatchGenerator")
@@ -182,4 +190,6 @@ class MlxBuilder(Builder):
                 pipeline_shard=self.pipeline_shard,
                 max_context_length=self.max_context_length,
                 prefill_step_size=self.prefill_step_size,
+                default_temperature=self.default_temperature,
+                thinking_budget=self.thinking_budget,
             )

@@ -49,6 +49,8 @@ class PlaceInstance(BaseCommand):
     node_order: list[NodeId] | None = None
     max_context_length: int | None = None
     prefill_step_size: int | None = None
+    default_temperature: float | None = None
+    thinking_budget: int | None = None
 
 
 class CreateInstance(BaseCommand):

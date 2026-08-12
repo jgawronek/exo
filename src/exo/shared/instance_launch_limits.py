@@ -32,3 +32,27 @@ def clamp_prefill_step_size(requested: int | None, default: int) -> int:
     """Clamp prefill chunk size to ``[256, 4096]``, falling back to ``default``."""
     value = default if requested is None else requested
     return max(MIN_PREFILL_STEP_SIZE, min(value, MAX_PREFILL_STEP_SIZE))
+
+
+# Thinking budget: floor keeps room for at least a short reasoning pass —
+# closing the phase after a handful of tokens degrades answers more than
+# disabling thinking outright.
+MIN_THINKING_BUDGET: Final[int] = 256
+
+# Sampling temperature bounds mirror the OpenAI-compatible request range.
+MIN_TEMPERATURE: Final[float] = 0.0
+MAX_TEMPERATURE: Final[float] = 2.0
+
+
+def clamp_thinking_budget(requested: int | None) -> int | None:
+    """Clamp a thinking budget to ``[256, ∞)``; ``None`` leaves it unbounded."""
+    if requested is None:
+        return None
+    return max(MIN_THINKING_BUDGET, requested)
+
+
+def clamp_temperature(requested: float | None) -> float | None:
+    """Clamp a default temperature to ``[0.0, 2.0]``; ``None`` keeps the engine default."""
+    if requested is None:
+        return None
+    return max(MIN_TEMPERATURE, min(requested, MAX_TEMPERATURE))

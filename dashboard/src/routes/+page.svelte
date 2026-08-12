@@ -1008,6 +1008,14 @@
   let launchContextLength = $state<number | null>(null);
   let launchPrefillStepSize = $state(4096);
   let launchOptionsLoaded = $state(false);
+  // Sampling temperature default for the instance; null = engine default (0.7).
+  let launchTemperature = $state<number | null>(null);
+  // Max thinking tokens before the runner force-closes the thinking phase;
+  // null = unlimited. Only affects thinking models.
+  let launchThinkingBudget = $state<number | null>(null);
+  const MIN_THINKING_BUDGET = 256;
+  const MIN_TEMPERATURE = 0;
+  const MAX_TEMPERATURE = 2;
 
   const selectedModelCardContext = $derived.by(() => {
     const modelId = selectedModelId;
@@ -1031,7 +1039,20 @@
     launchPrefillStepSize >= MIN_PREFILL_STEP_SIZE &&
       launchPrefillStepSize <= MAX_PREFILL_STEP_SIZE,
   );
-  const launchOptionsValid = $derived(launchContextValid && launchPrefillValid);
+  const launchTemperatureValid = $derived(
+    launchTemperature == null ||
+      (launchTemperature >= MIN_TEMPERATURE &&
+        launchTemperature <= MAX_TEMPERATURE),
+  );
+  const launchThinkingBudgetValid = $derived(
+    launchThinkingBudget == null || launchThinkingBudget >= MIN_THINKING_BUDGET,
+  );
+  const launchOptionsValid = $derived(
+    launchContextValid &&
+      launchPrefillValid &&
+      launchTemperatureValid &&
+      launchThinkingBudgetValid,
+  );
 
   function clampLaunchContext(value: number, cardContext: number): number {
     if (cardContext <= 0) return value;
@@ -1092,6 +1113,8 @@
         ...(body as Record<string, unknown>),
         maxContextLength: launchContextEnabled ? launchContextLength : null,
         prefillStepSize: launchPrefillStepSize,
+        defaultTemperature: launchTemperature,
+        thinkingBudget: launchThinkingBudget,
       },
     };
   }
@@ -1099,10 +1122,14 @@
   function launchOptionParams(): {
     maxContextLength: number | null;
     prefillStepSize: number;
+    defaultTemperature: number | null;
+    thinkingBudget: number | null;
   } {
     return {
       maxContextLength: launchContextEnabled ? launchContextLength : null,
       prefillStepSize: launchPrefillStepSize,
+      defaultTemperature: launchTemperature,
+      thinkingBudget: launchThinkingBudget,
     };
   }
 
@@ -1721,6 +1748,8 @@
             node_order: customizedOrder,
             max_context_length: options.maxContextLength,
             prefill_step_size: options.prefillStepSize,
+            default_temperature: options.defaultTemperature,
+            thinking_budget: options.thinkingBudget,
           }),
         });
       } else if (preview?.instance) {
@@ -1744,6 +1773,8 @@
             min_nodes: selectedMinNodes,
             max_context_length: options.maxContextLength,
             prefill_step_size: options.prefillStepSize,
+            default_temperature: options.defaultTemperature,
+            thinking_budget: options.thinkingBudget,
           }),
         });
       }
@@ -7158,6 +7189,79 @@
                     <div class="text-[10px] font-mono text-white/35 mt-1">
                       Tokens per prefill step. Higher is faster; too high can
                       crash Macs (Metal watchdog).
+                    </div>
+                  </div>
+
+                  <!-- Default temperature -->
+                  <div>
+                    <div class="text-xs text-white/50 font-mono mb-1">
+                      Temperature
+                      <span class="text-white/30"
+                        >({MIN_TEMPERATURE}–{MAX_TEMPERATURE})</span
+                      >
+                    </div>
+                    <input
+                      type="number"
+                      min={MIN_TEMPERATURE}
+                      max={MAX_TEMPERATURE}
+                      step="0.1"
+                      placeholder="0.7"
+                      value={launchTemperature ?? ""}
+                      oninput={(event) => {
+                        const text = (event.currentTarget as HTMLInputElement)
+                          .value;
+                        if (text === "") {
+                          launchTemperature = null;
+                          return;
+                        }
+                        const raw = Number(text);
+                        if (!Number.isFinite(raw)) return;
+                        launchTemperature = Math.max(
+                          MIN_TEMPERATURE,
+                          Math.min(raw, MAX_TEMPERATURE),
+                        );
+                      }}
+                      class="w-full max-w-[12rem] bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1.5 text-xs font-mono text-white focus:border-xeo-green/60 outline-none"
+                    />
+                    <div class="text-[10px] font-mono text-white/35 mt-1">
+                      Default sampling temperature for this instance. Requests
+                      that set their own temperature still win. Empty = 0.7.
+                    </div>
+                  </div>
+
+                  <!-- Thinking budget -->
+                  <div>
+                    <div class="text-xs text-white/50 font-mono mb-1">
+                      Thinking budget
+                      <span class="text-white/30"
+                        >(min {MIN_THINKING_BUDGET}, thinking models)</span
+                      >
+                    </div>
+                    <input
+                      type="number"
+                      min={MIN_THINKING_BUDGET}
+                      step="256"
+                      placeholder="unlimited"
+                      value={launchThinkingBudget ?? ""}
+                      oninput={(event) => {
+                        const text = (event.currentTarget as HTMLInputElement)
+                          .value;
+                        if (text === "") {
+                          launchThinkingBudget = null;
+                          return;
+                        }
+                        const raw = Number(text);
+                        if (!Number.isFinite(raw)) return;
+                        launchThinkingBudget = Math.max(
+                          MIN_THINKING_BUDGET,
+                          Math.round(raw),
+                        );
+                      }}
+                      class="w-full max-w-[12rem] bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1.5 text-xs font-mono text-white focus:border-xeo-green/60 outline-none"
+                    />
+                    <div class="text-[10px] font-mono text-white/35 mt-1">
+                      Max thinking tokens before the answer is forced to start.
+                      Stops runaway "Wait…" loops. Empty = unlimited.
                     </div>
                   </div>
 

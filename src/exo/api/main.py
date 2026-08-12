@@ -576,8 +576,11 @@ class API:
         from exo.shared.constants import EXO_PREFILL_STEP_SIZE
         from exo.shared.instance_launch_limits import (
             MAX_PREFILL_STEP_SIZE,
+            MAX_TEMPERATURE,
             MIN_CONTEXT_LENGTH,
             MIN_PREFILL_STEP_SIZE,
+            MIN_TEMPERATURE,
+            MIN_THINKING_BUDGET,
             clamp_prefill_step_size,
         )
 
@@ -586,6 +589,9 @@ class API:
             min_prefill_step_size=MIN_PREFILL_STEP_SIZE,
             max_prefill_step_size=MAX_PREFILL_STEP_SIZE,
             min_context_length=MIN_CONTEXT_LENGTH,
+            min_thinking_budget=MIN_THINKING_BUDGET,
+            min_temperature=MIN_TEMPERATURE,
+            max_temperature=MAX_TEMPERATURE,
         )
 
     async def place_instance(self, payload: PlaceInstanceParams):
@@ -593,6 +599,8 @@ class API:
         from exo.shared.instance_launch_limits import (
             clamp_context_length,
             clamp_prefill_step_size,
+            clamp_temperature,
+            clamp_thinking_budget,
         )
 
         model_card = await ModelCard.load(payload.model_id)
@@ -615,6 +623,8 @@ class API:
             node_order=payload.node_order,
             max_context_length=max_context_length,
             prefill_step_size=prefill_step_size,
+            default_temperature=clamp_temperature(payload.default_temperature),
+            thinking_budget=clamp_thinking_budget(payload.thinking_budget),
         )
         # Validate manual layer allocations (and other placement constraints)
         # before accepting the command so the UI can surface a 400 immediately.

@@ -401,6 +401,8 @@ def place_instance(
                 jaccl_coordinators=mlx_jaccl_coordinators,
                 max_context_length=command.max_context_length,
                 prefill_step_size=command.prefill_step_size,
+                default_temperature=command.default_temperature,
+                thinking_budget=command.thinking_budget,
             )
         case InstanceMeta.MlxRing:
             ephemeral_port = random_ephemeral_port()
@@ -420,6 +422,8 @@ def place_instance(
                 ),
                 max_context_length=command.max_context_length,
                 prefill_step_size=command.prefill_step_size,
+                default_temperature=command.default_temperature,
+                thinking_budget=command.thinking_budget,
             )
 
     return target_instances
