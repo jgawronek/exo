@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from typing import Literal
 
 from pydantic import model_validator
 
@@ -37,6 +38,9 @@ class RunnerConnected(BaseRunnerStatus):
 class RunnerLoading(BaseRunnerStatus):
     layers_loaded: int = 0
     total_layers: int = 0
+    # Where the weights are read from: the shared drive or this node's own
+    # disk. None when the runner predates the field or the path is unknown.
+    source: Literal["share", "local"] | None = None
 
 
 class RunnerLoaded(BaseRunnerStatus):

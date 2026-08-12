@@ -408,6 +408,7 @@ class DownloadCoordinator:
                     files={},
                 ),
                 model_directory=str(target_dir),
+                from_share=True,
             )
             self.download_status[model_id] = ongoing
             await self.event_sender.send(

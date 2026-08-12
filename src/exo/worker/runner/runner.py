@@ -4,7 +4,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 from anyio import ClosedResourceError, EndOfStream
 
@@ -288,10 +288,26 @@ class Runner:
                 total_layers = (
                     self.shard_metadata.end_layer - self.shard_metadata.start_layer
                 )
-                logger.info("runner loading")
+                from exo.download.download_utils import (
+                    build_model_path,
+                    is_shared_model_path,
+                )
+
+                load_source: Literal["share", "local"] = (
+                    "share"
+                    if is_shared_model_path(
+                        build_model_path(self.shard_metadata.model_card.model_id)
+                    )
+                    else "local"
+                )
+                logger.info(f"runner loading from {load_source}")
 
                 self.update_status(
-                    RunnerLoading(layers_loaded=0, total_layers=total_layers)
+                    RunnerLoading(
+                        layers_loaded=0,
+                        total_layers=total_layers,
+                        source=load_source,
+                    )
                 )
                 self.acknowledge_task(task)
 
@@ -300,6 +316,7 @@ class Runner:
                         RunnerLoading(
                             layers_loaded=load_progress.layers_loaded,
                             total_layers=load_progress.total,
+                            source=load_source,
                         )
                     )
 

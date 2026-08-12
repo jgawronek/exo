@@ -1922,6 +1922,7 @@
     progress: DownloadProgress | null;
     perNode: NodeDownloadStatus[];
     failedError: string | null;
+    copyingFromShare?: boolean;
   } {
     const empty = {
       isDownloading: false,
@@ -1938,6 +1939,7 @@
     // (e.g. PipelineShardMetadata + TensorShardMetadata). Keep the last entry,
     // which is the most recently applied event.
     const perNodeMap = new Map<string, NodeDownloadStatus>();
+    let anyFromShare = false;
 
     const nodeIdSet = nodeIds ? new Set(nodeIds) : null;
     for (const [nodeId, nodeDownloads] of Object.entries(downloadsData)) {
@@ -2025,6 +2027,7 @@
         )
           continue;
 
+        if (downloadPayload.fromShare === true) anyFromShare = true;
         perNodeMap.set(nodeId, {
           nodeId,
           nodeName,
@@ -2083,6 +2086,7 @@
       },
       perNode,
       failedError: null,
+      copyingFromShare: anyFromShare,
     };
   }
 
@@ -2108,6 +2112,8 @@
     progress: DownloadProgress | null;
     statusText: string;
     perNode: NodeDownloadStatus[];
+    copyingFromShare?: boolean;
+    loadingSource?: "share" | "local" | "mixed";
   } {
     // Unwrap the instance to get shard assignments
     const [instanceTag, instance] = getTagged(instanceWrapped);
@@ -2176,6 +2182,7 @@
         progress: null,
         statusText: statusInfo.statusText,
         perNode: result.perNode,
+        loadingSource: statusInfo.loadingSource,
       };
     }
 
@@ -2186,7 +2193,25 @@
       progress: result.progress,
       statusText: "DOWNLOADING",
       perNode: result.perNode,
+      copyingFromShare: result.copyingFromShare,
     };
+  }
+
+  /** Human label for an instance's status chip, enriched with the weight
+   *  source: share vs local load, or a share-to-local copy in flight. */
+  function instanceStatusDisplayText(info: {
+    statusText: string;
+    copyingFromShare?: boolean;
+    loadingSource?: "share" | "local" | "mixed";
+  }): string {
+    if (info.statusText === "DOWNLOADING" && info.copyingFromShare) {
+      return "COPYING TO LOCAL";
+    }
+    if (info.statusText === "LOADING" && info.loadingSource) {
+      if (info.loadingSource === "mixed") return "LOADING (SHARE+LOCAL)";
+      return `LOADING FROM ${info.loadingSource.toUpperCase()}`;
+    }
+    return info.statusText;
   }
 
   // Derive instance status from runners
@@ -2219,6 +2244,7 @@
     statusClass: string;
     layersLoaded?: number;
     totalLayers?: number;
+    loadingSource?: "share" | "local" | "mixed";
   } {
     const [instanceTag, instance] = getTagged(instanceWrapped);
     if (!instance || typeof instance !== "object") {
@@ -2268,6 +2294,8 @@
       const isTensor = instanceTag === "MlxJacclInstance";
       let layersLoaded = isTensor ? Infinity : 0;
       let totalLayers = 0;
+      let sawShare = false;
+      let sawLocal = false;
       for (const rid of runnerIds) {
         const r = runnersData[rid];
         if (!r) continue;
@@ -2277,7 +2305,13 @@
           payload &&
           typeof payload === "object"
         ) {
-          const p = payload as { layersLoaded?: number; totalLayers?: number };
+          const p = payload as {
+            layersLoaded?: number;
+            totalLayers?: number;
+            source?: string;
+          };
+          if (p.source === "share") sawShare = true;
+          else if (p.source === "local") sawLocal = true;
           if (isTensor) {
             layersLoaded = Math.min(layersLoaded, p.layersLoaded ?? 0);
             totalLayers = Math.max(totalLayers, p.totalLayers ?? 0);
@@ -2293,6 +2327,14 @@
         statusClass: "starting",
         layersLoaded,
         totalLayers,
+        loadingSource:
+          sawShare && sawLocal
+            ? "mixed"
+            : sawShare
+              ? "share"
+              : sawLocal
+                ? "local"
+                : undefined,
       };
     }
     if (has("WarmingUp"))
@@ -6368,9 +6410,9 @@
                                     ? 'bg-green-500/15 text-green-400'
                                     : 'bg-teal-500/15 text-teal-400'}"
                           >
-                            {statusText}{prepProgress
-                              ? ` ${prepProgress.percent}%`
-                              : ""}
+                            {instanceStatusDisplayText(
+                              downloadInfo,
+                            )}{prepProgress ? ` ${prepProgress.percent}%` : ""}
                           </span>
                         </div>
                         {#if instanceInfo.nodeNames.length > 0}
@@ -6662,7 +6704,7 @@
                                 downloadInfo.statusText,
                               )} font-mono tracking-wider"
                             >
-                              {downloadInfo.statusText}
+                              {instanceStatusDisplayText(downloadInfo)}
                             </div>
                             {#if isLoading}
                               {@const loadStatus =
@@ -8062,9 +8104,9 @@
                                       ? 'bg-green-500/15 text-green-400'
                                       : 'bg-teal-500/15 text-teal-400'}"
                             >
-                              {statusText}{prepProgress
-                                ? ` ${prepProgress.percent}%`
-                                : ""}
+                              {instanceStatusDisplayText(
+                                downloadInfo,
+                              )}{prepProgress ? ` ${prepProgress.percent}%` : ""}
                             </span>
                           </div>
                           {#if instanceInfo.nodeNames.length > 0}
@@ -8363,7 +8405,7 @@
                                   downloadInfo.statusText,
                                 )} font-mono tracking-wider"
                               >
-                                {downloadInfo.statusText}
+                                {instanceStatusDisplayText(downloadInfo)}
                               </div>
                               {#if isLoading}
                                 {@const loadStatus =

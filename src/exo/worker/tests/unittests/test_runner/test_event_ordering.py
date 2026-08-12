@@ -331,12 +331,16 @@ def test_events_processed_in_correct_order(patch_out_mlx: pytest.MonkeyPatch):
             TaskStatusUpdated(task_id=LOAD_TASK_ID, task_status=TaskStatus.Running),
             RunnerStatusUpdated(
                 runner_id=RUNNER_1_ID,
-                runner_status=RunnerLoading(layers_loaded=0, total_layers=32),
+                runner_status=RunnerLoading(
+                    layers_loaded=0, total_layers=32, source="local"
+                ),
             ),
             TaskAcknowledged(task_id=LOAD_TASK_ID),
             RunnerStatusUpdated(
                 runner_id=RUNNER_1_ID,
-                runner_status=RunnerLoading(layers_loaded=1, total_layers=1),
+                runner_status=RunnerLoading(
+                    layers_loaded=1, total_layers=1, source="local"
+                ),
             ),
             TaskStatusUpdated(task_id=LOAD_TASK_ID, task_status=TaskStatus.Complete),
             RunnerStatusUpdated(runner_id=RUNNER_1_ID, runner_status=RunnerLoaded()),

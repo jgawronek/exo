@@ -45,6 +45,9 @@ class DownloadFailed(BaseDownloadProgress):
 
 class DownloadOngoing(BaseDownloadProgress):
     download_progress: DownloadProgressData
+    # True when this is a copy from the shared drive onto local disk rather
+    # than a download from the hub.
+    from_share: bool = False
 
 
 DownloadProgress = (

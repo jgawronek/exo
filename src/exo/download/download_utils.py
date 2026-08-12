@@ -223,6 +223,14 @@ def resolve_existing_model(
     return None
 
 
+def is_shared_model_path(model_dir: Path) -> bool:
+    """True when the path lives on the shared models drive (or any read-only dir)."""
+    shared_dir = get_shared_models_dir()
+    if shared_dir is not None and model_dir.is_relative_to(shared_dir):
+        return True
+    return is_read_only_model_dir(model_dir)
+
+
 def is_read_only_model_dir(model_dir: Path) -> bool:
     """Check if a model directory lives under a read-only models root."""
     return any(model_dir.is_relative_to(d) for d in EXO_MODELS_READ_ONLY_DIRS)
