@@ -79,9 +79,13 @@ class MlxBuilder(Builder):
     vision_processor: VisionProcessor | None = None
     draft_model: Model | None = None
     pipeline_shard: PipelineShardMetadata | None = None
+    max_context_length: int | None = None
+    prefill_step_size: int | None = None
 
     def connect(self, bound_instance: BoundInstance) -> None:
         self.group = initialize_mlx(bound_instance)
+        self.max_context_length = bound_instance.instance.max_context_length
+        self.prefill_step_size = bound_instance.instance.prefill_step_size
 
     def load(self, bound_instance: BoundInstance) -> Generator[ModelLoadingResponse]:
         (
@@ -90,6 +94,8 @@ class MlxBuilder(Builder):
             self.vision_processor,
         ) = yield from load_mlx_items(bound_instance, self.group)
         self.draft_model = load_speculative_draft_model(self.group)
+        self.max_context_length = bound_instance.instance.max_context_length
+        self.prefill_step_size = bound_instance.instance.prefill_step_size
         bound_shard = bound_instance.bound_shard
         if isinstance(bound_shard, PipelineShardMetadata) and self.group is not None:
             self.pipeline_shard = bound_shard
@@ -133,7 +139,14 @@ class MlxBuilder(Builder):
                 self.tokenizer.tool_parser,  # type: ignore
             )
 
-        kv_prefix_cache = KVPrefixCache(self.group)
+        keep_kv_size = 0
+        if self.max_context_length is not None:
+            keep_kv_size = min(self.max_context_length // 2, self.max_context_length)
+        kv_prefix_cache = KVPrefixCache(
+            self.group,
+            max_kv_size=self.max_context_length,
+            keep_kv_size=keep_kv_size,
+        )
 
         device_rank = 0 if self.group is None else self.group.rank()
         if get_compatible_environment_value(os.environ, "EXO_NO_BATCH"):
@@ -149,6 +162,8 @@ class MlxBuilder(Builder):
                 cancel_receiver=self.cancel_receiver,
                 event_sender=self.event_sender,
                 vision_processor=vision_processor,
+                max_context_length=self.max_context_length,
+                prefill_step_size=self.prefill_step_size,
             )
         else:
             logger.info("using BatchGenerator")
@@ -165,4 +180,6 @@ class MlxBuilder(Builder):
                 vision_processor=vision_processor,
                 draft_model=self.draft_model,
                 pipeline_shard=self.pipeline_shard,
+                max_context_length=self.max_context_length,
+                prefill_step_size=self.prefill_step_size,
             )

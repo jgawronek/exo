@@ -84,6 +84,7 @@ from exo.api.types import (
     ImageListItem,
     ImageListResponse,
     ImageSize,
+    InstanceLaunchOptionsResponse,
     InstanceLinkBody,
     InstanceLinkResponse,
     ModelList,
@@ -474,6 +475,7 @@ class API:
         self.app.get("/node_id")(lambda: self.node_id)
         self.app.post("/instance")(self.create_instance)
         self.app.post("/place_instance")(self.place_instance)
+        self.app.get("/instance/launch_options")(self.get_instance_launch_options)
         self.app.get("/instance/placement")(self.get_placement)
         self.app.get("/instance/previews")(self.get_placement_previews)
         self.app.get("/instance/await", response_model=None)(self.await_instance)
@@ -570,14 +572,69 @@ class API:
                 detail=f"unable to find path '{path.replace('/', '.')}' in state json",
             ) from e
 
+    async def get_instance_launch_options(self) -> InstanceLaunchOptionsResponse:
+        from exo.shared.constants import EXO_PREFILL_STEP_SIZE
+        from exo.shared.instance_launch_limits import (
+            MAX_PREFILL_STEP_SIZE,
+            MIN_CONTEXT_LENGTH,
+            MIN_PREFILL_STEP_SIZE,
+            clamp_prefill_step_size,
+        )
+
+        return InstanceLaunchOptionsResponse(
+            prefill_step_size=clamp_prefill_step_size(None, EXO_PREFILL_STEP_SIZE),
+            min_prefill_step_size=MIN_PREFILL_STEP_SIZE,
+            max_prefill_step_size=MAX_PREFILL_STEP_SIZE,
+            min_context_length=MIN_CONTEXT_LENGTH,
+        )
+
     async def place_instance(self, payload: PlaceInstanceParams):
+        from exo.shared.constants import EXO_PREFILL_STEP_SIZE
+        from exo.shared.instance_launch_limits import (
+            clamp_context_length,
+            clamp_prefill_step_size,
+        )
+
+        model_card = await ModelCard.load(payload.model_id)
+        max_context_length = clamp_context_length(
+            payload.max_context_length, model_card.context_length
+        )
+        prefill_step_size = (
+            None
+            if payload.prefill_step_size is None
+            else clamp_prefill_step_size(
+                payload.prefill_step_size, EXO_PREFILL_STEP_SIZE
+            )
+        )
         command = PlaceInstance(
-            model_card=await ModelCard.load(payload.model_id),
+            model_card=model_card,
             sharding=payload.sharding,
             instance_meta=payload.instance_meta,
             min_nodes=payload.min_nodes,
             node_layers=payload.node_layers,
+            max_context_length=max_context_length,
+            prefill_step_size=prefill_step_size,
         )
+        # Validate manual layer allocations (and other placement constraints)
+        # before accepting the command so the UI can surface a 400 immediately.
+        if payload.node_layers is not None:
+            try:
+                get_instance_placements(
+                    command,
+                    node_memory=node_memory_with_pending_shutdowns(
+                        node_memory=self.state.node_memory,
+                        tasks=self.state.tasks,
+                    ),
+                    node_network=self.state.node_network,
+                    node_backends=self.state.node_backends,
+                    topology=self.state.topology,
+                    current_instances=self.state.instances,
+                    download_status=self.state.downloads,
+                    node_rdma_ctl=self.state.node_rdma_ctl,
+                    node_identities=self.state.node_identities,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         await self._send(command)
 
         return CreateInstanceResponse(
@@ -589,6 +646,12 @@ class API:
     async def create_instance(
         self, payload: CreateInstanceParams
     ) -> CreateInstanceResponse:
+        from exo.shared.constants import EXO_PREFILL_STEP_SIZE
+        from exo.shared.instance_launch_limits import (
+            clamp_context_length,
+            clamp_prefill_step_size,
+        )
+
         instance = payload.instance
         model_card = await ModelCard.load(instance.shard_assignments.model_id)
         required_memory = model_card.storage_size
@@ -598,6 +661,27 @@ class API:
             raise HTTPException(
                 status_code=400,
                 detail=f"Insufficient memory to create instance. Required: {required_memory.in_gb:.1f}GB, Available: {available_memory.in_gb:.1f}GB",
+            )
+
+        max_context_length = clamp_context_length(
+            instance.max_context_length, model_card.context_length
+        )
+        prefill_step_size = (
+            None
+            if instance.prefill_step_size is None
+            else clamp_prefill_step_size(
+                instance.prefill_step_size, EXO_PREFILL_STEP_SIZE
+            )
+        )
+        if (
+            max_context_length != instance.max_context_length
+            or prefill_step_size != instance.prefill_step_size
+        ):
+            instance = instance.model_copy(
+                update={
+                    "max_context_length": max_context_length,
+                    "prefill_step_size": prefill_step_size,
+                }
             )
 
         command = CreateInstance(

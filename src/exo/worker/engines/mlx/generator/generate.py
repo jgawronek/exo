@@ -307,6 +307,7 @@ def prefill(
     group: mx.distributed.Group | None,
     on_prefill_progress: Callable[[int, int], None] | None,
     distributed_prompt_progress_callback: Callable[[], None] | None,
+    prefill_step_size: int | None = None,
 ) -> tuple[float, int, list[CacheSnapshot]]:
     """Prefill the KV cache with prompt tokens.
 
@@ -316,6 +317,8 @@ def prefill(
     Returns:
         (tokens_per_sec, num_tokens, snapshots)
     """
+    from exo.shared.instance_launch_limits import clamp_prefill_step_size
+
     num_tokens = len(prompt_tokens)
     if num_tokens == 0:
         return 0.0, 0, []
@@ -350,7 +353,9 @@ def prefill(
 
     is_pipeline = _has_pipeline_communication_layer(model)
 
-    prefill_step_size = EXO_PREFILL_STEP_SIZE
+    resolved_prefill_step_size = clamp_prefill_step_size(
+        prefill_step_size, EXO_PREFILL_STEP_SIZE
+    )
 
     try:
         if is_pipeline and num_tokens >= PIPELINE_PREFILL_MIN_TOKENS:
@@ -360,7 +365,7 @@ def prefill(
                 model=model,
                 prompt=prompt_tokens,
                 prompt_cache=cache,
-                prefill_step_size=prefill_step_size,
+                prefill_step_size=resolved_prefill_step_size,
                 kv_group_size=KV_GROUP_SIZE,
                 kv_bits=KV_BITS,
                 prompt_progress_callback=progress_callback,
@@ -377,7 +382,7 @@ def prefill(
                 max_tokens=1,
                 sampler=sampler,
                 prompt_cache=cache,
-                prefill_step_size=prefill_step_size,
+                prefill_step_size=resolved_prefill_step_size,
                 kv_group_size=KV_GROUP_SIZE,
                 kv_bits=KV_BITS,
                 prompt_progress_callback=combined_progress_callback,
@@ -559,12 +564,20 @@ def mlx_generate(
     distributed_prompt_progress_callback: Callable[[], None] | None = None,
     on_generation_token: Callable[[], None] | None = None,
     vision_processor: VisionProcessor | None = None,
+    max_context_length: int | None = None,
+    prefill_step_size: int | None = None,
 ) -> Generator[GenerationResponse]:
     # Ensure that generation stats only contains peak memory for this generation
     mx.reset_peak_memory()
     # TODO: Randomise task seed and set in taskparams, instead of hard coding as 42.
     seed = task.seed or 42
     mx.random.seed(seed)
+
+    keep_kv_size = (
+        min(max_context_length // 2, max_context_length)
+        if max_context_length is not None
+        else 0
+    )
 
     # Encode prompt once at the top and fix unmatched think tags
     all_prompt_tokens = encode_prompt(tokenizer, prompt)
@@ -601,7 +614,9 @@ def mlx_generate(
     matched_index: int | None = None
     is_exact_hit = False
     if kv_prefix_cache is None:
-        caches = make_kv_cache(model=model)
+        caches = make_kv_cache(
+            model=model, max_kv_size=max_context_length, keep=keep_kv_size
+        )
         prompt_tokens = all_prompt_tokens
     else:
         caches, prompt_tokens, matched_index, is_exact_hit = (
@@ -617,7 +632,9 @@ def mlx_generate(
                 "KV prefix cache hit lengths diverge across pipeline ranks; "
                 "discarding the hit to keep prefill in lockstep"
             )
-            caches = make_kv_cache(model=model)
+            caches = make_kv_cache(
+                model=model, max_kv_size=max_context_length, keep=keep_kv_size
+            )
             prompt_tokens = all_prompt_tokens
             prefix_hit_length = 0
             matched_index = None
@@ -703,6 +720,7 @@ def mlx_generate(
                 group,
                 on_prefill_progress,
                 distributed_prompt_progress_callback,
+                prefill_step_size=prefill_step_size,
             )
     cache_snapshots: list[CacheSnapshot] | None = ssm_snapshots_list or None
 

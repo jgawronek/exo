@@ -276,6 +276,17 @@ class PlaceInstanceParams(BaseModel):
     instance_meta: InstanceMeta = InstanceMeta.MlxRing
     min_nodes: int = 1
     node_layers: dict[NodeId, int] | None = None
+    max_context_length: int | None = None
+    prefill_step_size: int | None = None
+
+
+class InstanceLaunchOptionsResponse(FrozenModel):
+    """Defaults and clamp bounds for advanced launch controls."""
+
+    prefill_step_size: int
+    min_prefill_step_size: int
+    max_prefill_step_size: int
+    min_context_length: int
 
 
 class CreateInstanceParams(BaseModel):

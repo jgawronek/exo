@@ -750,7 +750,9 @@
       const response = await fetch("/instance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instance: instanceData }),
+        body: JSON.stringify({
+          instance: withLaunchOptions(instanceData),
+        }),
       });
       if (!response.ok) {
         const errorText = await response.text();
@@ -816,6 +818,7 @@
       quantization?: string;
       base_model?: string;
       capabilities?: string[];
+      context_length?: number;
     }>
   >([]);
   type ModelMemoryFitStatus =
@@ -997,6 +1000,111 @@
 
   // Advanced options toggle (hides technical jargon for new users)
   let showAdvancedOptions = $state(false);
+
+  // Launch clamps: context [min … card], prefill [min … max]
+  const MIN_CONTEXT_LENGTH = 1024;
+  const MIN_PREFILL_STEP_SIZE = 256;
+  const MAX_PREFILL_STEP_SIZE = 4096;
+  let launchContextLength = $state<number | null>(null);
+  let launchPrefillStepSize = $state(4096);
+  let launchOptionsLoaded = $state(false);
+
+  const selectedModelCardContext = $derived.by(() => {
+    const modelId = selectedModelId;
+    if (!modelId) return 0;
+    const model = models.find(
+      (entry) => entry.id === modelId || entry.hugging_face_id === modelId,
+    );
+    return model?.context_length && model.context_length > 0
+      ? model.context_length
+      : 0;
+  });
+
+  const launchContextEnabled = $derived(selectedModelCardContext > 0);
+  const launchContextValid = $derived(
+    !launchContextEnabled ||
+      (launchContextLength != null &&
+        launchContextLength >= Math.min(MIN_CONTEXT_LENGTH, selectedModelCardContext) &&
+        launchContextLength <= selectedModelCardContext),
+  );
+  const launchPrefillValid = $derived(
+    launchPrefillStepSize >= MIN_PREFILL_STEP_SIZE &&
+      launchPrefillStepSize <= MAX_PREFILL_STEP_SIZE,
+  );
+  const launchOptionsValid = $derived(launchContextValid && launchPrefillValid);
+
+  function clampLaunchContext(value: number, cardContext: number): number {
+    if (cardContext <= 0) return value;
+    const lower = Math.min(MIN_CONTEXT_LENGTH, cardContext);
+    return Math.max(lower, Math.min(value, cardContext));
+  }
+
+  function clampLaunchPrefill(value: number): number {
+    return Math.max(
+      MIN_PREFILL_STEP_SIZE,
+      Math.min(value, MAX_PREFILL_STEP_SIZE),
+    );
+  }
+
+  function syncLaunchContextFromCard(cardContext: number) {
+    if (cardContext <= 0) {
+      launchContextLength = null;
+      return;
+    }
+    if (
+      launchContextLength == null ||
+      launchContextLength > cardContext ||
+      launchContextLength < Math.min(MIN_CONTEXT_LENGTH, cardContext)
+    ) {
+      launchContextLength = cardContext;
+    }
+  }
+
+  async function loadLaunchOptions() {
+    try {
+      const response = await fetch("/instance/launch_options");
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        prefillStepSize?: number;
+        minPrefillStepSize?: number;
+        maxPrefillStepSize?: number;
+      };
+      if (typeof data.prefillStepSize === "number") {
+        launchPrefillStepSize = clampLaunchPrefill(data.prefillStepSize);
+      }
+      launchOptionsLoaded = true;
+    } catch {
+      // Keep compiled defaults.
+    }
+  }
+
+  /** Inject launch knobs into a tagged Instance payload ({ MlxRingInstance: {...} }). */
+  function withLaunchOptions(instance: unknown): unknown {
+    if (!instance || typeof instance !== "object") return instance;
+    const record = instance as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length !== 1) return instance;
+    const tag = keys[0];
+    const body = record[tag];
+    if (!body || typeof body !== "object") return instance;
+    return {
+      [tag]: {
+        ...(body as Record<string, unknown>),
+        maxContextLength: launchContextEnabled ? launchContextLength : null,
+        prefillStepSize: launchPrefillStepSize,
+      },
+    };
+  }
+
+  function launchOptionParams(): {
+    maxContextLength: number | null;
+    prefillStepSize: number;
+  } {
+    return {
+      maxContextLength: launchContextEnabled ? launchContextLength : null,
+      prefillStepSize: launchPrefillStepSize,
+    };
+  }
 
   // Favorites state (reactive)
   const favoritesSet = $derived(getFavoritesSet());
@@ -1435,9 +1543,14 @@
     return tags;
   });
 
+  $effect(() => {
+    syncLaunchContextFromCard(selectedModelCardContext);
+  });
+
   onMount(async () => {
     mounted = true;
     fetchModels();
+    loadLaunchOptions();
     fetch("/node_id")
       .then((r) => (r.ok ? r.json() : null))
       .then((id) => {
@@ -1564,21 +1677,54 @@
     modelId: string,
     specificPreview?: PlacementPreview | null,
   ) {
-    if (!modelId || launchingModelId) return;
+    if (!modelId || launchingModelId || !launchAdvancedValid) return;
 
     launchingModelId = modelId;
+    const options = launchOptionParams();
 
     try {
       // Use the specific preview if provided, otherwise fall back to filtered preview
       const preview = specificPreview ?? filteredPreview();
+      const customizedLayers = launchLayersCustomized
+        ? launchLayerOverrides
+        : null;
+      const previewNodeIds = preview?.instance
+        ? new Set(
+            extractPreviewLayerRows(preview.instance)?.map((row) => row.nodeId) ??
+              [],
+          )
+        : new Set<string>();
+      const customAppliesToPreview =
+        customizedLayers != null &&
+        previewNodeIds.size > 0 &&
+        previewNodeIds.size === Object.keys(customizedLayers).length &&
+        Object.keys(customizedLayers).every((id) => previewNodeIds.has(id));
 
       let response: Response;
-      if (preview?.instance) {
+      if (customAppliesToPreview && customizedLayers) {
+        // User edited pipeline layer counts — re-place with node_layers
+        // (do not post the stale preview instance).
+        response = await fetch("/place_instance", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model_id: modelId,
+            sharding: selectedSharding,
+            instance_meta: selectedInstanceType,
+            min_nodes: selectedMinNodes,
+            node_layers: customizedLayers,
+            max_context_length: options.maxContextLength,
+            prefill_step_size: options.prefillStepSize,
+          }),
+        });
+      } else if (preview?.instance) {
         // Launch with pre-computed placement from preview
         response = await fetch("/instance", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instance: preview.instance }),
+          body: JSON.stringify({
+            instance: withLaunchOptions(preview.instance),
+          }),
         });
       } else {
         // No preview available — use place_instance to let server decide placement
@@ -1589,13 +1735,24 @@
             model_id: modelId,
             sharding: selectedSharding,
             instance_meta: selectedInstanceType,
-            min_nodes: 1,
+            min_nodes: selectedMinNodes,
+            max_context_length: options.maxContextLength,
+            prefill_step_size: options.prefillStepSize,
           }),
         });
       }
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorBody: { detail?: unknown } | string | null = await response
+          .json()
+          .catch(() => null);
+        const detail =
+          typeof errorBody === "string"
+            ? errorBody
+            : typeof errorBody?.detail === "string"
+              ? errorBody.detail
+              : null;
+        const errorText = detail || `HTTP ${response.status}`;
         console.error("Failed to launch instance:", errorText);
         addToast({
           type: "error",
@@ -3321,7 +3478,9 @@
       const launchRes = await fetch("/instance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instance: placement.instance }),
+        body: JSON.stringify({
+          instance: withLaunchOptions(placement.instance),
+        }),
       });
       if (!launchRes.ok) {
         addToast({
@@ -3789,6 +3948,145 @@
 
   // Get the first filtered preview (for launch function compatibility)
   const filteredPreview = $derived(() => filteredPreviews()[0] ?? null);
+
+  interface PreviewLayerRow {
+    nodeId: string;
+    nodeName: string;
+    deviceRank: number;
+    layers: number;
+  }
+
+  /** Pipeline layer counts in ring order from a placement preview instance. */
+  function extractPreviewLayerRows(
+    instanceWrapped: unknown,
+  ): PreviewLayerRow[] | null {
+    const [, instance] = getTagged(instanceWrapped);
+    if (!instance || typeof instance !== "object") return null;
+    const inst = instance as {
+      shardAssignments?: {
+        nodeToRunner?: Record<string, string>;
+        runnerToShard?: Record<string, unknown>;
+      };
+    };
+    const nodeToRunner = inst.shardAssignments?.nodeToRunner;
+    const runnerToShard = inst.shardAssignments?.runnerToShard;
+    if (!nodeToRunner || !runnerToShard) return null;
+
+    const rows: PreviewLayerRow[] = [];
+    for (const [nodeId, runnerId] of Object.entries(nodeToRunner)) {
+      const [shardTag, shard] = getTagged(runnerToShard[runnerId]);
+      if (shardTag !== "PipelineShardMetadata" || !shard || typeof shard !== "object") {
+        return null;
+      }
+      const shardInfo = shard as {
+        deviceRank?: number;
+        startLayer?: number;
+        endLayer?: number;
+        nLayers?: number;
+      };
+      if (
+        typeof shardInfo.startLayer !== "number" ||
+        typeof shardInfo.endLayer !== "number" ||
+        typeof shardInfo.deviceRank !== "number"
+      ) {
+        return null;
+      }
+      const layers = shardInfo.endLayer - shardInfo.startLayer;
+      if (layers < 1) return null;
+      rows.push({
+        nodeId,
+        nodeName: getNodeName(nodeId),
+        deviceRank: shardInfo.deviceRank,
+        layers,
+      });
+    }
+    if (rows.length === 0) return null;
+    rows.sort((a, b) => a.deviceRank - b.deviceRank);
+    return rows;
+  }
+
+  function previewLayerSignature(rows: PreviewLayerRow[]): string {
+    return rows.map((row) => `${row.nodeId}:${row.layers}`).join("|");
+  }
+
+  let launchLayerOverrides = $state<Record<string, number> | null>(null);
+  let launchLayerBaselineSignature = $state("");
+  let launchLayerBaseline = $state<Record<string, number> | null>(null);
+
+  const previewLayerRows = $derived.by((): PreviewLayerRow[] | null => {
+    if (selectedSharding !== "Pipeline") return null;
+    const preview = filteredPreview();
+    if (!preview?.instance) return null;
+    return extractPreviewLayerRows(preview.instance);
+  });
+
+  const previewTotalLayers = $derived.by((): number => {
+    const rows = previewLayerRows;
+    if (!rows || rows.length === 0) return 0;
+    return rows.reduce((sum, row) => sum + row.layers, 0);
+  });
+
+  $effect(() => {
+    const rows = previewLayerRows;
+    if (!rows) {
+      launchLayerOverrides = null;
+      launchLayerBaseline = null;
+      launchLayerBaselineSignature = "";
+      return;
+    }
+    const signature = previewLayerSignature(rows);
+    if (signature !== launchLayerBaselineSignature) {
+      const baseline = Object.fromEntries(
+        rows.map((row) => [row.nodeId, row.layers]),
+      );
+      launchLayerBaselineSignature = signature;
+      launchLayerBaseline = baseline;
+      launchLayerOverrides = { ...baseline };
+    }
+  });
+
+  const launchLayersCustomized = $derived.by((): boolean => {
+    if (!launchLayerOverrides || !launchLayerBaseline) return false;
+    const overrideIds = Object.keys(launchLayerOverrides);
+    const baselineIds = Object.keys(launchLayerBaseline);
+    if (overrideIds.length !== baselineIds.length) return true;
+    return overrideIds.some(
+      (id) => launchLayerOverrides![id] !== launchLayerBaseline![id],
+    );
+  });
+
+  const launchLayerSum = $derived.by((): number => {
+    if (!launchLayerOverrides) return 0;
+    return Object.values(launchLayerOverrides).reduce((sum, n) => sum + n, 0);
+  });
+
+  const launchLayerValid = $derived.by((): boolean => {
+    const rows = previewLayerRows;
+    if (!rows || !launchLayerOverrides) return true;
+    const counts = rows.map((row) => launchLayerOverrides![row.nodeId] ?? 0);
+    return (
+      counts.every((n) => Number.isInteger(n) && n >= 1) &&
+      launchLayerSum === previewTotalLayers
+    );
+  });
+
+  const launchAdvancedValid = $derived(
+    launchOptionsValid && launchLayerValid,
+  );
+
+  function resetLaunchLayersToPreview() {
+    if (!launchLayerBaseline) return;
+    launchLayerOverrides = { ...launchLayerBaseline };
+  }
+
+  function setLaunchLayerCount(nodeId: string, raw: number) {
+    if (!launchLayerOverrides) return;
+    if (!Number.isFinite(raw)) return;
+    launchLayerOverrides = {
+      ...launchLayerOverrides,
+      [nodeId]: Math.max(1, Math.round(raw)),
+    };
+  }
 
   // Auto-update selectedMinNodes when node count changes (default to 1 = show all placements)
   $effect(() => {
@@ -6713,6 +7011,161 @@
                     </div>
                   {/if}
 
+                  <!-- Context size (model card ceiling) -->
+                  <div>
+                    <div class="text-xs text-white/50 font-mono mb-1">
+                      Context size
+                      {#if launchContextEnabled}
+                        <span class="text-white/30"
+                          >(max {selectedModelCardContext.toLocaleString()})</span
+                        >
+                      {/if}
+                    </div>
+                    {#if launchContextEnabled}
+                      <input
+                        type="number"
+                        min={Math.min(
+                          MIN_CONTEXT_LENGTH,
+                          selectedModelCardContext,
+                        )}
+                        max={selectedModelCardContext}
+                        step="1024"
+                        value={launchContextLength ?? selectedModelCardContext}
+                        oninput={(event) => {
+                          const raw = Number(
+                            (event.currentTarget as HTMLInputElement).value,
+                          );
+                          if (!Number.isFinite(raw)) return;
+                          launchContextLength = clampLaunchContext(
+                            Math.round(raw),
+                            selectedModelCardContext,
+                          );
+                        }}
+                        class="w-full max-w-[12rem] bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1.5 text-xs font-mono text-white focus:border-xeo-green/60 outline-none"
+                      />
+                      <div class="text-[10px] font-mono text-white/35 mt-1">
+                        Effective max sequence. Cannot exceed the model card.
+                      </div>
+                    {:else}
+                      <div class="text-[10px] font-mono text-white/35">
+                        Unknown for this model — using unbounded KV cache.
+                      </div>
+                    {/if}
+                  </div>
+
+                  <!-- Prefill chunk size -->
+                  <div>
+                    <div class="text-xs text-white/50 font-mono mb-1">
+                      Prefill chunk size
+                      <span class="text-white/30"
+                        >({MIN_PREFILL_STEP_SIZE}–{MAX_PREFILL_STEP_SIZE})</span
+                      >
+                    </div>
+                    <input
+                      type="number"
+                      min={MIN_PREFILL_STEP_SIZE}
+                      max={MAX_PREFILL_STEP_SIZE}
+                      step="256"
+                      value={launchPrefillStepSize}
+                      oninput={(event) => {
+                        const raw = Number(
+                          (event.currentTarget as HTMLInputElement).value,
+                        );
+                        if (!Number.isFinite(raw)) return;
+                        launchPrefillStepSize = clampLaunchPrefill(
+                          Math.round(raw),
+                        );
+                      }}
+                      class="w-full max-w-[12rem] bg-xeo-black/60 border border-xeo-medium-gray/50 rounded px-2 py-1.5 text-xs font-mono text-white focus:border-xeo-green/60 outline-none"
+                    />
+                    <div class="text-[10px] font-mono text-white/35 mt-1">
+                      Tokens per prefill step. Higher is faster; too high can
+                      crash Macs (Metal watchdog).
+                    </div>
+                  </div>
+
+                  <!-- Manual pipeline layer placement (pre-launch) -->
+                  {#if selectedSharding === "Pipeline" && previewLayerRows && launchLayerOverrides}
+                    <div>
+                      <div
+                        class="flex items-center justify-between gap-2 mb-2"
+                      >
+                        <div class="text-xs text-white/50 font-mono">
+                          Layers per device
+                          <span class="text-white/30"
+                            >({launchLayerSum}/{previewTotalLayers})</span
+                          >
+                        </div>
+                        {#if launchLayersCustomized}
+                          <button
+                            type="button"
+                            onclick={resetLaunchLayersToPreview}
+                            class="text-[10px] font-mono uppercase tracking-wider text-xeo-green/80 hover:text-xeo-green border border-xeo-green/40 hover:border-xeo-green px-2 py-0.5 rounded cursor-pointer"
+                          >
+                            Reset to preview
+                          </button>
+                        {/if}
+                      </div>
+                      <div class="space-y-1.5">
+                        {#each previewLayerRows as row (row.nodeId)}
+                          <div
+                            class="flex items-center gap-2 max-w-md"
+                          >
+                            <span
+                              class="w-5 h-5 shrink-0 rounded-full border border-xeo-green/50 text-[10px] font-mono text-xeo-green flex items-center justify-center"
+                              title="Ring position {row.deviceRank + 1}"
+                            >
+                              {row.deviceRank + 1}
+                            </span>
+                            <span
+                              class="flex-1 min-w-0 truncate text-xs font-mono text-white/70"
+                              title={row.nodeName}
+                            >
+                              {row.nodeName}
+                            </span>
+                            <input
+                              type="number"
+                              min="1"
+                              max={previewTotalLayers}
+                              step="1"
+                              value={launchLayerOverrides[row.nodeId] ??
+                                row.layers}
+                              oninput={(event) => {
+                                const raw = Number(
+                                  (event.currentTarget as HTMLInputElement)
+                                    .value,
+                                );
+                                setLaunchLayerCount(row.nodeId, raw);
+                              }}
+                              class="w-16 bg-xeo-black/60 border rounded px-2 py-1 text-xs font-mono text-white outline-none {!launchLayerValid
+                                ? 'border-red-500/70 focus:border-red-400'
+                                : 'border-xeo-medium-gray/50 focus:border-xeo-green/60'}"
+                            />
+                          </div>
+                        {/each}
+                      </div>
+                      {#if !launchLayerValid}
+                        <div class="text-[10px] font-mono text-red-400/90 mt-1">
+                          Each device needs ≥1 layer; sum must equal {previewTotalLayers}.
+                        </div>
+                      {:else}
+                        <div class="text-[10px] font-mono text-white/35 mt-1">
+                          Ring order stays from placement; edit how many layers
+                          each device holds.
+                        </div>
+                      {/if}
+                    </div>
+                  {:else if selectedSharding === "Tensor"}
+                    <div>
+                      <div class="text-xs text-white/50 font-mono mb-1">
+                        Layers per device
+                      </div>
+                      <div class="text-[10px] font-mono text-white/35">
+                        Manual layer counts apply to Pipeline sharding only.
+                      </div>
+                    </div>
+                  {/if}
+
                   <!-- Minimum Devices -->
                   <div>
                     <div class="text-xs text-white/50 font-mono mb-2">
@@ -6821,7 +7274,8 @@
                       >
                         <ModelCard
                           model={selectedModel}
-                          isLaunching={launchingModelId === selectedModel.id}
+                          isLaunching={launchingModelId === selectedModel.id ||
+                            !launchAdvancedValid}
                           {downloadStatus}
                           nodes={data?.nodes ?? {}}
                           sharding={apiPreview.sharding}

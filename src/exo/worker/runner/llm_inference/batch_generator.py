@@ -119,6 +119,8 @@ class SequentialGenerator(Engine):
     event_sender: MpSender[Event]
     vision_processor: VisionProcessor | None = None
     check_for_cancel_every: int = 50
+    max_context_length: int | None = None
+    prefill_step_size: int | None = None
 
     _cancelled_tasks: set[TaskId] = field(default_factory=set, init=False)
     _maybe_queue: list[TextGeneration] = field(default_factory=list, init=False)
@@ -315,6 +317,8 @@ class SequentialGenerator(Engine):
             on_generation_token=on_generation_token,
             group=self.group,
             vision_processor=self.vision_processor,
+            max_context_length=self.max_context_length,
+            prefill_step_size=self.prefill_step_size,
         )
 
     def close(self) -> None:
@@ -358,6 +362,8 @@ class BatchGenerator(Engine):
     vision_processor: VisionProcessor | None = None
     draft_model: Model | None = None
     pipeline_shard: PipelineShardMetadata | None = None
+    max_context_length: int | None = None
+    prefill_step_size: int | None = None
 
     _cancelled_tasks: set[TaskId] = field(default_factory=set, init=False)
     _maybe_queue: list[TextGeneration | ShiftLayers] = field(
@@ -389,6 +395,8 @@ class BatchGenerator(Engine):
             kv_prefix_cache=self.kv_prefix_cache,
             vision_processor=self.vision_processor,
             draft_model=self.draft_model,
+            max_context_length=self.max_context_length,
+            prefill_step_size=self.prefill_step_size,
         )
 
     def warmup(self):

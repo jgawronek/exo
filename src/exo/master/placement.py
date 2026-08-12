@@ -382,6 +382,8 @@ def place_instance(
                 shard_assignments=shard_assignments,
                 jaccl_devices=mlx_jaccl_devices,
                 jaccl_coordinators=mlx_jaccl_coordinators,
+                max_context_length=command.max_context_length,
+                prefill_step_size=command.prefill_step_size,
             )
         case InstanceMeta.MlxRing:
             ephemeral_port = random_ephemeral_port()
@@ -399,6 +401,8 @@ def place_instance(
                 connections_per_host=get_ring_connections_per_host(
                     selected_cycle, cycle_digraph, node_network
                 ),
+                max_context_length=command.max_context_length,
+                prefill_step_size=command.prefill_step_size,
             )
 
     return target_instances

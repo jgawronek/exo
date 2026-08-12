@@ -259,7 +259,14 @@ def has_non_kv_caches(cache: KVCacheType) -> bool:
 
 
 class KVPrefixCache:
-    def __init__(self, group: mx.distributed.Group | None):
+    def __init__(
+        self,
+        group: mx.distributed.Group | None,
+        max_kv_size: int | None = None,
+        keep_kv_size: int = 0,
+    ):
+        self._max_kv_size = max_kv_size
+        self._keep_kv_size = keep_kv_size
         self.prompts: list[mx.array] = []  # mx array of tokens (ints)
         self.caches: list[KVCacheType] = []
         self._snapshots: list[list[CacheSnapshot] | None] = []
@@ -268,6 +275,11 @@ class KVPrefixCache:
         self.prefill_tps: list[float] = []
         self._access_counter: int = 0
         self._group = group
+
+    def _fresh_kv_cache(self, model: Model) -> KVCacheType:
+        return make_kv_cache(
+            model, max_kv_size=self._max_kv_size, keep=self._keep_kv_size
+        )
 
     def clear(self):
         """Clear all cached prompts and caches."""
@@ -387,7 +399,7 @@ class KVPrefixCache:
                 best_index, best_length = i, length
 
         if best_index is None:
-            return make_kv_cache(model), prompt_tokens, None, False
+            return self._fresh_kv_cache(model), prompt_tokens, None, False
 
         # For exact match: trim to max_length-1 so remaining has the last token
         # For partial match: trim to best_length, remaining has suffix to prefill
@@ -403,7 +415,7 @@ class KVPrefixCache:
 
         # No usable snapshot — need fresh cache
         if restore_snap is None and has_ssm:
-            return make_kv_cache(model), prompt_tokens, None, False
+            return self._fresh_kv_cache(model), prompt_tokens, None, False
 
         prompt_cache = deepcopy(self.caches[best_index])
         tokens_to_trim = cached_length - restore_pos

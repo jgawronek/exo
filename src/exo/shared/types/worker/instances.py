@@ -20,6 +20,11 @@ class InstanceMeta(str, Enum):
 class BaseInstance(TaggedModel):
     instance_id: InstanceId
     shard_assignments: ShardAssignments
+    # Effective max sequence length for this instance (rotating KV). None
+    # keeps the unbounded default cache. Never above the model card.
+    max_context_length: int | None = None
+    # Tokens per prefill forward; None uses XEO_PREFILL_STEP_SIZE.
+    prefill_step_size: int | None = None
 
     def shard(self, runner_id: RunnerId) -> ShardMetadata | None:
         return self.shard_assignments.runner_to_shard.get(runner_id, None)

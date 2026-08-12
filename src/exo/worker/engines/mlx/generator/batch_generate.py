@@ -109,18 +109,32 @@ class ExoBatchGenerator:
     kv_prefix_cache: KVPrefixCache | None
     vision_processor: VisionProcessor | None = None
     draft_model: Model | None = None
+    max_context_length: int | None = None
+    prefill_step_size: int | None = None
 
     _mlx_gen: MlxBatchGenerator = field(init=False)
     _active_tasks: dict[int, _EngineTask] = field(default_factory=dict, init=False)
     _supports_token_relay: bool = field(init=False)
     _speculative: SpeculativeState | None = field(default=None, init=False)
     _untrimmable_cache_logged: bool = field(default=False, init=False)
+    _resolved_prefill_step_size: int = field(init=False)
+    _keep_kv_size: int = field(init=False)
 
     def __post_init__(self) -> None:
+        from exo.shared.instance_launch_limits import clamp_prefill_step_size
+
+        self._resolved_prefill_step_size = clamp_prefill_step_size(
+            self.prefill_step_size, EXO_PREFILL_STEP_SIZE
+        )
+        self._keep_kv_size = (
+            min(self.max_context_length // 2, self.max_context_length)
+            if self.max_context_length is not None
+            else 0
+        )
         self._mlx_gen = MlxBatchGenerator(
             model=self.model,
             stop_tokens=[[t] for t in eos_ids_from_tokenizer(self.tokenizer)],
-            prefill_step_size=EXO_PREFILL_STEP_SIZE,
+            prefill_step_size=self._resolved_prefill_step_size,
         )
         self._step_count = 0
         self._supports_token_relay = self.group is not None and any(
@@ -199,7 +213,11 @@ class ExoBatchGenerator:
                     "KV prefix cache hit lengths diverge across pipeline ranks; "
                     "discarding the hit to keep prefill in lockstep"
                 )
-                cache = make_kv_cache(self.model)
+                cache = make_kv_cache(
+                    self.model,
+                    max_kv_size=self.max_context_length,
+                    keep=self._keep_kv_size,
+                )
                 prefix_hit_length = 0
                 matched_index = None
                 is_exact_hit = False
@@ -210,7 +228,11 @@ class ExoBatchGenerator:
                 )
                 prompt_tokens = remaining_tokens
         else:
-            cache = make_kv_cache(self.model)
+            cache = make_kv_cache(
+                self.model,
+                max_kv_size=self.max_context_length,
+                keep=self._keep_kv_size,
+            )
 
         seed = task_params.seed if task_params.seed is not None else 42
         mx.random.seed(seed)

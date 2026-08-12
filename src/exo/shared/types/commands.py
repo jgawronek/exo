@@ -44,6 +44,8 @@ class PlaceInstance(BaseCommand):
     instance_meta: InstanceMeta
     min_nodes: int
     node_layers: dict[NodeId, int] | None = None
+    max_context_length: int | None = None
+    prefill_step_size: int | None = None
 
 
 class CreateInstance(BaseCommand):
