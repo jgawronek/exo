@@ -64,6 +64,8 @@ from exo.api.types import (
     ChatCompletionMessage,
     ChatCompletionRequest,
     ChatCompletionResponse,
+    CopyModelToShareParams,
+    CopyModelToShareResponse,
     CreateInstanceParams,
     CreateInstanceResponse,
     DeleteDownloadResponse,
@@ -208,6 +210,7 @@ from exo.shared.types.commands import (
     AddCustomModelCard,
     CancelDownload,
     Command,
+    CopyModelToShare,
     CreateInstance,
     DeleteCustomModelCard,
     DeleteDownload,
@@ -546,6 +549,7 @@ class API:
         self.app.post("/download/start")(self.start_download)
         self.app.delete("/download/{node_id}/{model_id:path}")(self.delete_download)
         self.app.post("/download/cancel")(self.cancel_download)
+        self.app.post("/download/copy-to-share")(self.copy_model_to_share)
         self.app.get("/v1/traces")(self.list_traces)
         self.app.post("/v1/traces/delete")(self.delete_traces)
         self.app.get("/v1/traces/{task_id}")(self.get_trace)
@@ -2967,6 +2971,16 @@ class API:
         )
         await self._send_download(command)
         return CancelDownloadResponse(command_id=command.command_id)
+
+    async def copy_model_to_share(
+        self, payload: CopyModelToShareParams
+    ) -> CopyModelToShareResponse:
+        command = CopyModelToShare(
+            target_node_id=payload.target_node_id,
+            shard_metadata=payload.shard_metadata,
+        )
+        await self._send_download(command)
+        return CopyModelToShareResponse(command_id=command.command_id)
 
     @staticmethod
     def _get_trace_path(task_id: str) -> Path:

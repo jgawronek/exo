@@ -253,6 +253,15 @@ class TestCopyToLocalMode:
         with patch("exo.download.download_utils.EXO_MODELS_DIRS", (writable,)):
             assert select_download_dir(required_bytes=1) == writable
 
+    def test_share_remains_seedable_for_copy_to_share(self, tmp_path: Path) -> None:
+        from exo.download.shared_models_dir import get_seedable_shared_models_dir
+
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        set_shared_models_dir(shared, copy_to_local=True)
+        assert get_writable_shared_models_dir() is None
+        assert get_seedable_shared_models_dir() == shared
+
     def test_copy_source_root_tracks_the_mode(self, tmp_path: Path) -> None:
         shared = tmp_path / "shared"
         shared.mkdir()

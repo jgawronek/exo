@@ -57,6 +57,55 @@ export function getDownloadTag(
   return unwrapTagged(entry as Record<string, unknown>);
 }
 
+/** True when a download payload is marked as living on shared storage. */
+export function isDownloadOnShare(
+  payload: Record<string, unknown>,
+): boolean {
+  return payload.on_share === true || payload.onShare === true;
+}
+
+/** True when a local completion also exists complete on the share. */
+export function isDownloadAlsoOnShare(
+  payload: Record<string, unknown>,
+): boolean {
+  return payload.also_on_share === true || payload.alsoOnShare === true;
+}
+
+/**
+ * True when ``modelDirectory`` sits under any configured share mount root
+ * or the legacy cluster-wide shared directory path.
+ */
+export function isModelDirectoryOnShare(
+  modelDirectory: string | undefined,
+  shareMountRoots: readonly string[],
+): boolean {
+  if (!modelDirectory) return false;
+  const normalized = modelDirectory.replace(/\/+$/, "");
+  for (const root of shareMountRoots) {
+    const mount = root.replace(/\/+$/, "");
+    if (!mount) continue;
+    if (normalized === mount || normalized.startsWith(`${mount}/`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Collect local mount roots for the active share / shared directory. */
+export function collectShareMountRoots(
+  mounts: Record<string, string> | null | undefined,
+  sharedDirectory: string | null | undefined,
+): string[] {
+  const roots = new Set<string>();
+  if (mounts) {
+    for (const path of Object.values(mounts)) {
+      if (typeof path === "string" && path.length > 0) roots.add(path);
+    }
+  }
+  if (sharedDirectory) roots.add(sharedDirectory);
+  return Array.from(roots);
+}
+
 /**
  * Iterate over all download entries for a given node, yielding [tag, payload, modelId].
  */

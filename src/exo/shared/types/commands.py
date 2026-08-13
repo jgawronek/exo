@@ -106,6 +106,13 @@ class CancelDownload(BaseCommand):
     model_id: ModelId
 
 
+class CopyModelToShare(BaseCommand):
+    """Copy a complete local model onto the cluster shared storage from a node."""
+
+    target_node_id: NodeId
+    shard_metadata: ShardMetadata
+
+
 class SetSharedModelsDirectory(BaseCommand):
     """Set (or clear, with ``None``) the cluster-wide shared models directory."""
 
@@ -140,7 +147,7 @@ class DeleteInstanceLink(BaseCommand):
     link_id: InstanceLinkId
 
 
-DownloadCommand = StartDownload | DeleteDownload | CancelDownload
+DownloadCommand = StartDownload | DeleteDownload | CancelDownload | CopyModelToShare
 
 
 Command = (

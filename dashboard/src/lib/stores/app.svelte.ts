@@ -3578,6 +3578,31 @@ class AppStore {
     }
   }
 
+  async copyModelToShare(
+    nodeId: string,
+    shardMetadata: object,
+  ): Promise<void> {
+    try {
+      const response = await fetch("/download/copy-to-share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetNodeId: nodeId,
+          shardMetadata: shardMetadata,
+        }),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Failed to copy model to share: ${response.status} - ${errorText}`,
+        );
+      }
+    } catch (error) {
+      console.error("Error copying model to share:", error);
+      throw error;
+    }
+  }
+
   /**
    * Cancel/pause an active download on a specific node
    */
@@ -3915,6 +3940,8 @@ export const resetImageGenerationParams = () =>
 // Download actions
 export const startDownload = (nodeId: string, shardMetadata: object) =>
   appStore.startDownload(nodeId, shardMetadata);
+export const copyModelToShare = (nodeId: string, shardMetadata: object) =>
+  appStore.copyModelToShare(nodeId, shardMetadata);
 export const cancelDownload = (nodeId: string, modelId: string) =>
   appStore.cancelDownload(nodeId, modelId);
 export const deleteDownload = (nodeId: string, modelId: string) =>

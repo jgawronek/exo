@@ -9,6 +9,7 @@
     refreshState,
     lastUpdate as lastUpdateStore,
     startDownload,
+    copyModelToShare,
     cancelDownload,
     deleteDownload,
     sharedModelsDir,
@@ -18,6 +19,10 @@
     getDownloadTag,
     extractModelIdFromDownload,
     extractShardMetadata,
+    isDownloadOnShare,
+    isDownloadAlsoOnShare,
+    isModelDirectoryOnShare,
+    collectShareMountRoots,
   } from "$lib/utils/downloads";
   import HeaderNav from "$lib/components/HeaderNav.svelte";
 
@@ -41,6 +46,8 @@
     | { kind: "failed"; modelDirectory?: string }
     | { kind: "not_present" };
 
+  type ShareCell = { totalBytes: number; modelDirectory?: string };
+
   type ModelCardInfo = {
     family: string;
     quantization: string;
@@ -55,6 +62,7 @@
     modelId: string;
     prettyName: string | null;
     cells: Record<string, CellStatus>;
+    shareCell: ShareCell | null;
     shardMetadata: Record<string, unknown> | null;
     modelCard: ModelCardInfo | null;
   };
@@ -64,6 +72,24 @@
     label: string;
     diskAvailable?: number;
     diskTotal?: number;
+  };
+
+  type StorageNodeStatus = {
+    nodeId: string;
+    valid: boolean;
+    error?: string | null;
+    freeBytes?: number | null;
+    path?: string | null;
+    mountPath?: string | null;
+    writable?: boolean | null;
+  };
+  type StorageShare = {
+    shareId: string;
+    mounts: Record<string, string>;
+    source?: string | null;
+    label?: string | null;
+    preferLocal?: boolean;
+    copyToLocal?: boolean;
   };
 
   const data = $derived(topologyData());
@@ -179,10 +205,61 @@
 
   let modelRows = $state<ModelRow[]>([]);
   let nodeColumns = $state<NodeColumn[]>([]);
+  let showShareColumn = $state(false);
   let infoRow = $state<ModelRow | null>(null);
+
+  // --- Shared model storage ---
+  const sharedDir = $derived(sharedModelsDir());
+  const sharedDirStatuses = $derived(sharedModelsDirStatuses());
+  const clusterNodeIds = $derived(Object.keys(data?.nodes ?? {}));
+  const sharedDirValidCount = $derived(
+    Object.values(sharedDirStatuses).filter((status) => status.valid).length,
+  );
+  const sharedDirReportedCount = $derived(
+    Object.keys(sharedDirStatuses).length,
+  );
+
+  // --- Share mode ---
+  // A share is one logical store that each node reaches by its own local path,
+  // so nothing here ever compares one node's path against another's.
+  let storageShare = $state<StorageShare | null>(null);
+  let storageMode = $state<"share" | "path" | "none">("none");
+  let storageNodes = $state<StorageNodeStatus[]>([]);
+  let editingShare = $state(false);
+  let shareIdInput = $state("models");
+  let shareSourceInput = $state("");
+  let shareMountInputs = $state<Record<string, string>>({});
+  let sharePreferLocalInput = $state(false);
+  let shareCopyLocalInput = $state(false);
+  let shareSaving = $state(false);
+  let shareError = $state<string | null>(null);
+
+  const shareColumnFreeBytes = $derived.by(() => {
+    let best: number | null = null;
+    for (const node of storageNodes) {
+      if (!node.valid || node.freeBytes == null) continue;
+      if (best == null || node.freeBytes > best) best = node.freeBytes;
+    }
+    return best;
+  });
+
+  const shareAcceptsWrites = $derived(
+    storageNodes.length === 0
+      ? Boolean(storageShare || sharedDir)
+      : storageNodes.some((node) => node.valid && node.writable !== false),
+  );
 
   $effect(() => {
     try {
+      const activeShare = storageShare;
+      const activeSharedDir = sharedDir;
+      const shareActive = Boolean(activeShare || activeSharedDir);
+      showShareColumn = shareActive;
+      const shareMountRoots = collectShareMountRoots(
+        activeShare?.mounts,
+        activeSharedDir,
+      );
+
       if (!downloadsData || Object.keys(downloadsData).length === 0) {
         modelRows = [];
         nodeColumns = [];
@@ -223,6 +300,7 @@
               modelId,
               prettyName,
               cells: {},
+              shareCell: null,
               shardMetadata: extractShardMetadata(payload),
               modelCard: card,
             });
@@ -236,9 +314,28 @@
           const modelDirectory =
             ((payload.model_directory ?? payload.modelDirectory) as string) ||
             undefined;
+          const onShare =
+            shareActive &&
+            (isDownloadOnShare(payload) ||
+              isModelDirectoryOnShare(modelDirectory, shareMountRoots));
+          const alsoOnShare =
+            shareActive && (isDownloadAlsoOnShare(payload) || onShare);
+
           let cell: CellStatus;
           if (tag === "DownloadCompleted") {
             const totalBytes = getBytes(payload.total);
+            if (alsoOnShare) {
+              if (
+                !row.shareCell ||
+                totalBytes > row.shareCell.totalBytes
+              ) {
+                row.shareCell = { totalBytes, modelDirectory };
+              }
+              // Pure share-backed completions are not local copies.
+              if (onShare && !isDownloadAlsoOnShare(payload)) {
+                continue;
+              }
+            }
             cell = { kind: "completed", totalBytes, modelDirectory };
           } else if (tag === "DownloadOngoing") {
             const rawProgress =
@@ -289,6 +386,7 @@
       function rowSortKey(row: ModelRow): number {
         // in progress (4) -> completed (3) -> paused (2) -> not started (1) -> not present (0)
         let best = 0;
+        if (row.shareCell) best = 3;
         for (const cell of Object.values(row.cells)) {
           let score = 0;
           if (cell.kind === "downloading") score = 4;
@@ -302,7 +400,7 @@
       }
 
       function totalCompletedBytes(row: ModelRow): number {
-        let total = 0;
+        let total = row.shareCell?.totalBytes ?? 0;
         for (const cell of Object.values(row.cells)) {
           if (cell.kind === "completed") total += cell.totalBytes;
         }
@@ -340,56 +438,13 @@
       console.error("Parse downloads error", err);
       modelRows = [];
       nodeColumns = [];
+      showShareColumn = false;
     }
   });
 
   const hasDownloads = $derived(modelRows.length > 0);
   const lastUpdateTs = $derived(lastUpdateStore());
   const downloadKeys = $derived(Object.keys(downloadsData || {}));
-
-  // --- Shared model storage ---
-  const sharedDir = $derived(sharedModelsDir());
-  const sharedDirStatuses = $derived(sharedModelsDirStatuses());
-  const clusterNodeIds = $derived(Object.keys(data?.nodes ?? {}));
-  const sharedDirValidCount = $derived(
-    Object.values(sharedDirStatuses).filter((status) => status.valid).length,
-  );
-  const sharedDirReportedCount = $derived(
-    Object.keys(sharedDirStatuses).length,
-  );
-
-  // --- Share mode ---
-  // A share is one logical store that each node reaches by its own local path,
-  // so nothing here ever compares one node's path against another's.
-  type StorageNodeStatus = {
-    nodeId: string;
-    valid: boolean;
-    error?: string | null;
-    freeBytes?: number | null;
-    path?: string | null;
-    mountPath?: string | null;
-    writable?: boolean | null;
-  };
-  type StorageShare = {
-    shareId: string;
-    mounts: Record<string, string>;
-    source?: string | null;
-    label?: string | null;
-    preferLocal?: boolean;
-    copyToLocal?: boolean;
-  };
-
-  let storageShare = $state<StorageShare | null>(null);
-  let storageMode = $state<"share" | "path" | "none">("none");
-  let storageNodes = $state<StorageNodeStatus[]>([]);
-  let editingShare = $state(false);
-  let shareIdInput = $state("models");
-  let shareSourceInput = $state("");
-  let shareMountInputs = $state<Record<string, string>>({});
-  let sharePreferLocalInput = $state(false);
-  let shareCopyLocalInput = $state(false);
-  let shareSaving = $state(false);
-  let shareError = $state<string | null>(null);
 
   async function loadStorageConfig() {
     try {
@@ -913,6 +968,49 @@
   </button>
 {/snippet}
 
+{#snippet copyToShareIcon()}
+  <svg
+    class="w-5 h-5"
+    viewBox="0 0 20 20"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.75"
+  >
+    <path
+      d="M7 14H5.5A2.5 2.5 0 013 11.5v-7A2.5 2.5 0 015.5 2H11a2.5 2.5 0 012.5 2.5V6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    ></path>
+    <rect
+      x="8"
+      y="8"
+      width="9"
+      height="10"
+      rx="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    ></rect>
+    <path
+      d="M12.5 12.5v3.5m0 0l-1.5-1.5m1.5 1.5l1.5-1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    ></path>
+  </svg>
+{/snippet}
+
+{#snippet copyToShareButton(nodeId: string, row: ModelRow)}
+  {#if showShareColumn && !row.shareCell && shareAcceptsWrites && row.shardMetadata}
+    <button
+      type="button"
+      class="text-white/50 hover:text-xeo-green transition-colors cursor-pointer"
+      onclick={() => copyModelToShare(nodeId, row.shardMetadata!)}
+      title="Copy this model onto the share"
+    >
+      {@render copyToShareIcon()}
+    </button>
+  {/if}
+{/snippet}
+
 <div class="min-h-screen bg-xeo-dark-gray text-white">
   <HeaderNav showHome={true} />
   <div class="max-w-7xl mx-auto px-4 lg:px-8 py-6 space-y-6">
@@ -1434,6 +1532,35 @@
               >
                 Model
               </th>
+              {#if showShareColumn}
+                <th
+                  class="px-4 py-3 text-[11px] uppercase tracking-wider text-xeo-green font-medium text-center whitespace-nowrap min-w-[120px] border-r border-xeo-medium-gray/20"
+                >
+                  <div>{storageShare?.shareId ?? storageShare?.label ?? "Share"}</div>
+                  {#if storageShare?.source}
+                    <div
+                      class="text-[9px] text-white/70 normal-case tracking-normal mt-0.5 max-w-[160px] truncate mx-auto"
+                      title={storageShare.source}
+                    >
+                      {storageShare.source}
+                    </div>
+                  {:else if sharedDir}
+                    <div
+                      class="text-[9px] text-white/70 normal-case tracking-normal mt-0.5 max-w-[160px] truncate mx-auto"
+                      title={sharedDir}
+                    >
+                      {sharedDir}
+                    </div>
+                  {/if}
+                  {#if shareColumnFreeBytes != null}
+                    <div
+                      class="text-[9px] text-white/70 normal-case tracking-normal mt-0.5"
+                    >
+                      {formatBytes(shareColumnFreeBytes)} free
+                    </div>
+                  {/if}
+                </th>
+              {/if}
               {#each nodeColumns as col}
                 <th
                   class="px-4 py-3 text-[11px] uppercase tracking-wider text-xeo-light-gray font-medium text-center whitespace-nowrap min-w-[120px]"
@@ -1491,6 +1618,36 @@
                   </div>
                 </td>
 
+                {#if showShareColumn}
+                  <td
+                    class="px-4 py-3 text-center align-middle border-r border-xeo-medium-gray/20"
+                  >
+                    {#if row.shareCell}
+                      <div
+                        class="flex flex-col items-center gap-1"
+                        title="On share ({formatBytes(row.shareCell.totalBytes)})"
+                      >
+                        <svg
+                          class="w-7 h-7 text-green-400"
+                          viewBox="0 0 20 20"
+                          fill="currentColor"
+                        >
+                          <path
+                            fill-rule="evenodd"
+                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                            clip-rule="evenodd"
+                          ></path>
+                        </svg>
+                        <span class="text-xs text-white/70"
+                          >{formatBytes(row.shareCell.totalBytes)}</span
+                        >
+                      </div>
+                    {:else}
+                      <span class="text-white/30 text-sm">--</span>
+                    {/if}
+                  </td>
+                {/if}
+
                 {#each nodeColumns as col}
                   {@const cell = row.cells[col.nodeId] ?? {
                     kind: "not_present" as const,
@@ -1515,7 +1672,10 @@
                         <span class="text-xs text-white/70"
                           >{formatBytes(cell.totalBytes)}</span
                         >
-                        {@render deleteButton(col.nodeId, row.modelId)}
+                        <div class="flex gap-1">
+                          {@render copyToShareButton(col.nodeId, row)}
+                          {@render deleteButton(col.nodeId, row.modelId)}
+                        </div>
                       </div>
                     {:else if cell.kind === "downloading"}
                       <div
@@ -2073,6 +2233,27 @@
           <span class="text-white/70"
             >{infoRow.modelCard.supportsTensor ? "Yes" : "No"}</span
           >
+        </div>
+      {/if}
+
+      {#if infoRow?.shareCell}
+        <div class="mt-3 pt-3 border-t border-xeo-green/10">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-white/40">On share:</span>
+            <span
+              class="inline-block px-1.5 py-0.5 rounded text-[10px] bg-green-500/10 text-green-400/80 border border-green-500/20"
+            >
+              {formatBytes(infoRow.shareCell.totalBytes)}
+            </span>
+          </div>
+          {#if infoRow.shareCell.modelDirectory}
+            <span
+              class="text-[9px] text-white/30 break-all pl-1"
+              title={infoRow.shareCell.modelDirectory}
+            >
+              {infoRow.shareCell.modelDirectory}
+            </span>
+          {/if}
         </div>
       {/if}
 

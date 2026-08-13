@@ -40,6 +40,9 @@ class DownloadCompleted(BaseDownloadProgress):
     # True when model_directory lives on the shared models drive (env
     # read-only dirs or the runtime-configured share mount).
     on_share: bool = False
+    # True when this completion is a local path but the same model is also
+    # complete on the configured share (prefer-local / dual presence).
+    also_on_share: bool = False
 
 
 class DownloadFailed(BaseDownloadProgress):

@@ -12,6 +12,7 @@ from exo.download.download_utils import (
     RepoDownloadProgress,
     copy_shared_model_to_local,
     delete_model,
+    is_model_complete_on_share,
     is_read_only_model_dir,
     is_shared_model_path,
     map_repo_download_progress_to_download_progress_data,
@@ -22,7 +23,10 @@ from exo.download.download_utils import (
     writable_model_dirs,
 )
 from exo.download.shard_downloader import ShardDownloader
-from exo.download.shared_models_dir import is_shared_copy_source
+from exo.download.shared_models_dir import (
+    get_seedable_shared_models_dir,
+    is_shared_copy_source,
+)
 from exo.routing.event_router import (
     EventRouterBrokenResourceError,
     EventRouterClosedResourceError,
@@ -32,6 +36,7 @@ from exo.shared.models import model_cards
 from exo.shared.models.model_cards import ModelId
 from exo.shared.types.commands import (
     CancelDownload,
+    CopyModelToShare,
     DeleteDownload,
     ForwarderDownloadCommand,
     StartDownload,
@@ -86,13 +91,20 @@ class DownloadCoordinator:
         found: Path,
         total: Memory,
     ) -> DownloadCompleted:
+        on_share = is_shared_model_path(found)
         return DownloadCompleted(
             shard_metadata=shard,
             node_id=self.node_id,
             total=total,
             model_directory=str(found),
             read_only=is_read_only_model_dir(found),
-            on_share=is_shared_model_path(found),
+            on_share=on_share,
+            also_on_share=(
+                not on_share
+                and is_model_complete_on_share(
+                    shard.model_card.model_id, shard.model_card
+                )
+            ),
         )
 
     async def _download_progress_callback(
@@ -177,6 +189,8 @@ class DownloadCoordinator:
                 match cmd.command:
                     case StartDownload(shard_metadata=shard):
                         await self._start_download(shard)
+                    case CopyModelToShare(shard_metadata=shard):
+                        await self._start_copy_to_share(shard)
                     case DeleteDownload(model_id=model_id):
                         await self._delete_download(model_id)
                     case CancelDownload(model_id=model_id):
@@ -449,6 +463,131 @@ class DownloadCoordinator:
                 )
             except anyio.get_cancelled_exc_class():
                 # ignore cancellation - let cleanup do its thing
+                pass
+            finally:
+                self.active_downloads.pop(model_id, None)
+                self._last_progress_time.pop(model_id, None)
+
+        scope = anyio.CancelScope()
+        self._tg.start_soon(copy_wrapper, scope)
+        self.active_downloads[model_id] = scope
+
+    async def _start_copy_to_share(self, shard: ShardMetadata) -> None:
+        """Copy a complete local model onto the configured shared storage."""
+        model_id = shard.model_card.model_id
+        if model_id in self.active_downloads:
+            logger.debug(f"Copy to share for {model_id} already in progress, skipping")
+            return
+
+        share_root = get_seedable_shared_models_dir()
+        if share_root is None:
+            failed = DownloadFailed(
+                shard_metadata=shard,
+                node_id=self.node_id,
+                error_message=(
+                    "No writable shared storage is attached on this node. "
+                    "Attach a writable share, then try again."
+                ),
+                model_directory=self._default_model_dir(model_id),
+            )
+            self.download_status[model_id] = failed
+            await self.event_sender.send(NodeDownloadProgress(download_progress=failed))
+            return
+
+        found_path = await to_thread.run_sync(
+            resolve_existing_model, model_id, shard.model_card
+        )
+        if found_path is None or is_shared_model_path(found_path):
+            failed = DownloadFailed(
+                shard_metadata=shard,
+                node_id=self.node_id,
+                error_message=(
+                    f"No local copy of {model_id} to copy onto the share."
+                ),
+                model_directory=self._default_model_dir(model_id),
+            )
+            self.download_status[model_id] = failed
+            await self.event_sender.send(NodeDownloadProgress(download_progress=failed))
+            return
+
+        if await to_thread.run_sync(
+            is_model_complete_on_share, model_id, shard.model_card
+        ):
+            completed = self._completed_from_path(
+                shard, found_path, shard.model_card.storage_size
+            )
+            self.download_status[model_id] = completed
+            await self.event_sender.send(
+                NodeDownloadProgress(download_progress=completed)
+            )
+            return
+
+        target_dir = share_root / model_id.normalize()
+        total = await measure_model_directory(found_path)
+        started_at = current_time()
+        resumed_bytes: int | None = None
+
+        async def copy_progress(
+            copied: Memory, copy_total: Memory, completed_files: int, total_files: int
+        ) -> None:
+            nonlocal resumed_bytes
+            if resumed_bytes is None:
+                resumed_bytes = copied.in_bytes
+            now = current_time()
+            if now - self._last_progress_time.get(model_id, 0.0) <= 1.0:
+                return
+            this_session = copied.in_bytes - resumed_bytes
+            speed = this_session / max(now - started_at, 0.001)
+            remaining = copy_total.in_bytes - copied.in_bytes
+            ongoing = DownloadOngoing(
+                node_id=self.node_id,
+                shard_metadata=shard,
+                download_progress=DownloadProgressData(
+                    total=copy_total,
+                    downloaded=copied,
+                    downloaded_this_session=Memory.from_bytes(this_session),
+                    completed_files=completed_files,
+                    total_files=total_files,
+                    speed=speed,
+                    eta_ms=int(remaining / speed * 1000) if speed > 0 else 0,
+                    files={},
+                ),
+                model_directory=str(target_dir),
+            )
+            self.download_status[model_id] = ongoing
+            await self.event_sender.send(
+                NodeDownloadProgress(download_progress=ongoing)
+            )
+            self._last_progress_time[model_id] = now
+
+        async def copy_wrapper(cancel_scope: anyio.CancelScope) -> None:
+            try:
+                with cancel_scope:
+                    logger.info(
+                        f"Copying {model_id} from {found_path} onto share at {target_dir}"
+                    )
+                    await copy_shared_model_to_local(
+                        found_path, target_dir, copy_progress
+                    )
+                    # Keep the node's local completion; also_on_share marks the seed.
+                    completed = self._completed_from_path(shard, found_path, total)
+                    self.download_status[model_id] = completed
+                    await self.event_sender.send(
+                        NodeDownloadProgress(download_progress=completed)
+                    )
+            except Exception as copy_error:
+                logger.error(f"Copy to share failed for {model_id}: {copy_error}")
+                failed = DownloadFailed(
+                    shard_metadata=shard,
+                    node_id=self.node_id,
+                    error_message=f"Copying onto shared storage failed: {copy_error}",
+                    model_directory=str(found_path),
+                )
+                self.download_status[model_id] = failed
+                await self.event_sender.send(
+                    NodeDownloadProgress(download_progress=failed)
+                )
+            except anyio.get_cancelled_exc_class():
                 pass
             finally:
                 self.active_downloads.pop(model_id, None)

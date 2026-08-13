@@ -231,6 +231,17 @@ def is_shared_model_path(model_dir: Path) -> bool:
     return is_read_only_model_dir(model_dir)
 
 
+def is_model_complete_on_share(
+    model_id: ModelId, card: ModelCard | None = None
+) -> bool:
+    """True when the configured share holds a complete copy of ``model_id``."""
+    shared_dir = get_shared_models_dir()
+    if shared_dir is None:
+        return False
+    candidate = shared_dir / model_id.normalize()
+    return candidate.is_dir() and is_model_directory_complete(candidate, card)
+
+
 def is_read_only_model_dir(model_dir: Path) -> bool:
     """Check if a model directory lives under a read-only models root."""
     return any(model_dir.is_relative_to(d) for d in EXO_MODELS_READ_ONLY_DIRS)

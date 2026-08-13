@@ -17,6 +17,8 @@ from .api import ChatCompletionMessageText as ChatCompletionMessageText
 from .api import ChatCompletionRequest as ChatCompletionRequest
 from .api import ChatCompletionResponse as ChatCompletionResponse
 from .api import CompletionTokensDetails as CompletionTokensDetails
+from .api import CopyModelToShareParams as CopyModelToShareParams
+from .api import CopyModelToShareResponse as CopyModelToShareResponse
 from .api import CreateInstanceParams as CreateInstanceParams
 from .api import CreateInstanceResponse as CreateInstanceResponse
 from .api import DeleteDownloadResponse as DeleteDownloadResponse

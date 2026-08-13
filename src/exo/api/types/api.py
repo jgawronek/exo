@@ -665,6 +665,15 @@ class CancelDownloadResponse(FrozenModel):
     command_id: CommandId
 
 
+class CopyModelToShareParams(FrozenModel):
+    target_node_id: NodeId
+    shard_metadata: ShardMetadata
+
+
+class CopyModelToShareResponse(FrozenModel):
+    command_id: CommandId
+
+
 class TraceEventResponse(FrozenModel):
     name: str
     start_us: int

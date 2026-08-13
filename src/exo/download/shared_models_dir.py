@@ -144,6 +144,11 @@ class _SharedModelsDirectoryHolder:
         return self._path if self._writable else None
 
     @property
+    def seedable_path(self) -> Path | None:
+        """Share root when the filesystem accepts writes (ignores copy-to-local)."""
+        return self._path if self._writable else None
+
+    @property
     def copy_source_root(self) -> Path | None:
         """The share root when models must be copied off it before loading."""
         return self._path if self._copy_to_local else None
@@ -211,6 +216,16 @@ def set_shared_models_dir(
 def get_writable_shared_models_dir() -> Path | None:
     """The shared directory, only when downloads may be written to it."""
     return _holder.writable_path
+
+
+def get_seedable_shared_models_dir() -> Path | None:
+    """Share root for an explicit copy-to-share, when the share accepts writes.
+
+    Unlike :func:`get_writable_shared_models_dir`, this still returns the path
+    when copy-to-local is set — that mode only redirects hub downloads, not
+    seeding an already-downloaded model onto the share.
+    """
+    return _holder.seedable_path
 
 
 def get_shared_copy_source_root() -> Path | None:
