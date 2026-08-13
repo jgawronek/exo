@@ -939,6 +939,18 @@
         .attr("marker-end", `url(#${markerId})`);
     }
 
+    // Nodes sit on a circle; only edges between layout-neighbours trace the
+    // perimeter. Chords across the middle turn a 5-node cluster into a
+    // pentagram, so outside debug mode they are not drawn at all.
+    const ringIndex = new Map(nodeIds.map((id, index) => [id, index]));
+    function isPerimeterPair(a: string, b: string): boolean {
+      const ia = ringIndex.get(a);
+      const ib = ringIndex.get(b);
+      if (ia === undefined || ib === undefined) return true;
+      const gap = Math.abs(ia - ib);
+      return gap === 1 || gap === nodeIds.length - 1;
+    }
+
     pairMap.forEach((entry) => {
       const posA = positionById[entry.a];
       const posB = positionById[entry.b];
@@ -947,6 +959,10 @@
       const onRoute =
         routeHopKeys.has(`${entry.a}|${entry.b}`) ||
         routeHopKeys.has(`${entry.b}|${entry.a}`);
+
+      if (!debugEnabled && !onRoute && !isPerimeterPair(entry.a, entry.b)) {
+        return;
+      }
 
       // Physical mesh: dim non-route edges when a ring route is shown
       if (!(hasRingRoute && onRoute)) {
