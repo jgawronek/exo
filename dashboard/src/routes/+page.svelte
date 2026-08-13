@@ -1012,8 +1012,9 @@
   // Sampling temperature default for the instance; null = engine default (0.7).
   let launchTemperature = $state<number | null>(null);
   // Max thinking tokens before the runner force-closes the thinking phase;
-  // null = unlimited. Only affects thinking models.
-  let launchThinkingBudget = $state<number | null>(null);
+  // null = unlimited. Only affects thinking models. Defaults to 1024 to keep
+  // reasoning from running away (the "Wait... Okay..." loops).
+  let launchThinkingBudget = $state<number | null>(1024);
   const MIN_THINKING_BUDGET = 256;
   const MIN_TEMPERATURE = 0;
   const MAX_TEMPERATURE = 2;
