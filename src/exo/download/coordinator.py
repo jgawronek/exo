@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from exo.routing.event_router import (
     EventRouterClosedResourceError,
 )
 from exo.shared.constants import EXO_DEFAULT_MODELS_DIR, EXO_MODELS_READ_ONLY_DIRS
+from exo.shared.environment import get_compatible_environment_value
 from exo.shared.models import model_cards
 from exo.shared.models.model_cards import ModelId
 from exo.shared.types.commands import (
@@ -59,6 +61,26 @@ from exo.shared.types.worker.shards import PipelineShardMetadata, ShardMetadata
 from exo.utils.channels import Receiver, Sender
 from exo.utils.task_group import TaskGroup
 
+# How many model downloads a node runs at once. A single download already
+# opens several parallel file streams and saturates the link; running two big
+# models together starved the streams into a stall on our cluster. Serialized
+# by default; override with EXO_MAX_CONCURRENT_DOWNLOADS.
+_MAX_CONCURRENT_DOWNLOADS = max(
+    1,
+    int(get_compatible_environment_value(os.environ, "EXO_MAX_CONCURRENT_DOWNLOADS", "1")),
+)
+
+# A download whose byte count doesn't advance for this long is treated as
+# stalled — its sockets can stay open with no data flowing, which the aiohttp
+# socket-read timeout never catches. The watchdog cancels and retries it.
+_DOWNLOAD_STALL_TIMEOUT_SECS = float(
+    get_compatible_environment_value(
+        os.environ, "EXO_DOWNLOAD_STALL_TIMEOUT_SECONDS", "120"
+    )
+)
+_DOWNLOAD_STALL_CHECK_INTERVAL_SECS = 15.0
+_MAX_DOWNLOAD_STALL_RETRIES = 3
+
 
 @dataclass
 class DownloadCoordinator:
@@ -72,6 +94,15 @@ class DownloadCoordinator:
     download_status: dict[ModelId, DownloadProgress] = field(default_factory=dict)
     active_downloads: dict[ModelId, anyio.CancelScope] = field(default_factory=dict)
 
+    # Caps concurrent HF downloads on this node (Fix 1: prevents the multi-
+    # download stall). Created lazily inside the event loop.
+    _download_semaphore: anyio.Semaphore = field(init=False)
+    # Last time a download's byte count advanced, plus that byte count — drives
+    # the stall watchdog (Fix 2).
+    _download_progress_marks: dict[ModelId, tuple[float, int]] = field(
+        default_factory=dict
+    )
+
     _tg: TaskGroup = field(init=False, default_factory=TaskGroup)
     _stopped: anyio.Event = field(init=False, default_factory=anyio.Event)
 
@@ -80,6 +111,22 @@ class DownloadCoordinator:
 
     def __post_init__(self) -> None:
         self.shard_downloader.on_progress(self._download_progress_callback)
+        self._download_semaphore = anyio.Semaphore(_MAX_CONCURRENT_DOWNLOADS)
+
+    def _mark_download_progress(self, model_id: ModelId, downloaded_bytes: int) -> None:
+        """Record forward byte progress so the stall watchdog can spot a freeze."""
+        prev = self._download_progress_marks.get(model_id)
+        if prev is None or downloaded_bytes > prev[1]:
+            self._download_progress_marks[model_id] = (
+                current_time(),
+                downloaded_bytes,
+            )
+
+    def _download_is_stalled(self, model_id: ModelId) -> bool:
+        mark = self._download_progress_marks.get(model_id)
+        if mark is None:
+            return False
+        return current_time() - mark[0] > _DOWNLOAD_STALL_TIMEOUT_SECS
 
     @staticmethod
     def _default_model_dir(model_id: ModelId) -> str:
@@ -112,6 +159,10 @@ class DownloadCoordinator:
     ) -> None:
         model_id = callback_shard.model_card.model_id
         throttle_interval_secs = 1.0
+
+        # Record byte progress on every callback (not just throttled status
+        # emits) so the stall watchdog sees real forward movement.
+        self._mark_download_progress(model_id, progress.downloaded.in_bytes)
 
         try:
             if progress.status == "complete":
@@ -314,22 +365,75 @@ class DownloadCoordinator:
     ) -> None:
         model_id = shard.model_card.model_id
 
-        # Emit ongoing status
-        status = DownloadOngoing(
+        def ongoing_status() -> DownloadOngoing:
+            return DownloadOngoing(
+                node_id=self.node_id,
+                shard_metadata=shard,
+                download_progress=map_repo_download_progress_to_download_progress_data(
+                    initial_progress
+                ),
+                model_directory=self._default_model_dir(model_id),
+            )
+
+        # Emit a pending status until a download slot frees; queued downloads
+        # otherwise show as "downloading" but frozen. Ongoing is emitted once
+        # the semaphore is acquired.
+        pending = DownloadPending(
             node_id=self.node_id,
             shard_metadata=shard,
-            download_progress=map_repo_download_progress_to_download_progress_data(
-                initial_progress
-            ),
             model_directory=self._default_model_dir(model_id),
+            downloaded=initial_progress.downloaded,
+            total=initial_progress.total,
         )
-        self.download_status[model_id] = status
-        self.event_sender.send_nowait(NodeDownloadProgress(download_progress=status))
+        self.download_status[model_id] = pending
+        self.event_sender.send_nowait(NodeDownloadProgress(download_progress=pending))
+
+        async def run_once() -> bool:
+            """Run ensure_shard under a stall watchdog. Returns True if it
+            stalled (byte progress froze) and should be retried."""
+            stalled = False
+            self._download_progress_marks[model_id] = (
+                current_time(),
+                initial_progress.downloaded.in_bytes,
+            )
+            async with anyio.create_task_group() as watch_tg:
+
+                async def watchdog() -> None:
+                    nonlocal stalled
+                    while True:
+                        await anyio.sleep(_DOWNLOAD_STALL_CHECK_INTERVAL_SECS)
+                        if self._download_is_stalled(model_id):
+                            stalled = True
+                            watch_tg.cancel_scope.cancel()
+                            return
+
+                watch_tg.start_soon(watchdog)
+                try:
+                    await self.shard_downloader.ensure_shard(shard)
+                finally:
+                    watch_tg.cancel_scope.cancel()
+            return stalled
 
         async def download_wrapper(cancel_scope: anyio.CancelScope) -> None:
             try:
                 with cancel_scope:
-                    await self.shard_downloader.ensure_shard(shard)
+                    async with self._download_semaphore:
+                        self.download_status[model_id] = ongoing_status()
+                        await self.event_sender.send(
+                            NodeDownloadProgress(download_progress=ongoing_status())
+                        )
+                        for attempt in range(_MAX_DOWNLOAD_STALL_RETRIES + 1):
+                            if not await run_once():
+                                return  # completed
+                            logger.warning(
+                                f"Download for {model_id} stalled (no progress for "
+                                f"{_DOWNLOAD_STALL_TIMEOUT_SECS:.0f}s); retry "
+                                f"{attempt + 1}/{_MAX_DOWNLOAD_STALL_RETRIES}"
+                            )
+                        raise RuntimeError(
+                            f"Download stalled after {_MAX_DOWNLOAD_STALL_RETRIES} "
+                            "retries"
+                        )
             except Exception as e:
                 logger.error(f"Download failed for {model_id}: {e}")
                 failed = DownloadFailed(
@@ -347,6 +451,7 @@ class DownloadCoordinator:
                 pass
             finally:
                 self.active_downloads.pop(model_id, None)
+                self._download_progress_marks.pop(model_id, None)
 
         scope = anyio.CancelScope()
         self._tg.start_soon(download_wrapper, scope)
