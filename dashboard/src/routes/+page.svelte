@@ -4244,6 +4244,28 @@
     launchLayerOrder = [...launchLayerOrderBaseline];
   }
 
+  /** Spread the total layers as evenly as possible across the nodes, giving
+   *  the leftover (total % nodes) one extra layer each to the first nodes so
+   *  the sum still equals previewTotalLayers. */
+  function distributeLayersEqually() {
+    if (!launchLayerOrder || launchLayerOrder.length === 0) return;
+    const nodeIds = launchLayerOrder;
+    const total = previewTotalLayers;
+    const count = nodeIds.length;
+    const base = Math.floor(total / count);
+    let remainder = total - base * count;
+    const next: Record<string, number> = {};
+    for (const nodeId of nodeIds) {
+      next[nodeId] = base + (remainder > 0 ? 1 : 0);
+      if (remainder > 0) remainder -= 1;
+    }
+    launchLayerOverrides = next;
+  }
+
+  /** The optimized distribution is exactly the placement preview's own
+   *  per-node split (fast nodes get more), so this is a reset to baseline. */
+  const distributeLayersOptimized = resetLaunchLayersToPreview;
+
   function setLaunchLayerCount(nodeId: string, raw: number) {
     if (!launchLayerOverrides) return;
     if (!Number.isFinite(raw)) return;
@@ -7359,15 +7381,24 @@
                             >({launchLayerSum}/{previewTotalLayers})</span
                           >
                         </div>
-                        {#if launchLayersCustomized}
+                        <div class="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onclick={resetLaunchLayersToPreview}
-                            class="text-[10px] font-mono uppercase tracking-wider text-xeo-green/80 hover:text-xeo-green border border-xeo-green/40 hover:border-xeo-green px-2 py-0.5 rounded cursor-pointer"
+                            onclick={distributeLayersEqually}
+                            title="Split layers evenly across all devices"
+                            class="text-[10px] font-mono uppercase tracking-wider text-white/70 hover:text-xeo-green border border-white/25 hover:border-xeo-green px-2 py-0.5 rounded cursor-pointer"
                           >
-                            Reset to preview
+                            Equal
                           </button>
-                        {/if}
+                          <button
+                            type="button"
+                            onclick={distributeLayersOptimized}
+                            title="Weight layers by device speed (fast nodes hold more)"
+                            class="text-[10px] font-mono uppercase tracking-wider text-white/70 hover:text-xeo-green border border-white/25 hover:border-xeo-green px-2 py-0.5 rounded cursor-pointer"
+                          >
+                            Optimized
+                          </button>
+                        </div>
                       </div>
                       <div class="space-y-1.5">
                         {#each launchLayerRows as row, rowIndex (row.nodeId)}
