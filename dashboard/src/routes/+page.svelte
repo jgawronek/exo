@@ -4249,21 +4249,52 @@
     launchLayerOrder = [...launchLayerOrderBaseline];
   }
 
-  /** Spread the total layers as evenly as possible across the nodes, giving
-   *  the leftover (total % nodes) one extra layer each to the first nodes so
-   *  the sum still equals previewTotalLayers. */
+  /** Balance layers by each device's memory so pressure is roughly equal — a
+   *  24GB 3090 must not hold as many layers as a 128GB Spark. Allocates
+   *  proportional to memory (VRAM on GPU nodes), one layer minimum per node,
+   *  and hands out the rounding remainder by largest fractional share so the
+   *  sum still equals previewTotalLayers. */
   function distributeLayersEqually() {
     if (!launchLayerOrder || launchLayerOrder.length === 0) return;
     const nodeIds = launchLayerOrder;
     const total = previewTotalLayers;
     const count = nodeIds.length;
-    const base = Math.floor(total / count);
-    let remainder = total - base * count;
-    const next: Record<string, number> = {};
-    for (const nodeId of nodeIds) {
-      next[nodeId] = base + (remainder > 0 ? 1 : 0);
-      if (remainder > 0) remainder -= 1;
+
+    const mems = nodeIds.map((id) => {
+      const node = data?.nodes?.[id];
+      const mem =
+        node?.macmon_info?.memory?.ram_total ?? node?.system_info?.memory ?? 0;
+      return mem > 0 ? mem : 1;
+    });
+    const totalMem = mems.reduce((sum, m) => sum + m, 0);
+
+    const ideal = mems.map((m) => (total * m) / totalMem);
+    const alloc = ideal.map((x) => Math.max(1, Math.floor(x)));
+
+    let diff = total - alloc.reduce((sum, v) => sum + v, 0);
+    if (diff > 0) {
+      // Extra layers go to the largest fractional remainders (fairest by mem).
+      const byFrac = ideal
+        .map((x, i) => ({ i, frac: x - Math.floor(x) }))
+        .sort((a, b) => b.frac - a.frac);
+      for (let k = 0; diff > 0; k++, diff--) alloc[byFrac[k % count].i] += 1;
+    } else if (diff < 0) {
+      // Over-allocated by the min-1 floor: trim the largest holders (>1).
+      const byCount = alloc.map((v, i) => ({ i, v })).sort((a, b) => b.v - a.v);
+      let guard = count * total;
+      for (let k = 0; diff < 0 && guard > 0; k++, guard--) {
+        const idx = byCount[k % count].i;
+        if (alloc[idx] > 1) {
+          alloc[idx] -= 1;
+          diff++;
+        }
+      }
     }
+
+    const next: Record<string, number> = {};
+    nodeIds.forEach((id, i) => {
+      next[id] = alloc[i];
+    });
     launchLayerOverrides = next;
   }
 
@@ -7390,7 +7421,7 @@
                           <button
                             type="button"
                             onclick={distributeLayersEqually}
-                            title="Split layers evenly across all devices"
+                            title="Balance layers by device memory (a small-VRAM GPU holds fewer than a big Spark)"
                             class="text-[10px] font-mono uppercase tracking-wider text-white/70 hover:text-xeo-green border border-white/25 hover:border-xeo-green px-2 py-0.5 rounded cursor-pointer"
                           >
                             Equal
