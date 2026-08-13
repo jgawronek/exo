@@ -1967,14 +1967,19 @@
 
         // DownloadFailed — return with any data collected so far
         if (downloadKind === "DownloadFailed") {
+          const failNodeName =
+            data?.nodes?.[nodeId]?.friendly_name ?? nodeId.slice(0, 8);
+          const rawFailure =
+            (downloadPayload.errorMessage as string) ||
+            (downloadPayload.error_message as string) ||
+            "Download failed";
           return {
             isDownloading: false,
             progress: null,
             perNode: Array.from(perNodeMap.values()),
-            failedError:
-              (downloadPayload.errorMessage as string) ||
-              (downloadPayload.error_message as string) ||
-              "Download failed",
+            // Name the node that failed — the raw message only lists a local
+            // path, which is useless when 5 nodes share the same path shape.
+            failedError: `${failNodeName}: ${rawFailure}`,
           };
         }
 
