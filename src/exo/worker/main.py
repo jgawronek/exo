@@ -10,7 +10,11 @@ from anyio import fail_after, move_on_after, to_thread
 from loguru import logger
 
 from exo.api.types import ImageEditsTaskParams
-from exo.download.download_utils import is_read_only_model_dir, resolve_existing_model
+from exo.download.download_utils import (
+    is_read_only_model_dir,
+    local_readonly_share_dir,
+    resolve_existing_model,
+)
 from exo.download.share_mounts import ShareMountError, ensure_share_mounted
 from exo.download.shared_models_dir import (
     get_shared_copy_source_root,
@@ -308,6 +312,10 @@ class Worker:
         persisted_storage = self.state.shared_storage
         automount_uri: str | None = None
         automount_path: str | None = None
+        # True when the share is satisfied by a local read-only dir (a bind
+        # mount) rather than a real network mount — copy-to-local is forced
+        # off there since the models are already on local disk.
+        share_is_local_readonly = False
         automount_retry_at = 0.0
         last_status: SharedDirectoryStatus | None = None
         restate_at = 0.0
@@ -372,21 +380,36 @@ class Worker:
                     try:
                         mounted = await to_thread.run_sync(ensure_share_mounted, source)
                         automount_path = str(mounted)
+                        share_is_local_readonly = False
                         logger.info(f"Attached share {source} at {mounted}")
                     except ShareMountError as mount_error:
-                        automount_path = None
-                        logger.warning(
-                            f"Could not attach share {source}: {mount_error}"
-                        )
-                        await self.event_sender.send(
-                            NodeSharedDirectoryStatusUpdated(
-                                node_id=self.node_id,
-                                status=SharedDirectoryStatus(
-                                    valid=False,
-                                    error=f"Could not attach share: {mount_error}",
-                                ),
+                        # This node can't mount the share itself, but it may
+                        # already reach the same models through a read-only
+                        # bind mount (a container). Use that as the share's
+                        # local access point instead of reporting a failure.
+                        fallback = await to_thread.run_sync(local_readonly_share_dir)
+                        if fallback is not None:
+                            automount_path = str(fallback)
+                            share_is_local_readonly = True
+                            logger.info(
+                                f"Share {source} not mountable here; reading its "
+                                f"models locally from {fallback}"
                             )
-                        )
+                        else:
+                            automount_path = None
+                            share_is_local_readonly = False
+                            logger.warning(
+                                f"Could not attach share {source}: {mount_error}"
+                            )
+                            await self.event_sender.send(
+                                NodeSharedDirectoryStatusUpdated(
+                                    node_id=self.node_id,
+                                    status=SharedDirectoryStatus(
+                                        valid=False,
+                                        error=f"Could not attach share: {mount_error}",
+                                    ),
+                                )
+                            )
                 target = automount_path
             elif source != automount_uri:
                 # Share changed or cleared; forget the old attachment state.
@@ -394,6 +417,10 @@ class Worker:
                 automount_path = None
             copy_to_local = storage.copy_to_local if storage is not None else False
             prefer_local = storage.prefer_local if storage is not None else False
+            # A bind-mounted read-only share is already local; copying it onto
+            # local disk would duplicate it for no benefit, so load directly.
+            if share_is_local_readonly:
+                copy_to_local = False
             if target is not None and (
                 target != reported
                 or copy_to_local != applied_copy_to_local

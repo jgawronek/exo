@@ -14,6 +14,7 @@ from exo.download.download_utils import (
     InsufficientDiskSpaceError,
     delete_model,
     is_read_only_model_dir,
+    local_readonly_share_dir,
     resolve_existing_model,
     select_download_dir,
 )
@@ -295,3 +296,41 @@ class TestDeleteModel:
     ) -> None:
         result = await delete_model(MODEL_ID)
         assert result is False
+
+
+class TestLocalReadonlyShareDir:
+    def test_none_when_no_read_only_dirs(self) -> None:
+        with patch("exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", ()):
+            assert local_readonly_share_dir() is None
+
+    def test_none_when_read_only_dir_empty(self, tmp_path: Path) -> None:
+        empty = tmp_path / "ro"
+        empty.mkdir()
+        with patch(
+            "exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", (empty,)
+        ):
+            assert local_readonly_share_dir() is None
+
+    def test_returns_populated_read_only_dir(self, tmp_path: Path) -> None:
+        ro = tmp_path / "ro"
+        (ro / "owner--model").mkdir(parents=True)
+        with patch("exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS", (ro,)):
+            assert local_readonly_share_dir() == ro
+
+    def test_skips_empty_dir_for_populated_one(self, tmp_path: Path) -> None:
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        populated = tmp_path / "populated"
+        (populated / "owner--model").mkdir(parents=True)
+        with patch(
+            "exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS",
+            (empty, populated),
+        ):
+            assert local_readonly_share_dir() == populated
+
+    def test_none_when_dir_missing(self, tmp_path: Path) -> None:
+        with patch(
+            "exo.download.download_utils.EXO_MODELS_READ_ONLY_DIRS",
+            (tmp_path / "does-not-exist",),
+        ):
+            assert local_readonly_share_dir() is None

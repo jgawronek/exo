@@ -247,6 +247,26 @@ def is_read_only_model_dir(model_dir: Path) -> bool:
     return any(model_dir.is_relative_to(d) for d in EXO_MODELS_READ_ONLY_DIRS)
 
 
+def local_readonly_share_dir() -> Path | None:
+    """A configured read-only models dir that already holds models.
+
+    Used as a local stand-in for a network share this node cannot mount
+    itself — e.g. a container that reads the share content through a
+    read-only bind mount (``EXO_MODELS_READ_ONLY_DIRS``) rather than NFS.
+    The models are already local, so this dir satisfies the share for
+    loading without any copy. Returns the first populated read-only dir.
+    """
+    for read_only_dir in EXO_MODELS_READ_ONLY_DIRS:
+        try:
+            if read_only_dir.is_dir() and any(
+                child.is_dir() for child in read_only_dir.iterdir()
+            ):
+                return read_only_dir
+        except OSError:
+            continue
+    return None
+
+
 def share_completion_is_stale(model_dir: Path) -> bool:
     """Whether a share-backed 'complete' model has genuinely disappeared.
 
