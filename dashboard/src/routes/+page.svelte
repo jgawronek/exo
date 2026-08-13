@@ -3993,6 +3993,10 @@
     return selectedInstanceType !== "MlxJaccl" || device.rdma;
   }
 
+  /** Devices actually shown in the picker: with RDMA on, non-RDMA nodes are
+   * hidden entirely rather than shown struck-through. */
+  const visibleDevices = $derived(selectableDevices.filter(deviceSelectable));
+
   const rdmaEnabled = $derived(selectedInstanceType === "MlxJaccl");
 
   /** RDMA on → Jaccl (Mac-only eligible); off → Ring/TCP for the full cluster. */
@@ -7176,7 +7180,7 @@
                   </div>
 
                   <!-- Devices -->
-                  {#if selectableDevices.length > 1}
+                  {#if visibleDevices.length > 1}
                     <div>
                       <div
                         class="text-xs text-white/50 font-mono mb-2 flex items-center gap-2"
@@ -7196,7 +7200,7 @@
                         {/if}
                       </div>
                       <div class="flex flex-wrap gap-2">
-                        {#each selectableDevices as device (device.id)}
+                        {#each visibleDevices as device (device.id)}
                           {@const allowed = deviceSelectable(device)}
                           {@const picked = nodeFilter.has(device.id)}
                           <button

@@ -696,8 +696,13 @@
                     return conns;
                   })()
                 : []}
+            <!-- Ring only: connect each node to its neighbour around the
+                 circle (plus the wrap-around). The full pairwise mesh drew a
+                 pentagram of chords; the perimeter is the ring. -->
             {#each preview.nodes as node, i}
-              {#each preview.nodes.slice(i + 1) as node2}
+              {@const node2 =
+                preview.nodes[(i + 1) % preview.nodes.length]}
+              {#if preview.nodes.length >= 3 || (preview.nodes.length === 2 && i === 0)}
                 <line
                   x1={node.x}
                   y1={node.y}
@@ -708,7 +713,7 @@
                   stroke-dasharray={node.isUsed && node2.isUsed ? "4,2" : "2,4"}
                   opacity={node.isUsed && node2.isUsed ? 0.4 : 0.15}
                 />
-              {/each}
+              {/if}
             {/each}
             <!-- Debug: Show connection IPs/interfaces in corners -->
             {#if isDebugMode && allConnections.length > 0}
