@@ -18,6 +18,7 @@ from exo.download.download_utils import (
     measure_model_directory,
     resolve_existing_model,
     select_download_dir,
+    share_completion_is_stale,
     writable_model_dirs,
 )
 from exo.download.shard_downloader import ShardDownloader
@@ -595,6 +596,41 @@ class DownloadCoordinator:
                     await self.event_sender.send(
                         NodeDownloadProgress(download_progress=status)
                     )
+                # Demote share-backed completions whose model has vanished.
+                # A DownloadCompleted pointing at a share/read-only dir is never
+                # re-validated above (deliberately, to survive transient
+                # unmounts), so a model removed from the share stays "complete"
+                # and crash-loops the runner on a missing directory. Re-check
+                # only share-backed completions, and only when the share root is
+                # still populated (share_completion_is_stale guards the
+                # transient-unmount case), then demote to Pending so the model
+                # is re-fetched from wherever it now lives.
+                for model_id in list(self.download_status.keys()):
+                    if model_id in self.active_downloads:
+                        continue
+                    completed = self.download_status.get(model_id)
+                    if not isinstance(completed, DownloadCompleted):
+                        continue
+                    model_dir = Path(completed.model_directory)
+                    is_share_backed = completed.on_share or is_read_only_model_dir(
+                        model_dir
+                    )
+                    if not is_share_backed:
+                        continue
+                    if await to_thread.run_sync(share_completion_is_stale, model_dir):
+                        logger.info(
+                            f"Shared model {model_id} vanished from {model_dir}; "
+                            "demoting stale completion to re-fetch"
+                        )
+                        demoted = DownloadPending(
+                            node_id=self.node_id,
+                            shard_metadata=completed.shard_metadata,
+                            model_directory=self._default_model_dir(model_id),
+                        )
+                        self.download_status[model_id] = demoted
+                        await self.event_sender.send(
+                            NodeDownloadProgress(download_progress=demoted)
+                        )
                 # Scan read-only directories for pre-downloaded models
                 if EXO_MODELS_READ_ONLY_DIRS:
                     for card in await model_cards.card_cache.list_all():

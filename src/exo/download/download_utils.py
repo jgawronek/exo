@@ -236,6 +236,29 @@ def is_read_only_model_dir(model_dir: Path) -> bool:
     return any(model_dir.is_relative_to(d) for d in EXO_MODELS_READ_ONLY_DIRS)
 
 
+def share_completion_is_stale(model_dir: Path) -> bool:
+    """Whether a share-backed 'complete' model has genuinely disappeared.
+
+    Content on a share or read-only mount can vanish out from under a cached
+    ``DownloadCompleted`` — a folder reorg, a deletion, a mid-restore move.
+    Left alone, the stale completion makes the runner crash-loop on a missing
+    directory. This returns True only when the model directory is no longer
+    complete **and** its parent root is still populated — proof the share is
+    mounted and the model was really removed, not that the whole mount dropped
+    (a transient unmount leaves an empty mountpoint, which must NOT demote every
+    completion). Partial copies (weights but no config) also read as stale.
+    """
+    if is_model_directory_complete(model_dir):
+        return False
+    root = model_dir.parent
+    try:
+        if not root.exists():
+            return False
+        return any(True for _ in root.iterdir())
+    except OSError:
+        return False
+
+
 def build_model_path(model_id: ModelId) -> Path:
     found = resolve_existing_model(model_id)
     if found is not None:
@@ -486,6 +509,13 @@ def is_model_directory_complete(model_dir: Path, card: ModelCard | None = None) 
     """
     file_list = _scan_model_directory(model_dir, recursive=True)
     if file_list is None or not all(f.size is not None for f in file_list):
+        return False
+    # Weight files can all be present while the small config the loader reads
+    # first is still mid-copy — a share-to-local copy that got the big
+    # safetensors but not config.json yet. Without this, such a partial copy
+    # looks complete and the runner crashes on a missing config at load. Every
+    # model exo loads has a top-level config.json.
+    if not (model_dir / "config.json").is_file():
         return False
     if (
         card is not None
