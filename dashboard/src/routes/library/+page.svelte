@@ -44,6 +44,7 @@
         modelDirectory?: string;
       }
     | { kind: "failed"; modelDirectory?: string }
+    | { kind: "on_share"; totalBytes: number }
     | { kind: "not_present" };
 
   type ShareCell = { totalBytes: number; modelDirectory?: string };
@@ -331,8 +332,14 @@
               ) {
                 row.shareCell = { totalBytes, modelDirectory };
               }
-              // Pure share-backed completions are not local copies.
+              // Pure share-backed completion: this node has no local copy but
+              // reaches the model through its share mount. Mark it "on share"
+              // (loadable here) rather than leaving a bare dash that reads as
+              // missing.
               if (onShare && !isDownloadAlsoOnShare(payload)) {
+                if (!(row.cells[nodeId]?.kind === "completed")) {
+                  row.cells[nodeId] = { kind: "on_share", totalBytes };
+                }
                 continue;
               }
             }
@@ -1801,6 +1808,30 @@
                           {/if}
                           {@render deleteButton(col.nodeId, row.modelId)}
                         </div>
+                      </div>
+                    {:else if cell.kind === "on_share"}
+                      <div
+                        class="flex flex-col items-center gap-1"
+                        title="Available via shared storage ({formatBytes(
+                          cell.totalBytes,
+                        )}) — loads from the share, no local copy"
+                      >
+                        <svg
+                          class="w-6 h-6 text-xeo-green/70"
+                          viewBox="0 0 20 20"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.6"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M3 7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
+                          />
+                        </svg>
+                        <span class="text-[10px] text-white/50 leading-none"
+                          >on share</span
+                        >
                       </div>
                     {:else}
                       <div
